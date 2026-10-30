@@ -1,0 +1,12 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+.worktrees/
+.symbol-index/
+package-lock.json
+src-tauri/Cargo.lock
+playwright-report/
+test-results/
+THIRD_PARTY_NOTICES.md
+src-tauri/icons/

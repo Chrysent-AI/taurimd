@@ -1,0 +1,125 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #20242b;
+  background: #fafbfc;
+  color-scheme: light dark;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+header {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid #87909d;
+}
+.brand {
+  font-size: 1rem;
+  margin: 0 0 0.8rem;
+}
+.commands {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+button {
+  font: inherit;
+  padding: 0.5rem 0.8rem;
+  border: 1px solid #6b7481;
+  border-radius: 0.3rem;
+  background: #fff;
+  color: inherit;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+:focus-visible {
+  outline: 3px solid #1769c2;
+  outline-offset: 3px;
+}
+.hint,
+.reading-note {
+  font-size: 0.85rem;
+}
+.identity {
+  display: grid;
+  gap: 0.3rem;
+  overflow-wrap: anywhere;
+}
+.identity span {
+  font-size: 0.85rem;
+}
+.feedback {
+  padding: 0.1rem 1.5rem;
+  border-bottom: 1px solid #87909d;
+}
+.feedback p {
+  overflow-wrap: anywhere;
+}
+main {
+  padding: 1rem 1.5rem 4rem;
+}
+.empty,
+article,
+.reading-note {
+  max-width: 76ch;
+  margin: 1.2rem auto;
+}
+article {
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+article h1,
+article h2,
+article h3 {
+  line-height: 1.25;
+}
+article pre {
+  overflow-x: auto;
+  padding: 1rem;
+  background: #ecf0f4;
+}
+article code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.9em;
+}
+article table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+article th,
+article td {
+  border: 1px solid #87909d;
+  padding: 0.4rem 0.7rem;
+}
+article blockquote {
+  border-left: 0.25rem solid #87909d;
+  margin-left: 0;
+  padding-left: 1rem;
+}
+article input {
+  margin-right: 0.5rem;
+}
+.literal {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #e1e6ed;
+    background: #181c22;
+  }
+  button {
+    background: #292f38;
+  }
+  article pre {
+    background: #242a33;
+  }
+  :focus-visible {
+    outline-color: #82baff;
+  }
+}

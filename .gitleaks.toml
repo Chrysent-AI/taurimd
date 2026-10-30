@@ -1,0 +1,17 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "home-dir-path"
+description = "Absolute personal home-directory path"
+regex = '''(?i)(?:^|[\s"'(=:\[{,])(?:(?:/Users/|/home/)[A-Za-z0-9._-]+/[^\s"']*|[A-Za-z]:\\Users\\[A-Za-z0-9._-]+\\)'''
+
+[[rules]]
+id = "consumer-email"
+description = "Consumer-domain email address"
+regex = '''(?i)[A-Za-z0-9._%+-]+@(?:gmail|icloud|outlook|hotmail|protonmail|fastmail)\.(com|net|me|ch|co\.uk)'''
+
+[[rules]]
+id = "network-share"
+description = "UNC network share"
+regex = '''\\\\[A-Za-z0-9._-]+\\[A-Za-z0-9._$-]+'''

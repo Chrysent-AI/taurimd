@@ -1,0 +1,4 @@
+# This is literal text, not a heading
+<script>This remains text and cannot execute.</script>
+- [ ] This is not an interactive task
+![No request is made](https://example.com/inactive.png)
