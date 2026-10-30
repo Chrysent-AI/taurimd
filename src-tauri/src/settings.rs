@@ -1,0 +1,210 @@
+use crate::documents::AppError;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::{fs, io::Write, path::PathBuf, sync::Mutex};
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Mode {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Palette {
+    GithubLight,
+    GithubDark,
+    SolarizedLight,
+    SolarizedDark,
+    Dracula,
+    Monokai,
+    Nord,
+}
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsV1 {
+    pub mode: Mode,
+    pub light_palette: Palette,
+    pub dark_palette: Palette,
+    pub page_zoom: u16,
+    pub fit_diagrams: bool,
+    pub sidebar_default: bool,
+}
+impl Default for SettingsV1 {
+    fn default() -> Self {
+        Self {
+            mode: Mode::System,
+            light_palette: Palette::GithubLight,
+            dark_palette: Palette::GithubDark,
+            page_zoom: 100,
+            fit_diagrams: true,
+            sidebar_default: true,
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Record {
+    pub version: u8,
+    pub revision: u32,
+    pub settings: SettingsV1,
+    pub notice: Option<String>,
+}
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Patch {
+    pub mode: Option<Mode>,
+    pub light_palette: Option<Palette>,
+    pub dark_palette: Option<Palette>,
+    pub page_zoom: Option<u16>,
+    pub fit_diagrams: Option<bool>,
+    pub sidebar_default: Option<bool>,
+}
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum Update {
+    Committed { record: Record },
+    Conflict { record: Record },
+}
+fn unavailable() -> AppError {
+    AppError::new(
+        "io",
+        "Preferences could not be saved. Check application configuration access and retry.",
+    )
+}
+fn valid_zoom(zoom: u16) -> bool {
+    (50..=300).contains(&zoom) && zoom.is_multiple_of(10)
+}
+const FALLBACK: &str = "Some saved preferences could not be loaded; valid values were kept and defaults are being used for the rest.";
+
+pub struct SettingsStore {
+    // Only native setup chooses this directory. Commands accept no path.
+    directory: Option<PathBuf>,
+    committed: Mutex<Record>,
+    writer: Mutex<()>,
+}
+impl SettingsStore {
+    pub fn load(directory: Option<PathBuf>) -> Self {
+        let mut record = Record {
+            version: 1,
+            revision: 0,
+            settings: SettingsV1::default(),
+            notice: None,
+        };
+        let input = directory
+            .as_ref()
+            .map(|dir| fs::read(dir.join("settings-v1.json")));
+        match input {
+            Some(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Some(Ok(bytes)) => {
+                if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+                    if value["version"] == 1 && value["settings"].is_object() {
+                        record.revision = value["revision"]
+                            .as_u64()
+                            .and_then(|n| n.try_into().ok())
+                            .unwrap_or_else(|| {
+                                record.notice = Some(FALLBACK.into());
+                                0
+                            });
+                        let mut fields = serde_json::to_value(SettingsV1::default())
+                            .expect("settings serialize");
+                        for (key, default) in fields.as_object_mut().expect("settings object") {
+                            let candidate = &value["settings"][key];
+                            let valid = match key.as_str() {
+                                "mode" => serde_json::from_value::<Mode>(candidate.clone()).is_ok(),
+                                "lightPalette" | "darkPalette" => {
+                                    serde_json::from_value::<Palette>(candidate.clone()).is_ok()
+                                }
+                                "pageZoom" => candidate
+                                    .as_u64()
+                                    .and_then(|n| u16::try_from(n).ok())
+                                    .is_some_and(valid_zoom),
+                                _ => candidate.is_boolean(),
+                            };
+                            if valid {
+                                *default = candidate.clone();
+                            } else {
+                                record.notice = Some(FALLBACK.into());
+                            }
+                        }
+                        record.settings = serde_json::from_value(fields).expect("validated fields");
+                    } else {
+                        record.notice = Some(FALLBACK.into());
+                    }
+                } else {
+                    record.notice = Some(FALLBACK.into());
+                }
+            }
+            _ => record.notice = Some(FALLBACK.into()),
+        }
+        Self {
+            directory,
+            committed: Mutex::new(record),
+            writer: Mutex::new(()),
+        }
+    }
+    pub fn get(&self) -> Result<Record, AppError> {
+        self.committed
+            .lock()
+            .map(|record| record.clone())
+            .map_err(|_| unavailable())
+    }
+    pub fn update(
+        &self,
+        expected: u32,
+        patch: Patch,
+        notify: impl FnOnce(&Record),
+    ) -> Result<Update, AppError> {
+        // Serialize writers independently; getters never wait on filesystem I/O.
+        let _writer = self.writer.lock().map_err(|_| unavailable())?;
+        let mut next = self.get()?;
+        if next.revision != expected {
+            return Ok(Update::Conflict { record: next });
+        }
+        if patch.page_zoom.is_some_and(|zoom| !valid_zoom(zoom)) {
+            return Err(AppError::new(
+                "unsupported",
+                "Page zoom must be 50–300% in steps of 10%.",
+            ));
+        }
+        if let Some(value) = patch.mode {
+            next.settings.mode = value;
+        }
+        if let Some(value) = patch.light_palette {
+            next.settings.light_palette = value;
+        }
+        if let Some(value) = patch.dark_palette {
+            next.settings.dark_palette = value;
+        }
+        if let Some(value) = patch.page_zoom {
+            next.settings.page_zoom = value;
+        }
+        if let Some(value) = patch.fit_diagrams {
+            next.settings.fit_diagrams = value;
+        }
+        if let Some(value) = patch.sidebar_default {
+            next.settings.sidebar_default = value;
+        }
+        next.revision = next.revision.checked_add(1).ok_or_else(unavailable)?;
+        next.notice = None;
+        let directory = self.directory.as_ref().ok_or_else(unavailable)?;
+        fs::create_dir_all(directory).map_err(|_| unavailable())?;
+        let mut temporary =
+            tempfile::NamedTempFile::new_in(directory).map_err(|_| unavailable())?;
+        serde_json::to_writer(&mut temporary, &next).map_err(|_| unavailable())?;
+        temporary.flush().map_err(|_| unavailable())?;
+        temporary.as_file().sync_all().map_err(|_| unavailable())?;
+        temporary
+            .persist(directory.join("settings-v1.json"))
+            .map_err(|_| unavailable())?;
+        *self.committed.lock().map_err(|_| unavailable())? = next.clone();
+        // Publish only committed snapshots, in write order, outside the record lock.
+        notify(&next);
+        Ok(Update::Committed { record: next })
+    }
+}
+
+#[cfg(test)]
+mod tests;

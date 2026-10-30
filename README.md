@@ -10,7 +10,15 @@ Markdown uses a bundled worker and sanitizer. Tasks are disabled, and all docume
 
 The identity area describes the displayed file, not the pending selection. Reload reads the granted file again. Failed replacement or reload preserves the last good document and marks it stale. Cancel never changes the displayed source. There are no document write commands.
 
-Folder browsing, rich metadata/media/link handling, highlighting, footnotes, diagrams, navigation, search, settings, exports and OS file associations are not yet implemented. Open Folder is explicitly unavailable rather than a dead enabled control. This version is not a claim of full-feature parity.
+Folder browsing, rich metadata/media/link handling, highlighting, footnotes, diagrams, navigation, search, exports and OS file associations are not yet implemented. Open Folder is explicitly unavailable rather than a dead enabled control. This version is not a claim of full-feature parity.
+
+## Appearance and preferences
+
+Open **Settings…** from the reader or native menu (Cmd+, on macOS, Ctrl+, elsewhere). Changes apply immediately; Close and Escape do not undo them. System appearance follows the OS; forced Light/Dark selects the corresponding saved palette slot. Both selectors always offer GitHub Light, GitHub Dark, Solarized Light, Solarized Dark, Dracula, Monokai and Nord—even a dark-toned palette in the Light slot or a light-toned palette in the Dark slot.
+
+Page zoom scales reading content only, from 50% to 300% in 10-point steps, with reset to 100%. The native View menu provides the same actions (Cmd/Ctrl+=, Cmd/Ctrl+−, Cmd/Ctrl+0). Fit diagrams and sidebar-default checkboxes are saved preferences; their consuming features are not available yet.
+
+Preferences are stored only in `settings-v1.json` under the application's configuration directory, never beside a source document. Valid fields survive a partially invalid record; missing/invalid fields use defaults with a visible notice. Saves are revisioned and atomically replaced. If saving or synchronization fails, the current appearance remains applied for now and **Retry preferences** is available; that state does not claim persistence. Appearance changes do not reload or reparse the document.
 
 ## Develop
 
@@ -45,7 +53,9 @@ Run the native executable or `npm run tauri -- dev` on the target machine. Recor
 4. Reload from the visible control and native accelerator. An external edit to a **scratch copy** must appear only after Reload; preserve reading position where practical.
 5. Open an unsupported file or a scratch file containing invalid UTF-8. The prior file and identity remain visible with an attempted-target error and stale indication. Delete a scratch opened file, then Reload: report failure, not success.
 6. Cancel a formatting operation and open another file. A late response must not replace the newer document. Check long paths, Tab navigation and visible focus.
-7. Re-run the source hash command. Original example bytes must be unchanged. Close the reader and check no app-owned helper process remains.
+7. Open Settings using the button and native accelerator. Check both palette slots, opposite-toned combinations, System changes, 50/100/300% content zoom, unchanged chrome and reachable final content. Tab/Shift+Tab remain in the dialog; Escape restores prior focus, while IME composition does not close it. Exercise native View zoom actions once each.
+8. Change all preferences, wait for **Preferences saved**, close and restart the native application, then verify values survived. Confirm a save failure remains separate from document errors and offers Retry; browser mock hydration is not this restart check.
+9. Re-run the source hash command. Original example bytes must be unchanged. Close the reader and check no app-owned helper process remains.
 
 Automated tests exercise native read/state/response-serialization seams and the actual React shell, controller, native JS adapter and worker in browsers with a mocked native backend. These mocks do not execute the real native chooser, IPC/capability enforcement or native menus. Native dialog, menu, focus and visual evidence must still be recorded on actual targets. A build or browser pass alone must not be recorded as a native-interaction pass.
 

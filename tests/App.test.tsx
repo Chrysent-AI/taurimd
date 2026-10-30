@@ -16,6 +16,11 @@ vi.mock('@tauri-apps/api/event', () => ({
 }));
 afterEach(cleanup);
 Element.prototype.scrollIntoView = vi.fn();
+vi.stubGlobal('matchMedia', () => ({
+  matches: false,
+  addEventListener: vi.fn(),
+  removeEventListener: vi.fn(),
+}));
 it('renders literal text through the actual article and preserves identity on errors', async () => {
   const snapshot: Snapshot = {
     documentId: 1,

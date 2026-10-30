@@ -1,6 +1,8 @@
 mod documents;
+mod settings;
 use documents::{read_document, AppError, Session, Snapshot};
 use serde::Serialize;
+use settings::{Patch, Record, SettingsStore, Update};
 use std::sync::Mutex;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
@@ -125,6 +127,44 @@ fn cancel_operation(
     Ok(())
 }
 
+#[tauri::command]
+fn get_settings(
+    window: WebviewWindow,
+    store: State<'_, SettingsStore>,
+) -> Result<Record, AppError> {
+    settings_caller(&window)?;
+    store.get()
+}
+fn settings_caller(window: &WebviewWindow) -> Result<(), AppError> {
+    if window.label() == "reader" {
+        Ok(())
+    } else {
+        Err(AppError::new(
+            "denied",
+            "This window has no preferences access.",
+        ))
+    }
+}
+#[tauri::command]
+async fn update_settings(
+    window: WebviewWindow,
+    expected_revision: u32,
+    patch: Patch,
+) -> Result<Update, AppError> {
+    settings_caller(&window)?;
+    let app = window.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<SettingsStore>()
+            .update(expected_revision, patch, |record| {
+                if let Err(error) = app.emit("settings_changed", record) {
+                    eprintln!("Preferences notification failed: {error}");
+                }
+            })
+    })
+    .await
+    .map_err(|_| AppError::new("resourceFailure", "Preferences save could not finish."))?
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -133,9 +173,36 @@ pub fn run() {
             select_document,
             reload_document,
             commit_document,
-            cancel_operation
+            cancel_operation,
+            get_settings,
+            update_settings
         ])
         .setup(|app| {
+            app.manage(SettingsStore::load(app.path().app_config_dir().ok()));
+            let settings =
+                MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
+            let zoom_in = MenuItem::with_id(
+                app,
+                "zoom-in",
+                "Increase Page Zoom",
+                true,
+                Some("CmdOrCtrl+="),
+            )?;
+            let zoom_out = MenuItem::with_id(
+                app,
+                "zoom-out",
+                "Decrease Page Zoom",
+                true,
+                Some("CmdOrCtrl+-"),
+            )?;
+            let zoom_reset = MenuItem::with_id(
+                app,
+                "zoom-reset",
+                "Reset Page Zoom",
+                true,
+                Some("CmdOrCtrl+0"),
+            )?;
+            let view = Submenu::with_items(app, "View", true, &[&zoom_in, &zoom_out, &zoom_reset])?;
             let open = MenuItem::with_id(app, "open", "Open File…", true, Some("CmdOrCtrl+O"))?;
             let reload = MenuItem::with_id(app, "reload", "Reload", false, Some("CmdOrCtrl+R"))?;
             let file = Submenu::with_items(
@@ -156,13 +223,25 @@ pub fn run() {
                         app,
                         "MDViewerRSX",
                         true,
-                        &[&PredefinedMenuItem::quit(app, None)?],
+                        &[
+                            &settings,
+                            &PredefinedMenuItem::separator(app)?,
+                            &PredefinedMenuItem::quit(app, None)?,
+                        ],
                     )?,
                     &file,
+                    &view,
                 ],
             )?;
             #[cfg(not(target_os = "macos"))]
-            let menu = Menu::with_items(app, &[&file])?;
+            let menu = Menu::with_items(
+                app,
+                &[
+                    &file,
+                    &view,
+                    &Submenu::with_items(app, "Settings", true, &[&settings])?,
+                ],
+            )?;
             app.set_menu(menu)?;
             app.manage(ReloadMenu { item: reload });
             Ok(())

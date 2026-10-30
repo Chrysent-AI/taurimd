@@ -1,0 +1,202 @@
+import { useEffect, useRef, type ReactNode } from 'react';
+import { palettes, type SettingsController, type SettingsV1 } from './model';
+
+export function SettingsFeedback({
+  status,
+  notice,
+  retry,
+}: {
+  status: 'loading' | 'saving' | 'saved' | 'error';
+  notice: string | null;
+  retry: () => void;
+}) {
+  return (
+    <section className="preferences-feedback" aria-label="Preferences status">
+      <p aria-live="polite">
+        {status === 'error'
+          ? 'Applied for now; could not save or synchronize preferences.'
+          : status === 'saving'
+            ? 'Saving preferences…'
+            : status === 'loading'
+              ? 'Loading preferences…'
+              : 'Preferences saved.'}
+        {status === 'error' && (
+          <>
+            {' '}
+            <button onClick={retry}>Retry preferences</button>
+          </>
+        )}
+      </p>
+      {notice && <p className="warning">{notice}</p>}
+    </section>
+  );
+}
+export function SettingsDialog({
+  open,
+  close,
+  controller,
+  settings,
+  slot,
+  composing,
+  children,
+}: {
+  open: boolean;
+  close: () => void;
+  controller: SettingsController;
+  settings: SettingsV1;
+  slot: 'light' | 'dark';
+  composing: { current: boolean };
+  children: ReactNode;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const origin = document.activeElement;
+    const element = dialog.current;
+    element?.showModal();
+    return () => {
+      element?.close();
+      if (origin instanceof HTMLElement && origin.isConnected)
+        origin.focus({ preventScroll: true });
+    };
+  }, [open]);
+  const palette = settings[slot === 'light' ? 'lightPalette' : 'darkPalette'];
+  return (
+    <dialog
+      ref={dialog}
+      aria-labelledby="settings-title"
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!composing.current) close();
+      }}
+      onKeyDown={(event) => {
+        if (composing.current || event.nativeEvent.isComposing) {
+          if (event.key === 'Escape') event.preventDefault();
+          return;
+        }
+        if (event.key === 'Tab') {
+          const controls = dialog.current?.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), select, input',
+          );
+          const first = controls?.[0];
+          const last = controls?.[controls.length - 1];
+          if (event.shiftKey && window.document.activeElement === first) {
+            event.preventDefault();
+            last?.focus();
+          } else if (
+            !event.shiftKey &&
+            window.document.activeElement === last
+          ) {
+            event.preventDefault();
+            first?.focus();
+          }
+        }
+      }}
+    >
+      <h2 id="settings-title">Settings</h2>
+      <p className="hint">
+        Changes apply immediately. Closing does not undo them.
+      </p>
+      <div className="setting-field">
+        <label htmlFor="appearance-mode">Appearance</label>
+        <select
+          id="appearance-mode"
+          value={settings.mode}
+          onChange={(event) => {
+            const value = event.target.value;
+            if (value === 'system' || value === 'light' || value === 'dark')
+              controller.change({ mode: value });
+          }}
+        >
+          <option value="system">System</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </div>
+      {(['lightPalette', 'darkPalette'] as const).map((key) => (
+        <div className="setting-field" key={key}>
+          <label htmlFor={key}>
+            {key === 'lightPalette' ? 'Light palette' : 'Dark palette'}
+          </label>
+          <select
+            id={key}
+            value={settings[key]}
+            onChange={(event) => {
+              const value = palettes.find(
+                ([id]) => id === event.target.value,
+              )?.[0];
+              if (value) controller.change({ [key]: value });
+            }}
+          >
+            {palettes.map(([id, label]) => (
+              <option key={id} value={id}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
+      ))}
+      <p className="hint">
+        Currently using {slot === 'light' ? 'Light' : 'Dark'} palette:{' '}
+        {palettes.find(([id]) => id === palette)?.[1]}
+        {settings.mode === 'system' ? ' (system appearance)' : ''}. The inactive
+        palette is saved for that appearance.
+      </p>
+      <fieldset>
+        <legend>Page zoom</legend>
+        <div className="commands">
+          <button
+            disabled={settings.pageZoom === 50}
+            onClick={() => {
+              controller.zoom('zoom-out');
+            }}
+          >
+            Decrease page zoom
+          </button>
+          <output aria-label="Page zoom">{settings.pageZoom}%</output>
+          <button
+            disabled={settings.pageZoom === 300}
+            onClick={() => {
+              controller.zoom('zoom-in');
+            }}
+          >
+            Increase page zoom
+          </button>
+          <button
+            onClick={() => {
+              controller.zoom('zoom-reset');
+            }}
+          >
+            Reset to 100%
+          </button>
+        </div>
+      </fieldset>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={settings.fitDiagrams}
+          onChange={(event) => {
+            controller.change({ fitDiagrams: event.target.checked });
+          }}
+        />
+        Fit diagrams to view
+      </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={settings.sidebarDefault}
+          onChange={(event) => {
+            controller.change({ sidebarDefault: event.target.checked });
+          }}
+        />
+        Show sidebar by default
+      </label>
+      <p className="hint">
+        Diagram and sidebar preferences are saved now; they apply when those
+        features are available.
+      </p>
+      {children}
+      <button onClick={close}>Close</button>
+    </dialog>
+  );
+}

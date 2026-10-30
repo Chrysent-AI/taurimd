@@ -7,6 +7,8 @@ fn main() {
             "reload_document",
             "commit_document",
             "cancel_operation",
+            "get_settings",
+            "update_settings",
         ]),
     ))
     .expect("native build configuration failed");

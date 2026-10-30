@@ -1,8 +1,59 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { listen } from '@tauri-apps/api/event';
 import type { ReaderController } from './controller';
+import { preferences } from './native';
+import { SettingsController } from './settings/model';
+import { SettingsDialog, SettingsFeedback } from './settings/SettingsDialog';
 export function App({ controller }: { controller: ReaderController }) {
   const state = useSyncExternalStore(controller.subscribe, controller.getState);
+  const readingHTML = useMemo(
+    () => ({ __html: state.displayed?.html ?? '' }),
+    [state.displayed],
+  );
+  const [settingsController] = useState(
+    () => new SettingsController(preferences),
+  );
+  const preferenceState = useSyncExternalStore(
+    settingsController.subscribe,
+    settingsController.getState,
+  );
+  const settings = preferenceState.settings;
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const modalOpen = useRef(false);
+  useEffect(() => {
+    modalOpen.current = settingsOpen;
+  }, [settingsOpen]);
+  const [systemDark, setSystemDark] = useState(
+    () => window.matchMedia('(prefers-color-scheme: dark)').matches,
+  );
+  const slot =
+    settings.mode === 'system'
+      ? systemDark
+        ? 'dark'
+        : 'light'
+      : settings.mode;
+  const palette =
+    slot === 'light' ? settings.lightPalette : settings.darkPalette;
+  useEffect(() => settingsController.connect(), [settingsController]);
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const change = () => {
+      setSystemDark(media.matches);
+    };
+    media.addEventListener('change', change);
+    return () => {
+      media.removeEventListener('change', change);
+    };
+  }, []);
+  useEffect(() => {
+    window.document.documentElement.dataset.palette = palette;
+  }, [palette]);
   const article = useRef<HTMLElement>(null);
   const composing = useRef(false);
   const lastDocument = useRef<number | null>(null);
@@ -12,7 +63,20 @@ export function App({ controller }: { controller: ReaderController }) {
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void listen<string>('menu_action', ({ payload }) => {
-      if (composing.current || controller.state.phase === 'loading') return;
+      if (composing.current) return;
+      if (payload === 'settings') {
+        setSettingsOpen(true);
+        return;
+      }
+      if (
+        payload === 'zoom-in' ||
+        payload === 'zoom-out' ||
+        payload === 'zoom-reset'
+      ) {
+        settingsController.zoom(payload);
+        return;
+      }
+      if (modalOpen.current || controller.state.phase === 'loading') return;
       if (payload === 'open' || payload === 'reload')
         void controller.run(payload);
     })
@@ -23,14 +87,14 @@ export function App({ controller }: { controller: ReaderController }) {
       .catch(() => {
         if (!disposed)
           setMenuError(
-            'Native menu events are unavailable. Use the visible Open File and Reload controls.',
+            'Native menu events are unavailable. Use the visible reader and Settings controls.',
           );
       });
     return () => {
       disposed = true;
       unlisten?.();
     };
-  }, [controller]);
+  }, [controller, settingsController]);
   useEffect(() => {
     const id = state.displayed?.snapshot.documentId;
     if (id !== undefined && id !== lastDocument.current) {
@@ -72,6 +136,13 @@ export function App({ controller }: { controller: ReaderController }) {
           >
             Reload
           </button>
+          <button
+            onClick={() => {
+              setSettingsOpen(true);
+            }}
+          >
+            Settings…
+          </button>
           {busy && state.phase !== 'committing' && (
             <button
               onClick={() => {
@@ -107,6 +178,27 @@ export function App({ controller }: { controller: ReaderController }) {
         </p>
         {menuError && <p>{menuError}</p>}
       </section>
+      <SettingsFeedback
+        status={preferenceState.status}
+        notice={preferenceState.notice}
+        retry={settingsController.retry}
+      />
+      <SettingsDialog
+        open={settingsOpen}
+        close={() => {
+          setSettingsOpen(false);
+        }}
+        controller={settingsController}
+        settings={settings}
+        slot={slot}
+        composing={composing}
+      >
+        <SettingsFeedback
+          status={preferenceState.status}
+          notice={preferenceState.notice}
+          retry={settingsController.retry}
+        />
+      </SettingsDialog>
       <main aria-busy={busy}>
         {!document ? (
           <section className="empty">
@@ -131,6 +223,7 @@ export function App({ controller }: { controller: ReaderController }) {
             )}
             <article
               ref={article}
+              data-zoom={settings.pageZoom}
               tabIndex={-1}
               aria-label={document.snapshot.name}
             >
@@ -139,7 +232,7 @@ export function App({ controller }: { controller: ReaderController }) {
               ) : document.html === null ? (
                 <pre className="literal">{document.snapshot.source}</pre>
               ) : (
-                <div dangerouslySetInnerHTML={{ __html: document.html }} />
+                <div dangerouslySetInnerHTML={readingHTML} />
               )}
             </article>
           </>

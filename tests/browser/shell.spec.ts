@@ -21,8 +21,8 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Open File…' })).toBeVisible();
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.listenerCount()))
-    .toBe(1);
-  await expect(page.locator('.commands')).toHaveCSS('display', 'flex');
+    .toBe(2);
+  await expect(page.locator('header .commands')).toHaveCSS('display', 'flex');
 });
 test.afterEach(async ({ page }) => {
   await page.evaluate(() => {

@@ -9,6 +9,8 @@
     "allow-select-document",
     "allow-reload-document",
     "allow-commit-document",
-    "allow-cancel-operation"
+    "allow-cancel-operation",
+    "allow-get-settings",
+    "allow-update-settings"
   ]
 }
