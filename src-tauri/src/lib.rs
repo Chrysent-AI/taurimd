@@ -1,8 +1,10 @@
 mod documents;
 mod links;
 mod media;
+mod presentation;
 mod settings;
 use documents::{read_document, AppError, Session, Snapshot};
+use presentation::{Presentation, ReaderMenu};
 use serde::Serialize;
 use settings::{Patch, Record, SettingsStore, Update};
 use std::sync::{
@@ -10,15 +12,48 @@ use std::sync::{
     Arc, Mutex,
 };
 use tauri::{
-    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     Emitter, Manager, State, WebviewWindow,
 };
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 type ReaderState = Mutex<Session>;
-struct ReloadMenu {
-    item: MenuItem<tauri::Wry>,
+#[tauri::command]
+async fn present_reader(window: WebviewWindow, presentation: Presentation) -> Result<(), AppError> {
+    settings_caller(&window)?;
+    let handle = window.clone();
+    let (sender, mut receiver) = tauri::async_runtime::channel(1);
+    // All menu mutations and click restoration share the native UI thread;
+    // no worker may hold the presentation lock while waiting for that thread.
+    window
+        .run_on_main_thread(move || {
+            let result = (|| {
+                let has_document = session(&handle, &handle.state::<ReaderState>())?.has_document();
+                let menu = handle.state::<ReaderMenu>();
+                let mut applied = menu.applied.lock().map_err(|_| {
+                    AppError::new("resourceFailure", "Menu presentation is unavailable.")
+                })?;
+                applied.accept(handle.label(), presentation)?;
+                menu.apply(&applied, has_document).map_err(|_| {
+                    AppError::new(
+                        "resourceFailure",
+                        "Menu presentation could not be synchronized.",
+                    )
+                })
+            })();
+            let _ = sender.try_send(result);
+        })
+        .map_err(|_| {
+            AppError::new(
+                "resourceFailure",
+                "Menu presentation could not be dispatched.",
+            )
+        })?;
+    receiver
+        .recv()
+        .await
+        .ok_or_else(|| AppError::new("resourceFailure", "Menu presentation was interrupted."))?
 }
 fn session<'a>(
     window: &WebviewWindow,
@@ -111,15 +146,11 @@ async fn reload_document(
 fn commit_document(
     window: WebviewWindow,
     state: State<'_, ReaderState>,
-    reload_menu: State<'_, ReloadMenu>,
     request_id: u32,
 ) -> Result<(), AppError> {
     let name = session(&window, &state)?.commit(request_id)?;
     if let Err(error) = window.set_title(&format!("{name} — MDViewerRSX")) {
         eprintln!("Window title update failed: {error}");
-    }
-    if let Err(error) = reload_menu.item.set_enabled(true) {
-        eprintln!("Reload menu enablement failed: {error}");
     }
     Ok(())
 }
@@ -344,7 +375,8 @@ pub fn run() {
             get_settings,
             update_settings,
             resolve_media,
-            activate_link
+            activate_link,
+            present_reader
         ])
         .setup(|app| {
             app.manage(SettingsStore::load(app.path().app_config_dir().ok()));
@@ -371,7 +403,35 @@ pub fn run() {
                 true,
                 Some("CmdOrCtrl+0"),
             )?;
-            let view = Submenu::with_items(app, "View", true, &[&zoom_in, &zoom_out, &zoom_reset])?;
+            let status = CheckMenuItem::with_id(
+                app,
+                "status-bar",
+                "Show Status Bar",
+                true,
+                true,
+                None::<&str>,
+            )?;
+            let guide = MenuItem::with_id(app, "guide", "User Guide", true, None::<&str>)?;
+            let about = MenuItem::with_id(app, "about", "About MDViewerRSX", true, None::<&str>)?;
+            let information = MenuItem::with_id(
+                app,
+                "information",
+                "Document Information…",
+                false,
+                None::<&str>,
+            )?;
+            let view = Submenu::with_items(
+                app,
+                "View",
+                true,
+                &[
+                    &zoom_in,
+                    &zoom_out,
+                    &zoom_reset,
+                    &PredefinedMenuItem::separator(app)?,
+                    &status,
+                ],
+            )?;
             let open = MenuItem::with_id(app, "open", "Open File…", true, Some("CmdOrCtrl+O"))?;
             let reload = MenuItem::with_id(app, "reload", "Reload", false, Some("CmdOrCtrl+R"))?;
             let file = Submenu::with_items(
@@ -381,6 +441,7 @@ pub fn run() {
                 &[
                     &open,
                     &reload,
+                    &information,
                     &PredefinedMenuItem::close_window(app, None)?,
                 ],
             )?;
@@ -393,6 +454,7 @@ pub fn run() {
                         "MDViewerRSX",
                         true,
                         &[
+                            &about,
                             &settings,
                             &PredefinedMenuItem::separator(app)?,
                             &PredefinedMenuItem::quit(app, None)?,
@@ -400,6 +462,7 @@ pub fn run() {
                     )?,
                     &file,
                     &view,
+                    &Submenu::with_items(app, "Help", true, &[&guide])?,
                 ],
             )?;
             #[cfg(not(target_os = "macos"))]
@@ -409,10 +472,25 @@ pub fn run() {
                     &file,
                     &view,
                     &Submenu::with_items(app, "Settings", true, &[&settings])?,
+                    &Submenu::with_items(app, "Help", true, &[&guide, &about])?,
                 ],
             )?;
             app.set_menu(menu)?;
-            app.manage(ReloadMenu { item: reload });
+            app.manage(ReaderMenu {
+                actions: vec![
+                    ("open", open),
+                    ("reload", reload),
+                    ("information", information),
+                    ("settings", settings),
+                    ("guide", guide),
+                    ("about", about),
+                    ("zoom-in", zoom_in),
+                    ("zoom-out", zoom_out),
+                    ("zoom-reset", zoom_reset),
+                ],
+                status,
+                applied: Mutex::new(Presentation::default()),
+            });
             let config = &app.config().app.windows[0];
             let entry = if tauri::is_dev() {
                 app.config()
@@ -437,6 +515,12 @@ pub fn run() {
         .on_menu_event(|app, event| {
             if let Some(window) = app.get_webview_window("reader") {
                 if window.is_focused().unwrap_or(false) {
+                    let menu = app.state::<ReaderMenu>();
+                    if let Ok(applied) = menu.applied.lock() {
+                        if let Err(error) = menu.status.set_checked(applied.status_visible) {
+                            eprintln!("Menu checkmark restoration failed: {error}");
+                        }
+                    }
                     let _ = window.emit("menu_action", event.id().as_ref());
                 }
             }

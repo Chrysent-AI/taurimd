@@ -74,6 +74,51 @@ fn defaults_corrupt_and_independent_field_fallbacks() {
     assert!(record.notice.is_some());
 }
 #[test]
+fn status_visibility_legacy_absence_is_not_corruption_but_invalid_presence_is() {
+    let fixture = root();
+    let file = fixture.path().join("settings-v1.json");
+    let mut legacy = serde_json::to_value(Record {
+        version: 1,
+        revision: 4,
+        settings: SettingsV1::default(),
+        notice: None,
+    })
+    .unwrap();
+    legacy["settings"]
+        .as_object_mut()
+        .unwrap()
+        .remove("statusVisible");
+    fs::write(&file, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let old = SettingsStore::load(Some(fixture.path().into()))
+        .get()
+        .unwrap();
+    assert!(old.settings.status_visible);
+    assert!(old.notice.is_none());
+    for invalid in [json!(null), json!("false"), json!(0)] {
+        legacy["settings"]["statusVisible"] = invalid;
+        fs::write(&file, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let record = SettingsStore::load(Some(fixture.path().into()))
+            .get()
+            .unwrap();
+        assert!(record.settings.status_visible);
+        assert!(record.notice.is_some());
+    }
+    let store = SettingsStore::load(Some(fixture.path().into()));
+    let saved = committed(
+        store
+            .update(4, patch(json!({"statusVisible":false})), |_| {})
+            .unwrap(),
+    );
+    assert!(!saved.settings.status_visible);
+    assert!(saved.notice.is_none());
+    assert_eq!(
+        SettingsStore::load(Some(fixture.path().into()))
+            .get()
+            .unwrap(),
+        saved
+    );
+}
+#[test]
 fn atomic_replacement_restart_and_source_write_scope() {
     let fixture = root();
     let config = fixture.path().join("config");
@@ -81,7 +126,7 @@ fn atomic_replacement_restart_and_source_write_scope() {
     fs::write(&source, b"# Unchanged\r\n").unwrap();
     let store = SettingsStore::load(Some(config.clone()));
     let mut events = vec![];
-    let first = committed(store.update(0, patch(json!({"mode":"light","lightPalette":"dracula", "pageZoom":300,"fitDiagrams":false,"sidebarDefault":false})), |record| {
+    let first = committed(store.update(0, patch(json!({"mode":"light","lightPalette":"dracula", "pageZoom":300,"fitDiagrams":false,"sidebarDefault":false,"statusVisible":false})), |record| {
         events.push(record.clone());
         assert_eq!(store.get().unwrap(), *record);
     }).unwrap());
@@ -206,13 +251,14 @@ fn native_validation_and_dtos_match_frontend_wire_without_path_parameters() {
         json!({"path":"source.md"}),
         json!({"pageZoom":1.5}),
         json!({"darkPalette":"untrusted"}),
+        json!({"statusVisible":"yes"}),
     ] {
         assert!(serde_json::from_value::<Patch>(invalid).is_err());
     }
     assert_eq!(
         serde_json::to_value(store.get().unwrap()).unwrap(),
         json!({
-            "version":1,"revision":0,"settings":{"mode":"system","lightPalette":"githubLight","darkPalette":"githubDark","pageZoom":100,"fitDiagrams":true,"sidebarDefault":true},"notice":null
+            "version":1,"revision":0,"settings":{"mode":"system","lightPalette":"githubLight","darkPalette":"githubDark","pageZoom":100,"fitDiagrams":true,"sidebarDefault":true,"statusVisible":true},"notice":null
         })
     );
     let result = store

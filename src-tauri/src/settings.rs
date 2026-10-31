@@ -31,6 +31,7 @@ pub struct SettingsV1 {
     pub page_zoom: u16,
     pub fit_diagrams: bool,
     pub sidebar_default: bool,
+    pub status_visible: bool,
 }
 impl Default for SettingsV1 {
     fn default() -> Self {
@@ -41,6 +42,7 @@ impl Default for SettingsV1 {
             page_zoom: 100,
             fit_diagrams: true,
             sidebar_default: true,
+            status_visible: true,
         }
     }
 }
@@ -61,6 +63,7 @@ pub struct Patch {
     pub page_zoom: Option<u16>,
     pub fit_diagrams: Option<bool>,
     pub sidebar_default: Option<bool>,
+    pub status_visible: Option<bool>,
 }
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
@@ -111,6 +114,10 @@ impl SettingsStore {
                         let mut fields = serde_json::to_value(SettingsV1::default())
                             .expect("settings serialize");
                         for (key, default) in fields.as_object_mut().expect("settings object") {
+                            // This field was added to version 1; absence alone is not corruption.
+                            if key == "statusVisible" && value["settings"].get(key).is_none() {
+                                continue;
+                            }
                             let candidate = &value["settings"][key];
                             let valid = match key.as_str() {
                                 "mode" => serde_json::from_value::<Mode>(candidate.clone()).is_ok(),
@@ -186,6 +193,9 @@ impl SettingsStore {
         }
         if let Some(value) = patch.sidebar_default {
             next.settings.sidebar_default = value;
+        }
+        if let Some(value) = patch.status_visible {
+            next.settings.status_visible = value;
         }
         next.revision = next.revision.checked_add(1).ok_or_else(unavailable)?;
         next.notice = None;

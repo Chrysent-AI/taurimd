@@ -6,7 +6,11 @@ export interface ParseJob {
   result: Promise<Reading>;
   cancel(): void;
 }
-export function parseInWorker(source: string, snapshot?: Snapshot): ParseJob {
+export function parseInWorker(
+  source: string,
+  snapshot?: Snapshot,
+  namespace?: string,
+): ParseJob {
   const worker = new Worker(new URL('./parse.worker.ts', import.meta.url), {
     type: 'module',
   });
@@ -23,7 +27,7 @@ export function parseInWorker(source: string, snapshot?: Snapshot): ParseJob {
               data,
               snapshot
                 ? `d${String(snapshot.documentId)}-r${String(snapshot.revision)}`
-                : undefined,
+                : namespace,
             ),
           );
         } catch {

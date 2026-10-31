@@ -243,6 +243,9 @@ impl Session {
             .filter(|x| x.snapshot.document_id == id && x.snapshot.revision == revision)
             .ok_or_else(Self::stale)
     }
+    pub fn has_document(&self) -> bool {
+        self.active.is_some()
+    }
     pub fn commit(&mut self, request: u32) -> Result<String, AppError> {
         self.current(request)?;
         let document = self.pending.take().ok_or_else(Self::stale)?;

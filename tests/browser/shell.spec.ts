@@ -1,4 +1,5 @@
-import { expect, test } from '@playwright/test';
+import { writeFileSync } from 'node:fs';
+import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import type { Snapshot } from '../../src/types';
 const snapshot = (
   name: string,
@@ -13,16 +14,51 @@ const snapshot = (
   format: 'markdown',
   source,
 });
-
+async function capture(page: Page, info: TestInfo, name: string) {
+  const path = info.outputPath(`${name}.png`);
+  await page.screenshot({ path });
+  writeFileSync(
+    `${path}.json`,
+    JSON.stringify(
+      {
+        engine: info.project.name,
+        viewport: page.viewportSize(),
+        palette: await page.locator('html').getAttribute('data-palette'),
+        zoom: await page.evaluate(
+          () =>
+            document.querySelector('article')?.getAttribute('data-zoom') ??
+            'No document',
+        ),
+        nativeBackendAndMenus:
+          'Explicit browser doubles; not native qualification',
+      },
+      null,
+      2,
+    ),
+  );
+}
+async function open(page: Page, doc: Snapshot) {
+  await page.evaluate((snapshot) => {
+    window.readerFixture.enqueue('select_document', {
+      value: { status: 'ready', snapshot },
+    });
+    return window.readerFixture.menu('open');
+  }, doc);
+  await expect(page.getByRole('article', { name: doc.name })).toBeFocused();
+}
 test.beforeEach(async ({ page }) => {
   await page.goto(
     `${process.env.MDVIEWERRSX_TEST_URL ?? ''}/tests/browser/shell.html`,
   );
-  await expect(page.getByRole('button', { name: 'Open File…' })).toBeVisible();
+  await expect(page.getByRole('main')).toContainText('File → Open File');
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.listenerCount()))
     .toBe(2);
-  await expect(page.locator('header .commands')).toHaveCSS('display', 'flex');
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.readerFixture.presentation()?.statusVisible),
+    )
+    .toBe(true);
 });
 test.afterEach(async ({ page }) => {
   await page.evaluate(() => {
@@ -30,21 +66,22 @@ test.afterEach(async ({ page }) => {
   });
 });
 
-test('real shell routes Open, chooser cancel, literal text and empty files through the JS adapter', async ({
+test('quiet menu-first shell routes Open, chooser cancel, literal text and empty files through the JS adapter', async ({
   page,
 }, info) => {
-  const doc = snapshot('reading.md');
-  await page.evaluate((value) => {
-    window.readerFixture.enqueue('select_document', {
-      value: { status: 'ready', snapshot: value },
-    });
-  }, doc);
-  await expect(page.getByRole('button', { name: 'Reload' })).toBeDisabled();
-  await page.getByRole('button', { name: 'Open File…' }).click();
+  await expect(page.locator('header')).toHaveCount(0);
+  await expect(page.getByRole('button')).toHaveCount(0);
+  await expect(page.getByLabel('Displayed document')).toHaveText(
+    'No document openReady',
+  );
+  await expect(page.getByRole('status')).toBeEmpty();
+  await capture(page, info, 'quiet-empty-reader');
+  await page.evaluate(() => window.readerFixture.menu('information'));
+  await expect(page.getByRole('status')).toContainText('unavailable');
+  await open(page, snapshot('reading.md'));
   const article = page.getByRole('article', { name: 'reading.md' });
   await expect(article.getByRole('heading', { name: 'Reader' })).toBeVisible();
   await expect(article.getByRole('checkbox')).toBeDisabled();
-  await expect(article).toBeFocused();
   expect(await page.evaluate(() => window.readerFixture.calls())).toEqual([
     { command: 'select_document', payload: { requestId: 1 } },
     { command: 'commit_document', payload: { requestId: 1 } },
@@ -57,8 +94,8 @@ test('real shell routes Open, chooser cancel, literal text and empty files throu
     window.readerFixture.enqueue('select_document', {
       value: { status: 'cancelled' },
     });
+    return window.readerFixture.menu('open');
   });
-  await page.getByRole('button', { name: 'Open File…' }).click();
   await expect(page.getByRole('status')).toContainText('Open cancelled');
   await expect(article).toBeVisible();
   const literal = {
@@ -67,53 +104,38 @@ test('real shell routes Open, chooser cancel, literal text and empty files throu
     source:
       '# Literal\n<script>not executed</script>\n![not fetched](https://invalid.example/a)',
   };
-  await page.evaluate((value) => {
-    window.readerFixture.enqueue('select_document', {
-      value: { status: 'ready', snapshot: value },
-    });
-  }, literal);
-  await page.getByRole('button', { name: 'Open File…' }).click();
+  await open(page, literal);
   const textArticle = page.getByRole('article', { name: 'literal.log' });
   await expect(textArticle).toHaveText(literal.source);
   await expect(textArticle.locator('script, img, h1')).toHaveCount(0);
   expect(await page.evaluate(() => window.readerFixture.parses())).toBe(1);
-  await expect(textArticle).toBeFocused();
-  await page.evaluate(
-    (value) => {
-      window.readerFixture.enqueue('select_document', {
-        value: { status: 'ready', snapshot: value },
-      });
-    },
-    snapshot('empty.md', 4, 4, ''),
-  );
-  await page.getByRole('button', { name: 'Open File…' }).click();
+  await open(page, snapshot('empty.md', 4, 4, ''));
   await expect(page.getByRole('article', { name: 'empty.md' })).toHaveText(
     'This file is empty.',
   );
-  await expect(page.getByRole('status')).toContainText('empty file');
+  await expect(page.getByLabel('Displayed document')).toContainText(
+    'Empty file',
+  );
 });
 
-test('untrusted document markup cannot invoke the native JS bridge from the actual shell', async ({
+test('untrusted markup cannot invoke the native JS bridge from the actual shell', async ({
   page,
 }) => {
-  const externalRequests: string[] = [];
+  const requests: string[] = [];
   page.on('request', (request) => {
     if (new URL(request.url()).hostname !== '127.0.0.1')
-      externalRequests.push(request.url());
+      requests.push(request.url());
   });
-  const doc = snapshot(
-    'untrusted.md',
-    1,
-    1,
-    `# Safe reading\n\n<script>window.__TAURI_INTERNALS__.invoke('select_document', { requestId: 999 })</script>\n\n<img src="https://invalid.example/image" onerror="window.__TAURI_INTERNALS__.invoke('select_document', { requestId: 998 })" alt="Blocked image">\n\n[Inactive](javascript:alert(1))`,
+  await open(
+    page,
+    snapshot(
+      'untrusted.md',
+      1,
+      1,
+      `# Safe reading\n\n<script>window.__TAURI_INTERNALS__.invoke('select_document', { requestId: 999 })</script>\n\n<img src="https://invalid.example/image" onerror="window.__TAURI_INTERNALS__.invoke('select_document', { requestId: 998 })" alt="Blocked image">\n\n[Inactive](javascript:alert(1))`,
+    ),
   );
-  await page.evaluate((value) => {
-    window.readerFixture.enqueue('select_document', {
-      value: { status: 'ready', snapshot: value },
-    });
-  }, doc);
-  await page.getByRole('button', { name: 'Open File…' }).click();
-  const article = page.getByRole('article', { name: 'untrusted.md' });
+  const article = page.getByRole('article');
   await expect(
     article.getByRole('heading', { name: 'Safe reading' }),
   ).toBeVisible();
@@ -125,21 +147,16 @@ test('untrusted document markup cannot invoke the native JS bridge from the actu
     { command: 'select_document', payload: { requestId: 1 } },
     { command: 'commit_document', payload: { requestId: 1 } },
   ]);
-  expect(externalRequests).toEqual([]);
+  expect(requests).toEqual([]);
 });
 
-test('real adapter reload payload and failed replacement preserve the displayed identity and focus', async ({
+test('hidden status retains failed replacement/reload target recovery and full displayed identity', async ({
   page,
 }) => {
   const doc = snapshot('current.md');
-  await page.evaluate((value) => {
-    window.readerFixture.enqueue('select_document', {
-      value: { status: 'ready', snapshot: value },
-    });
-  }, doc);
-  await page.getByRole('button', { name: 'Open File…' }).click();
-  const article = page.getByRole('article', { name: 'current.md' });
-  await expect(article).toBeFocused();
+  doc.location = `fixture/${'long-directory/'.repeat(20)}current.md`;
+  await open(page, doc);
+  const article = page.getByRole('article');
   await page.evaluate(
     (value) => {
       window.readerFixture.enqueue('reload_document', { value });
@@ -148,7 +165,6 @@ test('real adapter reload payload and failed replacement preserve the displayed 
     { ...doc, revision: 2, source: '# Updated\n\nNew contents' },
   );
   await expect(article.getByRole('heading', { name: 'Updated' })).toBeVisible();
-  await expect(article).toBeFocused();
   expect(
     await page.evaluate(() =>
       window.readerFixture
@@ -161,6 +177,10 @@ test('real adapter reload payload and failed replacement preserve the displayed 
       payload: { requestId: 2, documentId: 1, revision: 1 },
     },
   ]);
+  await page.getByRole('button', { name: 'Document Information…' }).focus();
+  await page.evaluate(() => window.readerFixture.menu('status-bar'));
+  await expect(page.getByLabel('Displayed document')).toHaveCount(0);
+  await expect(article).toBeFocused();
   await page.evaluate(() => {
     window.readerFixture.enqueue('select_document', {
       error: {
@@ -169,14 +189,21 @@ test('real adapter reload payload and failed replacement preserve the displayed 
         attempted: 'fixture/broken.md',
       },
     });
+    return window.readerFixture.menu('open');
   });
-  await page.getByRole('button', { name: 'Open File…' }).click();
   await expect(page.getByRole('alert')).toContainText('fixture/broken.md');
-  await expect(page.getByLabel('Displayed document')).toContainText(
-    'current.md',
+  await expect(page.getByRole('alert')).toContainText(
+    'Still showing last loaded current.md',
   );
-  await expect(page.getByLabel('Displayed document')).toContainText('Stale');
-  await expect(article.getByRole('heading', { name: 'Updated' })).toBeVisible();
+  await page.evaluate(() => window.readerFixture.menu('information'));
+  const info = page.getByRole('dialog', { name: 'Document Information' });
+  await expect(info).toContainText(doc.location);
+  await expect(info).toContainText('Stale: last loaded content');
+  await info.locator('dd').first().click({ clickCount: 3 });
+  await expect
+    .poll(() => page.evaluate(() => getSelection()?.toString().trim()))
+    .toBe('current.md');
+  await info.getByRole('button', { name: 'Close' }).click();
   await page.evaluate(() => {
     window.readerFixture.enqueue('reload_document', {
       error: {
@@ -185,8 +212,8 @@ test('real adapter reload payload and failed replacement preserve the displayed 
         attempted: 'fixture/current.md',
       },
     });
+    return window.readerFixture.menu('reload');
   });
-  await page.getByRole('button', { name: 'Reload' }).click();
   await expect(page.getByRole('alert')).toContainText('Reload failed');
   await expect(article.getByRole('heading', { name: 'Updated' })).toBeVisible();
   expect(
@@ -200,32 +227,27 @@ test('real adapter reload payload and failed replacement preserve the displayed 
   ).toEqual({ requestId: 4, documentId: 1, revision: 2 });
 });
 
-test('cancelling a pending backend response ignores its late context without parsing it', async ({
+test('hidden-status pending Cancel remains reachable; stale modal commands never queue; late selection is ignored', async ({
   page,
 }) => {
+  await page.evaluate(() => window.readerFixture.menu('status-bar'));
   await page.evaluate(() => {
     window.readerFixture.enqueue('select_document', { hold: 'old-selection' });
+    return window.readerFixture.menu('open');
   });
-  await page.getByRole('button', { name: 'Open File…' }).click();
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.pending()))
     .toEqual(['old-selection']);
   await expect(page.getByRole('main')).toHaveAttribute('aria-busy', 'true');
+  await page.evaluate(() => window.readerFixture.menu('guide'));
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText('Command unavailable');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Operation cancelled');
-  await page.evaluate(
-    (value) => {
-      window.readerFixture.enqueue('select_document', {
-        value: { status: 'ready', snapshot: value },
-      });
-    },
-    snapshot('newer.md', 3),
-  );
-  await page.getByRole('button', { name: 'Open File…' }).click();
-  await expect(page.getByRole('article', { name: 'newer.md' })).toBeFocused();
-  await page.evaluate((value) => {
+  await open(page, snapshot('newer.md', 3));
+  await page.evaluate((snapshot) => {
     window.readerFixture.release('old-selection', {
-      value: { status: 'ready', snapshot: value },
+      value: { status: 'ready', snapshot },
     });
   }, snapshot('obsolete.md'));
   await expect
@@ -256,7 +278,7 @@ test('cancelling a pending backend response ignores its late context without par
   await expect(page.getByRole('status')).toHaveText('Opened newer.md.');
 });
 
-test('an error with a native null attempted target leaves the empty shell recoverable', async ({
+test('empty-reader native null target errors expose direct recovery', async ({
   page,
 }) => {
   await page.evaluate(() => {
@@ -267,39 +289,53 @@ test('an error with a native null attempted target leaves the empty shell recove
         attempted: null,
       },
     });
+    return window.readerFixture.menu('open');
   });
-  await page.getByRole('button', { name: 'Open File…' }).click();
   await expect(page.getByRole('alert')).toHaveText(
     'Open failed: The native file chooser failed.',
   );
   await expect(page.getByRole('article')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Open File…' })).toBeEnabled();
-  await page.evaluate((value) => {
+  await page.evaluate((snapshot) => {
     window.readerFixture.enqueue('select_document', {
-      value: { status: 'ready', snapshot: value },
+      value: { status: 'ready', snapshot },
     });
   }, snapshot('recovered.md'));
   await page.getByRole('button', { name: 'Open File…' }).click();
   await expect(
     page.getByRole('article', { name: 'recovered.md' }),
   ).toBeFocused();
-  await expect(page.getByRole('status')).toHaveText('Opened recovered.md.');
 });
 
-test('menu events are once-only, composition-aware and removed on unmount', async ({
+test('menu dispatch once, composition and commit guards, and listener disposal', async ({
   page,
 }) => {
-  const open = page.getByRole('button', { name: 'Open File…' });
-  await open.dispatchEvent('compositionstart', { data: 'reading' });
+  const main = page.getByRole('main');
+  await main.dispatchEvent('compositionstart', { data: 'reading' });
   await page.evaluate(() => window.readerFixture.menu('open'));
   expect(await page.evaluate(() => window.readerFixture.calls())).toEqual([]);
-  await open.dispatchEvent('compositionend', { data: 'reading' });
-  await page.evaluate((value) => {
+  await main.dispatchEvent('compositionend', { data: 'reading' });
+  await page.evaluate(() => {
+    window.readerFixture.enqueue('commit_document', { hold: 'commit' });
+  });
+  await page.evaluate((snapshot) => {
     window.readerFixture.enqueue('select_document', {
-      value: { status: 'ready', snapshot: value },
+      value: { status: 'ready', snapshot },
     });
     return window.readerFixture.menu('open');
   }, snapshot('menu.md'));
+  await expect
+    .poll(() => page.evaluate(() => window.readerFixture.pending()))
+    .toEqual(['commit']);
+  await expect(page.getByRole('button', { name: 'Cancel' })).toHaveCount(0);
+  await page.evaluate(async () => {
+    await window.readerFixture.menu('open');
+    await window.readerFixture.menu('settings');
+  });
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.evaluate(() => {
+    window.readerFixture.release('commit', { value: null });
+  });
   await expect(page.getByRole('article', { name: 'menu.md' })).toBeFocused();
   expect(
     await page.evaluate(
@@ -315,6 +351,9 @@ test('menu events are once-only, composition-aware and removed on unmount', asyn
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.listenerCount()))
     .toBe(0);
+  await expect
+    .poll(() => page.evaluate(() => window.readerFixture.activeWorkers()))
+    .toBe(0);
   await page.evaluate(() => window.readerFixture.menu('open'));
   expect(
     await page.evaluate(
@@ -324,4 +363,272 @@ test('menu events are once-only, composition-aware and removed on unmount', asyn
           .filter((call) => call.command === 'select_document').length,
     ),
   ).toBe(1);
+});
+
+test('applied unsaved visibility/checkmark, late intent, conflict, Retry, mock rehydration and presentation failure', async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    window.readerFixture.enqueue('update_settings', { hold: 'save' });
+    return window.readerFixture.menu('status-bar');
+  });
+  await expect(page.getByLabel('Displayed document')).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.readerFixture.presentation()?.statusVisible),
+    )
+    .toBe(false);
+  await page.evaluate(() => window.readerFixture.menu('status-bar'));
+  await expect(page.getByLabel('Displayed document')).toBeVisible();
+  await page.evaluate(() => {
+    window.readerFixture.release('save', {
+      error: { code: 'io', message: 'Disk unavailable' },
+    });
+  });
+  await expect(
+    page.getByRole('region', { name: 'Preferences status' }),
+  ).toContainText('Applied for now');
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.readerFixture.presentation()?.statusVisible),
+    )
+    .toBe(true);
+  await page.getByRole('button', { name: 'Retry preferences' }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.readerFixture.settings().settings.statusVisible,
+      ),
+    )
+    .toBe(true);
+  await page.evaluate(() => window.readerFixture.menu('status-bar'));
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.readerFixture.settings().settings.statusVisible,
+      ),
+    )
+    .toBe(false);
+  await page.reload();
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.readerFixture.presentation()?.statusVisible),
+    )
+    .toBe(false);
+  await expect(page.getByLabel('Displayed document')).toHaveCount(0);
+  await page.evaluate(() => {
+    window.readerFixture.enqueue('present_reader', {
+      hold: 'old-presentation',
+    });
+    return window.readerFixture.menu('status-bar');
+  });
+  await expect
+    .poll(() => page.evaluate(() => window.readerFixture.pending()))
+    .toEqual(['old-presentation']);
+  await page.evaluate(() => window.readerFixture.menu('status-bar'));
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.readerFixture.presentation()?.statusVisible),
+    )
+    .toBe(false);
+  await page.evaluate(() => {
+    window.readerFixture.release('old-presentation', { value: null });
+  });
+  await expect(page.getByLabel('Displayed document')).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.readerFixture.presentation()?.statusVisible),
+    )
+    .toBe(false);
+  await page.evaluate(() => {
+    window.readerFixture.enqueue('present_reader', {
+      error: { code: 'resourceFailure', message: 'Menu sync unavailable' },
+    });
+    return window.readerFixture.menu('status-bar');
+  });
+  await expect(page.getByRole('alert')).toContainText(
+    'Menu presentation could not',
+  );
+  await page
+    .getByRole('button', { name: 'Retry menu synchronization' })
+    .click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.readerFixture.presentation()?.statusVisible),
+    )
+    .toBe(true);
+});
+
+test('bundled Guide is a separate real parsed surface with scoped fragments, complete keyboard focus, modal guards and About', async ({
+  page,
+}, info) => {
+  const nativeBefore = await page.evaluate(() => window.readerFixture.calls());
+  await page.evaluate(() => window.readerFixture.menu('guide'));
+  const guide = page.getByRole('dialog', { name: 'User Guide' });
+  await expect(
+    guide.getByRole('heading', { name: 'User Guide', exact: true }).first(),
+  ).toBeFocused();
+  await expect(
+    guide.getByRole('link', { name: 'Opening and recovery', exact: true }),
+  ).toBeVisible();
+  await expect(guide.locator('[id]')).not.toHaveCount(0);
+  expect(
+    await guide
+      .locator('.guide [id]')
+      .evaluateAll((nodes) =>
+        nodes.every((node) => node.id.startsWith('reader-guide-')),
+      ),
+  ).toBe(true);
+  await page.keyboard.press('Shift+Tab');
+  await expect(guide.getByRole('button', { name: 'Close' })).toBeFocused();
+  await page.keyboard.press('Tab');
+  const firstLink = guide.getByRole('link', {
+    name: 'Opening and recovery',
+    exact: true,
+  });
+  await expect(firstLink).toBeFocused();
+  const links = guide.getByRole('link');
+  const visited = new Set<string>();
+  let reachedClose = false;
+  // Engines may also tab to their keyboard-scrollable code containers. Check
+  // the real order without pretending those native tab stops do not exist.
+  for (let index = 0; index < (await links.count()) + 6; index++) {
+    const active = await guide.evaluate((node) => ({
+      tag: document.activeElement?.tagName,
+      text: document.activeElement?.textContent.slice(0, 60),
+      inside: node.contains(document.activeElement),
+      link:
+        document.activeElement?.tagName === 'A'
+          ? document.activeElement.textContent
+          : null,
+      close:
+        document.activeElement?.tagName === 'BUTTON' &&
+        document.activeElement.textContent === 'Close',
+    }));
+    expect(
+      active.inside,
+      JSON.stringify({ index, active, visited: [...visited] }),
+    ).toBe(true);
+    if (active.link) visited.add(active.link);
+    if (active.close) {
+      reachedClose = true;
+      break;
+    }
+    await page.keyboard.press('Tab');
+  }
+  expect(reachedClose).toBe(true);
+  expect([...visited]).toEqual(await links.allTextContents());
+  await expect(guide.getByRole('button', { name: 'Close' })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(firstLink).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(
+    guide.getByRole('heading', { name: 'Opening and recovery', exact: true }),
+  ).toBeFocused();
+  await firstLink.dispatchEvent('compositionstart', { data: 'guide' });
+  await page.keyboard.press('Escape');
+  await expect(guide).toBeVisible();
+  await firstLink.dispatchEvent('compositionend', { data: 'guide' });
+  await page.evaluate(async () => {
+    await window.readerFixture.menu('open');
+    await window.readerFixture.menu('settings');
+  });
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  expect(await page.evaluate(() => window.readerFixture.calls())).toEqual(
+    nativeBefore,
+  );
+  await capture(page, info, 'empty-guide');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('main')).toBeFocused();
+  await expect
+    .poll(() => page.evaluate(() => window.readerFixture.activeWorkers()))
+    .toBe(0);
+  await page.evaluate(() => window.readerFixture.menu('about'));
+  const about = page.getByRole('dialog', { name: 'About MDViewerRSX' });
+  await expect(about).toContainText('MIT licensed');
+  await expect(about).toContainText('remain separate checks');
+  await capture(page, info, 'about-empty-reader');
+  await about.getByRole('button', { name: 'Close' }).click();
+  expect(await page.evaluate(() => window.readerFixture.calls())).toEqual(
+    nativeBefore,
+  );
+  expect(await page.evaluate(() => window.readerFixture.parses())).toBe(0);
+});
+
+test('menu subscription transport failure exposes actual direct Open/Settings/Reload recovery with status hidden', async ({
+  page,
+}) => {
+  await page.goto(
+    `${process.env.MDVIEWERRSX_TEST_URL ?? ''}/tests/browser/shell.html?menu-failure`,
+  );
+  await expect(page.getByRole('alert')).toContainText(
+    'Menu commands unavailable',
+  );
+  await page.evaluate((snapshot) => {
+    window.readerFixture.enqueue('select_document', {
+      value: { status: 'ready', snapshot },
+    });
+  }, snapshot('fallback.md'));
+  await page.getByRole('button', { name: 'Open File…' }).click();
+  await expect(page.getByRole('article')).toBeFocused();
+  await page.getByRole('button', { name: 'Document Information…' }).focus();
+  await page.evaluate(() => {
+    const record = window.readerFixture.settings();
+    return window.readerFixture.settingsEvent({
+      ...record,
+      revision: record.revision + 1,
+      settings: { ...record.settings, statusVisible: false },
+    });
+  });
+  await expect(page.getByRole('article')).toBeFocused();
+  await expect(page.getByLabel('Displayed document')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Settings…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Settings', exact: true });
+  await expect(dialog.getByLabel('Appearance', { exact: true })).toBeFocused();
+  await dialog.getByRole('button', { name: 'Close' }).click();
+  await expect(page.getByRole('button', { name: 'Settings…' })).toBeFocused();
+  await page.evaluate(
+    (value) => {
+      window.readerFixture.enqueue('reload_document', { value });
+    },
+    { ...snapshot('fallback.md'), revision: 2, source: '# Recovered reload' },
+  );
+  await page.getByRole('button', { name: 'Reload', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Recovered reload' }),
+  ).toBeVisible();
+});
+
+test('Guide worker failure has literal fallback; dismissal terminates held work without later publication', async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    window.readerFixture.workerMode('fail');
+    return window.readerFixture.menu('guide');
+  });
+  let guide = page.getByRole('dialog', { name: 'User Guide' });
+  await expect(guide).toContainText('Guide formatting unavailable');
+  await expect(guide.locator('pre')).toContainText('# User Guide');
+  await guide.getByRole('button', { name: 'Close' }).click();
+  await page.evaluate(() => {
+    window.readerFixture.workerMode('hold');
+    return window.readerFixture.menu('guide');
+  });
+  guide = page.getByRole('dialog', { name: 'User Guide' });
+  await expect(guide).toContainText('Loading guide');
+  await expect
+    .poll(() => page.evaluate(() => window.readerFixture.activeWorkers()))
+    .toBe(1);
+  await guide.getByRole('button', { name: 'Close' }).click();
+  await expect
+    .poll(() => page.evaluate(() => window.readerFixture.activeWorkers()))
+    .toBe(0);
+  await page.evaluate(() => window.readerFixture.menu('guide'));
+  await expect(
+    page
+      .getByRole('dialog')
+      .getByRole('link', { name: 'Opening and recovery', exact: true }),
+  ).toBeVisible();
+  expect(await page.evaluate(() => window.readerFixture.calls())).toEqual([]);
 });

@@ -162,6 +162,48 @@ it('subscribes before hydration, protects newer event from old getter, and repor
   expect(model.getState().revision).toBe(7);
   expect(model.getState().notice).toBe(newer.notice);
 });
+it('retains dedicated applied status visibility through late acknowledgements, conflict, failure and Retry', async () => {
+  const { model, bridge, event } = await setup();
+  const first = deferred<SettingsUpdate>();
+  bridge.update
+    .mockReturnValueOnce(first.promise)
+    .mockRejectedValueOnce(new Error('disk'));
+  model.change({ statusVisible: false });
+  model.change({ statusVisible: true });
+  expect(model.getState().settings.statusVisible).toBe(true);
+  event(
+    record(4, { ...defaults, sidebarDefault: false, statusVisible: false }),
+  );
+  expect(model.getState().settings.statusVisible).toBe(true);
+  first.resolve({
+    status: 'committed',
+    record: record(1, { ...defaults, statusVisible: false }),
+  });
+  await vi.waitFor(() => {
+    expect(model.getState().status).toBe('error');
+  });
+  expect(bridge.update).toHaveBeenLastCalledWith(4, { statusVisible: true });
+  expect(model.getState().settings.statusVisible).toBe(true);
+  bridge.update
+    .mockResolvedValueOnce({
+      status: 'conflict',
+      record: record(5, { ...defaults, sidebarDefault: false }),
+    })
+    .mockResolvedValueOnce({
+      status: 'committed',
+      record: record(6, {
+        ...defaults,
+        sidebarDefault: false,
+        statusVisible: true,
+      }),
+    });
+  model.retry();
+  await vi.waitFor(() => {
+    expect(model.getState().status).toBe('saved');
+  });
+  expect(model.getState().settings.sidebarDefault).toBe(false);
+  expect(model.getState().settings.statusVisible).toBe(true);
+});
 it('retries failed subscriptions before hydration rather than claiming synchronized success', async () => {
   const bridge = {
     get: vi.fn().mockResolvedValue(record()),

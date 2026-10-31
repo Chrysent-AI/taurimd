@@ -102,13 +102,73 @@
 body {
   margin: 0;
 }
-header {
-  padding: 0.8rem 1.5rem;
-  border-bottom: 1px solid var(--border);
+.shell {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
-.brand {
-  font-size: 1rem;
-  margin: 0 0 0.6rem;
+.sr-only {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.status-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.8rem;
+  flex-shrink: 0;
+  padding: 0.4rem 1rem;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+.status-bar > * {
+  min-width: 0;
+}
+.status-bar button {
+  padding: 0.25rem 0.5rem;
+}
+.recovery {
+  flex-shrink: 0;
+  max-height: 40vh;
+  overflow: auto;
+  padding: 0.5rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.document-information dd {
+  margin: 0.3rem 0 1rem;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.document-information dt {
+  font-weight: 600;
+}
+.guide {
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.guide a {
+  color: var(--link);
+}
+.guide pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--code);
+  padding: 1rem;
+}
+.guide code {
+  font-family: ui-monospace, monospace;
+}
+.guide [tabindex='-1']:focus,
+dialog h2:focus {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
 }
 .commands {
   display: flex;
@@ -137,26 +197,9 @@ button:disabled {
   outline: 3px solid var(--focus);
   outline-offset: 3px;
 }
-.hint,
-.reading-note {
+.hint {
   font-size: 0.85rem;
   color: var(--muted);
-}
-.identity {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem 1rem;
-  overflow-wrap: anywhere;
-}
-.identity span {
-  font-size: 0.85rem;
-}
-.feedback {
-  padding: 0.1rem 1.5rem;
-  border-bottom: 1px solid var(--border);
-}
-.feedback p {
-  overflow-wrap: anywhere;
 }
 .preferences-feedback {
   padding: 0 1.5rem;
@@ -174,12 +217,14 @@ button:disabled {
   padding: 0.6rem;
 }
 main {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
   padding: 0.6rem 1.5rem 4rem;
   min-width: 0;
 }
 .empty,
-article,
-.reading-note {
+article {
   max-width: 76ch;
   margin: 1.2em auto;
 }

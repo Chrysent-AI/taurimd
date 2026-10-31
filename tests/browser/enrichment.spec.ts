@@ -28,7 +28,7 @@ async function open(page: Page, source: string, id = 1) {
     },
     { source, id },
   );
-  await page.getByRole('button', { name: 'Open File…' }).click();
+  await page.evaluate(() => window.readerFixture.menu('open'));
   await expect(page.getByRole('article')).toBeFocused();
   await expect(
     page.getByRole('region', { name: 'Reader status' }),
@@ -179,8 +179,8 @@ test('actual rich worker output, keyboard fragment/footnote round trips, hostile
     .evaluateAll((nodes) => nodes.map((node) => node.id));
   expect(new Set(ids).size).toBe(ids.length);
   expect(ids.every((id) => id.startsWith('reader-d1-r1-'))).toBe(true);
-  await page.evaluate(() => {
-    window.scrollTo(0, 0);
+  await page.getByRole('main').evaluate((node) => {
+    node.scrollTo(0, 0);
   });
   await capture(page, info, 'rich-top-githubLight-100');
   await article.focus();
@@ -206,7 +206,9 @@ test('actual rich worker output, keyboard fragment/footnote round trips, hostile
   await page.keyboard.press('Enter');
   const noteId = (await first.getAttribute('href'))?.slice(1);
   expect(await page.evaluate(() => document.activeElement?.id)).toBe(noteId);
-  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  expect(
+    await page.getByRole('main').evaluate((node) => node.scrollTop),
+  ).toBeGreaterThan(0);
   for (const occurrence of [1, 2]) {
     const back = article.getByRole('link', {
       name: `Back to reference 1, occurrence ${String(occurrence)}`,
@@ -297,7 +299,7 @@ test('actual rich worker output, keyboard fragment/footnote round trips, hostile
       },
     });
   });
-  await page.getByRole('button', { name: 'Open File…' }).click();
+  await page.evaluate(() => window.readerFixture.menu('open'));
   const failure = await page.getByRole('alert').textContent();
   await article.getByRole('link', { name: 'Missing', exact: true }).focus();
   await page.keyboard.press('Enter');
@@ -366,8 +368,8 @@ test('all real token categories and metadata remain legible in every palette and
         })),
       });
       if (mode === 'light' && id === 'nord') {
-        await page.evaluate(() => {
-          window.scrollTo(0, 0);
+        await page.getByRole('main').evaluate((node) => {
+          node.scrollTo(0, 0);
         });
         await capture(page, info, 'rich-top-nord-100');
       }
@@ -494,7 +496,7 @@ test('complete malformed/deep YAML disclosure, selection/node/scroll continuity,
   });
   const before = await page.evaluate(() => ({
     selection: window.getSelection()?.toString(),
-    y: window.scrollY,
+    y: document.querySelector('main')?.scrollTop,
   }));
   await page.evaluate(() => {
     const r = window.readerFixture.settings();
@@ -508,7 +510,7 @@ test('complete malformed/deep YAML disclosure, selection/node/scroll continuity,
   expect(
     await page.evaluate(() => ({
       selection: window.getSelection()?.toString(),
-      y: window.scrollY,
+      y: document.querySelector('main')?.scrollTop,
     })),
   ).toEqual(before);
   await capture(page, info, 'rich-deep-yaml-expanded');
@@ -531,7 +533,7 @@ test('complete malformed/deep YAML disclosure, selection/node/scroll continuity,
   );
   await page.setViewportSize({ width: 640, height: 800 });
   const chromeSize = await page
-    .getByRole('button', { name: 'Settings…' })
+    .getByRole('button', { name: 'Document Information…' })
     .evaluate((node) => getComputedStyle(node).fontSize);
   await page.evaluate(() => {
     const r = window.readerFixture.settings();
@@ -544,7 +546,7 @@ test('complete malformed/deep YAML disclosure, selection/node/scroll continuity,
   await expect(article).toHaveAttribute('data-zoom', '300');
   expect(
     await page
-      .getByRole('button', { name: 'Settings…' })
+      .getByRole('button', { name: 'Document Information…' })
       .evaluate((node) => getComputedStyle(node).fontSize),
   ).toBe(chromeSize);
   expect(
@@ -577,7 +579,7 @@ test('complete malformed/deep YAML disclosure, selection/node/scroll continuity,
       },
     });
   }, literalSource);
-  await page.getByRole('button', { name: 'Open File…' }).click();
+  await page.evaluate(() => window.readerFixture.menu('open'));
   await expect(article).toHaveText(literalSource);
   await expect(article.locator('.metadata,h1,script')).toHaveCount(0);
   expect(await page.evaluate(() => window.readerFixture.parses())).toBe(2);

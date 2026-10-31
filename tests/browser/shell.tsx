@@ -5,11 +5,13 @@ import {
   mockWindows,
   mockConvertFileSrc,
 } from '@tauri-apps/api/mocks';
+import type { invoke } from '@tauri-apps/api/core';
 import { emit } from '@tauri-apps/api/event';
 import { App } from '../../src/App';
 import { ReaderController } from '../../src/controller';
 import { native } from '../../src/native';
 import { parseInWorker } from '../../src/reader/worker';
+import type { MenuPresentation } from '../../src/presentation';
 import type { AppError } from '../../src/types';
 import {
   defaults,
@@ -25,6 +27,7 @@ type Command =
   | 'get_settings'
   | 'update_settings'
   | 'resolve_media'
+  | 'present_reader'
   | 'activate_link';
 type Outcome = { value: unknown } | { error: AppError };
 type Reply = Outcome | { hold: string };
@@ -37,6 +40,41 @@ const settled: Command[] = [];
 const replies = new Map<Command, Reply[]>();
 const pending = new Map<string, (outcome: Outcome) => void>();
 let parses = 0;
+let workerMode: 'normal' | 'fail' | 'hold' = 'normal';
+const activeWorkers = new Set<Worker>();
+class ObservedWorker extends Worker {
+  private mode = workerMode;
+  constructor(url: string | URL, options?: WorkerOptions) {
+    super(url, options);
+    workerMode = 'normal';
+    activeWorkers.add(this);
+  }
+  override postMessage(message: unknown, transfer: Transferable[]): void;
+  override postMessage(
+    message: unknown,
+    options?: StructuredSerializeOptions,
+  ): void;
+  override postMessage(
+    message: unknown,
+    options: Transferable[] | StructuredSerializeOptions = [],
+  ): void {
+    if (this.mode === 'hold') return;
+    if (this.mode === 'fail') {
+      queueMicrotask(() => {
+        this.dispatchEvent(new ErrorEvent('error'));
+      });
+      return;
+    }
+    if (Array.isArray(options)) super.postMessage(message, options);
+    else super.postMessage(message, options);
+  }
+  override terminate() {
+    activeWorkers.delete(this);
+    super.terminate();
+  }
+}
+window.Worker = ObservedWorker;
+let presentation: (MenuPresentation & { sequence: number }) | null = null;
 let settings: SettingsRecord = (JSON.parse(
   sessionStorage.getItem('mock-preferences') ?? 'null',
 ) as SettingsRecord | null) ?? {
@@ -70,6 +108,7 @@ mockIPC(
         'update_settings',
         'resolve_media',
         'activate_link',
+        'present_reader',
       ].includes(command)
     )
       throw new Error(`Unexpected fixture command: ${command}`);
@@ -77,6 +116,17 @@ mockIPC(
     calls.push({ command: name, payload: structuredClone(payload) });
     try {
       const reply = replies.get(name)?.shift();
+      const applyPresentation = () => {
+        const next = (
+          payload as { presentation: MenuPresentation & { sequence: number } }
+        ).presentation;
+        if (!presentation || next.sequence > presentation.sequence)
+          presentation = structuredClone(next);
+      };
+      if (!reply && name === 'present_reader') {
+        applyPresentation();
+        return null;
+      }
       if (!reply && (name === 'commit_document' || name === 'cancel_operation'))
         return null;
       if (!reply && name === 'get_settings') return structuredClone(settings);
@@ -108,6 +158,7 @@ mockIPC(
         // eslint-disable-next-line @typescript-eslint/only-throw-error
         throw outcome.error;
       }
+      if (name === 'present_reader') applyPresentation();
       return structuredClone(outcome.value);
     } finally {
       settled.push(name);
@@ -115,6 +166,34 @@ mockIPC(
   },
   { shouldMockEvents: true },
 );
+
+// Failure injection stays in the browser's transport double; the App still
+// subscribes through the installed event API and renders its real recovery UI.
+if (
+  '__TAURI_INTERNALS__' in window &&
+  new URL(location.href).searchParams.has('menu-failure')
+) {
+  const internals = window.__TAURI_INTERNALS__ as {
+    invoke: typeof invoke;
+    unregisterCallback: (id: number) => void;
+  };
+  const original = internals.invoke;
+  internals.invoke = (command, args, options) => {
+    if (
+      command === 'plugin:event|listen' &&
+      args &&
+      'event' in args &&
+      args.event === 'menu_action'
+    ) {
+      if ('handler' in args && typeof args.handler === 'number')
+        internals.unregisterCallback(args.handler);
+      return Promise.reject(
+        new Error('Browser-only menu subscription failure'),
+      );
+    }
+    return original(command, args, options);
+  };
+}
 
 const controller = new ReaderController(native, (source, snapshot) => {
   parses += 1;
@@ -162,9 +241,18 @@ const fixture = {
     structuredClone(
       calls.filter(
         (call) =>
-          call.command !== 'get_settings' && call.command !== 'update_settings',
+          call.command !== 'get_settings' &&
+          call.command !== 'update_settings' &&
+          call.command !== 'present_reader',
       ),
     ),
+  presentation: () => structuredClone(presentation),
+  presentationCalls: () =>
+    structuredClone(calls.filter((call) => call.command === 'present_reader')),
+  workerMode: (mode: typeof workerMode) => {
+    workerMode = mode;
+  },
+  activeWorkers: () => activeWorkers.size,
   settingsCalls: () =>
     structuredClone(
       calls.filter(
@@ -189,7 +277,11 @@ const fixture = {
       | 'settings'
       | 'zoom-in'
       | 'zoom-out'
-      | 'zoom-reset',
+      | 'zoom-reset'
+      | 'status-bar'
+      | 'guide'
+      | 'information'
+      | 'about',
   ) => emit('menu_action', action),
   state: () => controller.getState(),
   unmount,
@@ -198,6 +290,7 @@ const fixture = {
     for (const resolve of pending.values())
       resolve({ error: { code: 'stale', message: 'Browser fixture closed' } });
     pending.clear();
+    for (const worker of activeWorkers) worker.terminate();
     clearMocks();
   },
 };

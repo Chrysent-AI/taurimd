@@ -15,6 +15,7 @@ export interface SettingsV1 {
   pageZoom: number;
   fitDiagrams: boolean;
   sidebarDefault: boolean;
+  statusVisible: boolean;
 }
 export const defaults: SettingsV1 = {
   mode: 'system',
@@ -23,6 +24,7 @@ export const defaults: SettingsV1 = {
   pageZoom: 100,
   fitDiagrams: true,
   sidebarDefault: true,
+  statusVisible: true,
 };
 export interface SettingsRecord {
   version: 1;

@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -13,6 +14,10 @@ import { MetadataCard } from './reader/MetadataCard';
 import type { Rendered } from './types';
 import { SettingsController } from './settings/model';
 import { SettingsDialog, SettingsFeedback } from './settings/SettingsDialog';
+import { TemporaryDialog } from './TemporaryDialog';
+import { Guide } from './Guide';
+import { syncMenu } from './presentation';
+import { version } from '../package.json';
 export function App({ controller }: { controller: ReaderController }) {
   const state = useSyncExternalStore(controller.subscribe, controller.getState);
   const readingHTML = useMemo(
@@ -27,11 +32,21 @@ export function App({ controller }: { controller: ReaderController }) {
     settingsController.getState,
   );
   const settings = preferenceState.settings;
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const modalOpen = useRef(false);
-  useEffect(() => {
-    modalOpen.current = settingsOpen;
-  }, [settingsOpen]);
+  type Surface = 'settings' | 'guide' | 'information' | 'about';
+  const [surface, setSurface] = useState<Surface | null>(null);
+  const modalOpen = useRef<Surface | null>(null);
+  const [origin, setOrigin] = useState<HTMLElement | null>(null);
+  const main = useRef<HTMLElement>(null);
+  const statusBar = useRef<HTMLElement>(null);
+  const [composition, setComposition] = useState(false);
+  const [actionFeedback, setActionFeedback] = useState<{
+    message: string;
+    state: typeof state;
+  } | null>(null);
+  const commandMessage =
+    actionFeedback?.state === state ? actionFeedback.message : '';
+  const [presentationError, setPresentationError] = useState(false);
+  const [syncAttempt, setSyncAttempt] = useState(0);
   const [systemDark, setSystemDark] = useState(
     () => window.matchMedia('(prefers-color-scheme: dark)').matches,
   );
@@ -66,26 +81,122 @@ export function App({ controller }: { controller: ReaderController }) {
     message: string;
   } | null>(null);
   const busy = ['loading', 'parsing', 'committing'].includes(state.phase);
+  const focusReading = useCallback(() => {
+    (article.current ?? main.current)?.focus({ preventScroll: true });
+  }, []);
+  const closeSurface = () => {
+    modalOpen.current = null;
+    setSurface(null);
+    setActionFeedback(null);
+  };
+  const statusRef = useCallback(
+    (node: HTMLElement | null) => {
+      if (!node && statusBar.current?.contains(window.document.activeElement))
+        focusReading();
+      statusBar.current = node;
+    },
+    [focusReading],
+  );
+  const dispatch = useCallback(
+    (payload: string, invoker?: HTMLElement) => {
+      const phase = controller.state.phase;
+      const pending = ['loading', 'parsing', 'committing'].includes(phase);
+      const zoom =
+        payload === 'zoom-in' ||
+        payload === 'zoom-out' ||
+        payload === 'zoom-reset';
+      if (
+        composing.current ||
+        pending ||
+        (modalOpen.current && !(zoom && modalOpen.current === 'settings'))
+      ) {
+        setActionFeedback({
+          message:
+            'Command unavailable during composition, pending reading or an open dialog. Try again after finishing it.',
+          state: controller.state,
+        });
+        return;
+      }
+      setActionFeedback(null);
+      if (zoom) {
+        settingsController.zoom(payload);
+      } else if (payload === 'status-bar') {
+        if (statusBar.current?.contains(window.document.activeElement))
+          focusReading();
+        settingsController.change({
+          statusVisible: !settingsController.getState().settings.statusVisible,
+        });
+      } else if (
+        payload === 'settings' ||
+        payload === 'guide' ||
+        payload === 'information' ||
+        payload === 'about'
+      ) {
+        if (payload === 'information' && !controller.state.displayed) {
+          setActionFeedback({
+            message:
+              'Document Information is unavailable until a document is open.',
+            state: controller.state,
+          });
+          return;
+        }
+        const active = invoker ?? window.document.activeElement;
+        setOrigin(
+          active instanceof HTMLElement && active !== window.document.body
+            ? active
+            : null,
+        );
+        modalOpen.current = payload;
+        setSurface(payload);
+      } else if (payload === 'open' || payload === 'reload') {
+        if (payload === 'reload' && !controller.state.displayed) {
+          setActionFeedback({
+            message: 'Reload is unavailable until a document is open.',
+            state: controller.state,
+          });
+          return;
+        }
+        void controller.run(payload);
+      }
+    },
+    [controller, settingsController, focusReading],
+  );
+  useEffect(() => {
+    let disposed = false;
+    void syncMenu({
+      statusVisible: settings.statusVisible,
+      busy,
+      modal:
+        surface === null
+          ? 'none'
+          : surface === 'settings'
+            ? 'settings'
+            : 'other',
+      composing: composition,
+      pageZoom: settings.pageZoom,
+    })
+      .then(() => {
+        if (!disposed) setPresentationError(false);
+      })
+      .catch(() => {
+        if (!disposed) setPresentationError(true);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [
+    settings.statusVisible,
+    settings.pageZoom,
+    busy,
+    surface,
+    composition,
+    syncAttempt,
+  ]);
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void listen<string>('menu_action', ({ payload }) => {
-      if (composing.current) return;
-      if (payload === 'settings') {
-        setSettingsOpen(true);
-        return;
-      }
-      if (
-        payload === 'zoom-in' ||
-        payload === 'zoom-out' ||
-        payload === 'zoom-reset'
-      ) {
-        settingsController.zoom(payload);
-        return;
-      }
-      if (modalOpen.current || controller.state.phase === 'loading') return;
-      if (payload === 'open' || payload === 'reload')
-        void controller.run(payload);
+      dispatch(payload);
     })
       .then((stop) => {
         if (disposed) stop();
@@ -94,14 +205,14 @@ export function App({ controller }: { controller: ReaderController }) {
       .catch(() => {
         if (!disposed)
           setMenuError(
-            'Native menu events are unavailable. Use the visible reader and Settings controls.',
+            'Menu commands unavailable. Use these recovery controls.',
           );
       });
     return () => {
       disposed = true;
       unlisten?.();
     };
-  }, [controller, settingsController]);
+  }, [dispatch]);
   useEffect(() => {
     const id = state.displayed?.snapshot.documentId;
     if (id !== undefined && id !== lastDocument.current) {
@@ -162,7 +273,8 @@ export function App({ controller }: { controller: ReaderController }) {
           event.isTrusted &&
           !composing.current &&
           controller.state.displayed === document &&
-          controller.state.phase !== 'committing'
+          controller.state.phase !== 'committing' &&
+          !modalOpen.current
         ) {
           setLinkFeedback(null);
           void controller.activate(document, action.href);
@@ -201,40 +313,34 @@ export function App({ controller }: { controller: ReaderController }) {
       className="shell"
       onCompositionStartCapture={() => {
         composing.current = true;
+        setComposition(true);
       }}
       onCompositionEndCapture={() => {
         composing.current = false;
+        setComposition(false);
       }}
     >
-      <header>
-        <h1 className="brand">MDViewerRSX</h1>
-        <div className="commands">
-          <button
-            disabled={state.phase === 'loading' || state.phase === 'committing'}
-            onClick={() => {
-              void controller.run('open');
-            }}
-          >
-            Open File…
-          </button>
-          <button disabled aria-describedby="folder-help">
-            Open Folder…
-          </button>
-          <button
-            disabled={!document || busy}
-            onClick={() => {
-              void controller.run('reload');
-            }}
-          >
-            Reload
-          </button>
-          <button
-            onClick={() => {
-              setSettingsOpen(true);
-            }}
-          >
-            Settings…
-          </button>
+      <section className="sr-only" aria-label="Reader status">
+        <p role="status">
+          {(!surface && commandMessage) ||
+            (state.phase === 'error' ||
+            (state.phase === 'empty' && !state.message.includes('cancel'))
+              ? ''
+              : state.message)}
+        </p>
+      </section>
+      {(busy ||
+        state.phase === 'error' ||
+        menuError ||
+        presentationError ||
+        preferenceState.status === 'error' ||
+        preferenceState.notice) && (
+        <aside className="recovery" aria-label="Reader recovery">
+          {(busy || state.phase === 'error') && (
+            <p role={state.phase === 'error' ? 'alert' : undefined}>
+              {state.message}
+            </p>
+          )}
           {busy && state.phase !== 'committing' && (
             <button
               onClick={() => {
@@ -244,74 +350,138 @@ export function App({ controller }: { controller: ReaderController }) {
               Cancel
             </button>
           )}
-        </div>
-        <p id="folder-help" className="hint">
-          Folder browsing is not available in this version. Open individual
-          files instead.
-        </p>
-        <div className="identity" aria-label="Displayed document">
-          <strong>{document?.snapshot.name ?? 'No document open'}</strong>
-          {document && (
+          {(menuError || state.phase === 'error') && (
             <>
-              <span>{document.snapshot.location}</span>
-              <span>
-                {document.snapshot.format === 'text'
-                  ? 'Plain text — read only'
-                  : 'Markdown — read only'}
-                {state.stale ? ' · Stale: last loaded content' : ''}
-              </span>
+              {menuError && <p role="alert">{menuError}</p>}
+              <div className="commands">
+                <button
+                  disabled={busy || surface !== null}
+                  onClick={() => {
+                    dispatch('open');
+                  }}
+                >
+                  Open File…
+                </button>
+                {document && (
+                  <button
+                    disabled={busy || surface !== null}
+                    onClick={() => {
+                      dispatch('reload');
+                    }}
+                  >
+                    Reload
+                  </button>
+                )}
+                {menuError && (
+                  <button
+                    disabled={busy || surface !== null}
+                    onClick={(event) => {
+                      dispatch('settings', event.currentTarget);
+                    }}
+                  >
+                    Settings…
+                  </button>
+                )}
+              </div>
             </>
           )}
-        </div>
-      </header>
-      <section className="feedback" aria-label="Reader status">
-        <p role={state.phase === 'error' ? 'alert' : 'status'}>
-          {state.message}
-        </p>
-        {menuError && <p>{menuError}</p>}
-      </section>
-      <SettingsFeedback
-        status={preferenceState.status}
-        notice={preferenceState.notice}
-        retry={settingsController.retry}
-      />
-      <SettingsDialog
-        open={settingsOpen}
-        close={() => {
-          setSettingsOpen(false);
-        }}
-        controller={settingsController}
-        settings={settings}
-        slot={slot}
-        composing={composing}
-      >
-        <SettingsFeedback
-          status={preferenceState.status}
-          notice={preferenceState.notice}
-          retry={settingsController.retry}
-        />
-      </SettingsDialog>
-      <main aria-busy={busy}>
+          {(preferenceState.status === 'error' || preferenceState.notice) && (
+            <SettingsFeedback
+              recoveryOnly
+              status={preferenceState.status}
+              notice={preferenceState.notice}
+              retry={settingsController.retry}
+            />
+          )}
+          {presentationError && (
+            <p role="alert">
+              Menu presentation could not be synchronized; applied preferences
+              remain in effect.{' '}
+              <button
+                onClick={() => {
+                  setSyncAttempt((value) => value + 1);
+                }}
+              >
+                Retry menu synchronization
+              </button>
+            </p>
+          )}
+        </aside>
+      )}
+      {surface && (
+        <TemporaryDialog
+          title={
+            surface === 'settings'
+              ? 'Settings'
+              : surface === 'guide'
+                ? 'User Guide'
+                : surface === 'information'
+                  ? 'Document Information'
+                  : 'About MDViewerRSX'
+          }
+          close={closeSurface}
+          composing={composing}
+          origin={origin}
+          fallback={focusReading}
+          initialControl={surface === 'settings'}
+        >
+          {commandMessage && <p role="status">{commandMessage}</p>}
+          {surface === 'settings' ? (
+            <SettingsDialog
+              controller={settingsController}
+              settings={settings}
+              slot={slot}
+            >
+              <SettingsFeedback
+                status={preferenceState.status}
+                notice={preferenceState.notice}
+                retry={settingsController.retry}
+              />
+            </SettingsDialog>
+          ) : surface === 'guide' ? (
+            <Guide />
+          ) : surface === 'information' && document ? (
+            <dl className="document-information">
+              <dt>Name</dt>
+              <dd>{document.snapshot.name}</dd>
+              <dt>Location</dt>
+              <dd>{document.snapshot.location}</dd>
+              <dt>Type</dt>
+              <dd>
+                {document.snapshot.format === 'text'
+                  ? 'Plain text'
+                  : 'Markdown'}
+              </dd>
+              <dt>Access</dt>
+              <dd>Read only</dd>
+              <dt>Content</dt>
+              <dd>
+                {state.stale
+                  ? 'Stale: last loaded content'
+                  : 'Last loaded content'}
+                {document.snapshot.source.length === 0 ? ' · Empty file' : ''}
+              </dd>
+            </dl>
+          ) : (
+            <>
+              <p>MDViewerRSX {version}</p>
+              <p>Copyright © 2026 Chrysent. MIT licensed.</p>
+              <p>
+                Dependency distribution notices and native platform
+                qualification remain separate checks.
+              </p>
+            </>
+          )}
+        </TemporaryDialog>
+      )}
+      <main ref={main} tabIndex={-1} aria-busy={busy}>
         {!document ? (
-          <section className="empty">
-            <h2>Read local documents, without changing them.</h2>
-            <p>
-              Choose Markdown (.md, .markdown, .mdown, .mkd, .mkdown), .txt or
-              .log. Files must be UTF-8.
-            </p>
-            <p>
-              Use File → Open File (⌘O on macOS, Ctrl+O elsewhere). Reload is ⌘R
-              / Ctrl+R.
-            </p>
-          </section>
+          <p className="empty hint">
+            Open a document with File → Open File… (
+            {/Mac/.test(navigator.platform) ? '⌘O' : 'Ctrl+O'}).
+          </p>
         ) : (
           <>
-            {document.snapshot.format === 'markdown' && (
-              <p className="reading-note">
-                Local media is scoped to this document’s directory. Diagrams
-                remain literal code until diagram rendering is available.
-              </p>
-            )}
             <p
               className="link-feedback"
               aria-live="polite"
@@ -342,6 +512,34 @@ export function App({ controller }: { controller: ReaderController }) {
           </>
         )}
       </main>
+      {settings.statusVisible && (
+        <footer
+          ref={statusRef}
+          className="status-bar"
+          aria-label="Displayed document"
+        >
+          <strong>{document?.snapshot.name ?? 'No document open'}</strong>
+          <span>
+            {document
+              ? `${document.snapshot.format === 'text' ? 'Plain text' : 'Markdown'} · Read only${document.snapshot.source.length === 0 ? ' · Empty file' : ''}${state.stale ? ' · Stale: last loaded content' : ''}`
+              : 'Ready'}
+          </span>
+          {busy && <span>{state.message}</span>}
+          {preferenceState.status === 'error' && (
+            <span>Preferences not saved</span>
+          )}
+          {document && (
+            <button
+              disabled={busy || surface !== null}
+              onClick={(event) => {
+                dispatch('information', event.currentTarget);
+              }}
+            >
+              Document Information…
+            </button>
+          )}
+        </footer>
+      )}
     </div>
   );
 }

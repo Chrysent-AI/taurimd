@@ -13,6 +13,7 @@
     "allow-get-settings",
     "allow-update-settings",
     "allow-resolve-media",
-    "allow-activate-link"
+    "allow-activate-link",
+    "allow-present-reader"
   ]
 }

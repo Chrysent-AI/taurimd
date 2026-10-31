@@ -30,16 +30,33 @@ const record = (
   notice: null,
 });
 async function settings(page: Page) {
-  await page.getByRole('button', { name: 'Settings…' }).click();
-  return page.getByRole('dialog', { name: 'Settings', exact: true });
+  await page.evaluate(() => window.readerFixture.menu('settings'));
+  const dialog = page.getByRole('dialog', { name: 'Settings', exact: true });
+  await expect(dialog).toBeVisible();
+  return dialog;
 }
 async function saved(page: Page) {
-  await expect(
-    page
-      .getByRole('region', { name: 'Preferences status' })
-      .filter({ visible: true })
-      .first(),
-  ).toContainText('Preferences saved.');
+  const dialog = page.getByRole('dialog', { name: 'Settings', exact: true });
+  if (await dialog.isVisible()) {
+    await expect(
+      dialog.getByRole('region', { name: 'Preferences status' }),
+    ).toContainText('Preferences saved.');
+  } else {
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            window.readerFixture
+              .pending()
+              .filter((name) => name.includes('ack') || name.includes('save'))
+              .length,
+        ),
+      )
+      .toBe(0);
+    await expect(
+      page.getByRole('region', { name: 'Preferences status' }),
+    ).toHaveCount(0);
+  }
 }
 const screenshotting = new WeakSet<Page>();
 const webkitScreenshotDiagnostic =
@@ -77,6 +94,9 @@ async function capture(page: Page, info: TestInfo, name: string) {
     screenshotToolDiagnostics: diagnostics,
     name,
     viewport: page.viewportSize(),
+    palette: await page.locator('html').getAttribute('data-palette'),
+    zoom: await page.locator('article').getAttribute('data-zoom'),
+    nativeBackendAndMenus: 'Explicit browser doubles; not native qualification',
     dpr: await page.evaluate(() => window.devicePixelRatio),
     raster: { width: image.readUInt32BE(16), height: image.readUInt32BE(20) },
   };
@@ -115,7 +135,7 @@ async function assertRoles(page: Page) {
     };
     return [
       'body',
-      'header',
+      '.status-bar',
       '.hint',
       'article',
       'article pre',
@@ -145,9 +165,36 @@ async function assertRoles(page: Page) {
     .getByLabel('Appearance', { exact: true })
     .evaluate((element) => ({
       outline: getComputedStyle(element).outlineColor,
+      width: Number.parseFloat(getComputedStyle(element).outlineWidth),
+      offset: Number.parseFloat(getComputedStyle(element).outlineOffset),
+      style: getComputedStyle(element).outlineStyle,
+      box: element.getBoundingClientRect().toJSON() as {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      },
+      dialog: element.closest('dialog')?.getBoundingClientRect().toJSON() as {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      },
       background: getComputedStyle(element).backgroundColor,
     }));
   expect(contrast(focus.outline, focus.background)).toBeGreaterThanOrEqual(3);
+  expect(focus.width).toBeGreaterThanOrEqual(3);
+  expect(focus.offset).toBeGreaterThanOrEqual(3);
+  expect(focus.style).toBe('solid');
+  expect(focus.box.x - focus.width - focus.offset).toBeGreaterThan(
+    focus.dialog.x,
+  );
+  expect(focus.box.y - focus.width - focus.offset).toBeGreaterThan(
+    focus.dialog.y,
+  );
+  expect(
+    focus.box.x + focus.box.width + focus.width + focus.offset,
+  ).toBeLessThan(focus.dialog.x + focus.dialog.width);
   return {
     roles: roles.map((role) => ({
       ...role,
@@ -181,7 +228,7 @@ test.beforeEach(async ({ page }) => {
       },
     });
   }, rich);
-  await page.getByRole('button', { name: 'Open File…' }).click();
+  await page.evaluate(() => window.readerFixture.menu('open'));
   await expect(
     page.getByRole('article').getByRole('heading', { name: 'End of document' }),
   ).toBeAttached();
@@ -261,7 +308,24 @@ test('both complete seven-choice slots produce real legible palettes, opposite t
       await expect(dialog).toContainText(
         `Currently using ${mode === 'light' ? 'Light' : 'Dark'} palette`,
       );
+      // Exercise a real boundary-disabled zoom control now that the unavailable
+      // folder advertisement is no longer part of the reader shell.
+      await page.evaluate(() => {
+        const value = window.readerFixture.settings();
+        return window.readerFixture.settingsEvent({
+          ...value,
+          revision: value.revision + 1,
+          settings: { ...value.settings, pageZoom: 50 },
+        });
+      });
+      await dialog.getByRole('button', { name: 'Close', exact: true }).focus();
+      await page.keyboard.press('Tab');
+      await expect(
+        dialog.getByLabel('Appearance', { exact: true }),
+      ).toBeFocused();
       const computed = await assertRoles(page);
+      await dialog.getByRole('button', { name: 'Reset to 100%' }).click();
+      await saved(page);
       const evidence = process.env.MDVIEWERRSX_APPEARANCE_EVIDENCE;
       if (evidence)
         writeFileSync(
@@ -271,9 +335,37 @@ test('both complete seven-choice slots produce real legible palettes, opposite t
       if (mode === 'light' && id === 'nord')
         await capture(page, info, 'settings-focused-nord-1280x800');
       await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+      await page.evaluate(() => window.readerFixture.menu('guide'));
+      const guide = page.getByRole('dialog', { name: 'User Guide' });
+      await expect(
+        guide.getByRole('link', { name: 'Opening and recovery', exact: true }),
+      ).toBeVisible();
+      const guideRoles = await guide
+        .locator('h2, .guide p, .guide a, .guide pre, button')
+        .evaluateAll((nodes) =>
+          nodes.map((node) => {
+            const background = (element: Element): string => {
+              const color = getComputedStyle(element).backgroundColor;
+              return color === 'rgba(0, 0, 0, 0)' && element.parentElement
+                ? background(element.parentElement)
+                : color;
+            };
+            return {
+              text: getComputedStyle(node).color,
+              background: background(node),
+            };
+          }),
+        );
+      for (const role of guideRoles)
+        expect(contrast(role.text, role.background)).toBeGreaterThanOrEqual(
+          4.5,
+        );
+      if (mode === 'light' && id === 'nord')
+        await capture(page, info, 'guide-focused-nord-1280x800');
+      await guide.getByRole('button', { name: 'Close' }).click();
       if (mode === 'light') {
-        await page.evaluate(() => {
-          window.scrollTo(0, 0);
+        await page.getByRole('main').evaluate((node) => {
+          node.scrollTo(0, 0);
         });
         await capture(page, info, `${id}-100-1280x800`);
       }
@@ -333,11 +425,11 @@ test('System observes both slots, forced modes ignore OS changes, inactive edits
   );
   await saved(page);
   await dialog.getByRole('button', { name: 'Close', exact: true }).click();
-  await page.evaluate(() => {
-    window.scrollTo(0, 700);
+  await page.getByRole('main').evaluate((node) => {
+    node.scrollTo(0, 700);
   });
   const before = await page.evaluate(() => ({
-    y: window.scrollY,
+    y: document.querySelector('main')?.scrollTop,
     article: document.querySelector('article')?.textContent,
   }));
   const readingNode = await page.locator('article h1').elementHandle();
@@ -346,7 +438,9 @@ test('System observes both slots, forced modes ignore OS changes, inactive edits
     .getByLabel('Dark palette', { exact: true })
     .selectOption('githubDark');
   await saved(page);
-  expect(await page.evaluate(() => window.scrollY)).toBe(before.y);
+  expect(await page.getByRole('main').evaluate((node) => node.scrollTop)).toBe(
+    before.y,
+  );
   await dialog.getByRole('button', { name: 'Close', exact: true }).click();
   expect(await readingNode?.evaluate((node) => node.isConnected)).toBe(true);
   await readingNode?.dispose();
@@ -360,7 +454,9 @@ test('System observes both slots, forced modes ignore OS changes, inactive edits
       },
     }),
   );
-  expect(await page.evaluate(() => window.scrollY)).toBe(before.y);
+  expect(await page.getByRole('main').evaluate((node) => node.scrollTop)).toBe(
+    before.y,
+  );
   expect(await page.getByRole('article').textContent()).toBe(before.article);
   expect(await page.evaluate(() => window.readerFixture.parses())).toBe(1);
 });
@@ -528,9 +624,9 @@ test('stale native revisions and late replies preserve newer local intent and un
 test('real modal keyboard containment/restoration, IME guards and feature menu event routing', async ({
   page,
 }) => {
-  const opener = page.getByRole('button', { name: 'Settings…' });
+  const opener = page.getByRole('article');
   await opener.focus();
-  await page.keyboard.press('Enter');
+  await page.evaluate(() => window.readerFixture.menu('settings'));
   const dialog = page.getByRole('dialog');
   const appearance = dialog.getByLabel('Appearance', { exact: true });
   await expect(appearance).toBeFocused();
@@ -570,7 +666,7 @@ test('real modal keyboard containment/restoration, IME guards and feature menu e
 test('content-only 50–300 zoom has real reflow/scroll geometry while chrome and short modal stay usable', async ({
   page,
 }, info) => {
-  const open = page.getByRole('button', { name: 'Open File…' });
+  const open = page.getByRole('button', { name: 'Document Information…' });
   const chrome = await open.boundingBox();
   const article = page.locator('article');
   const initial = await article.boundingBox();
@@ -634,6 +730,25 @@ test('content-only 50–300 zoom has real reflow/scroll geometry while chrome an
             Number.parseFloat(getComputedStyle(row).fontSize),
         ),
     ).toBeLessThan(4);
+    await page.getByLabel('Displayed document').scrollIntoViewIfNeeded();
+    const placement = await page.evaluate(() => {
+      const main = document.querySelector('main')?.getBoundingClientRect();
+      const status = document
+        .querySelector('.status-bar')
+        ?.getBoundingClientRect();
+      return {
+        mainBottom: main?.bottom ?? 0,
+        statusTop: status?.top ?? 0,
+        statusBottom: status?.bottom ?? 0,
+        statusWidth: status?.width ?? 0,
+        height: innerHeight,
+        width: innerWidth,
+      };
+    });
+    expect(placement.statusTop).toBeGreaterThanOrEqual(placement.mainBottom);
+    expect(placement.statusBottom).toBeCloseTo(placement.height, 2);
+    expect(placement.statusWidth).toBeLessThanOrEqual(placement.width);
+    if (width === 640) await capture(page, info, 'status-bottom-300-640x800');
     await article
       .getByRole('heading', { name: 'End of document' })
       .scrollIntoViewIfNeeded();
@@ -641,11 +756,18 @@ test('content-only 50–300 zoom has real reflow/scroll geometry while chrome an
       article.getByRole('heading', { name: 'End of document' }),
     ).toBeInViewport();
   }
-  await page.evaluate(() => {
-    window.scrollTo(0, 0);
+  await page.getByRole('main').evaluate((node) => {
+    node.scrollTo(0, 0);
   });
   await capture(page, info, 'narrow-300-640x800');
   await page.setViewportSize({ width: 640, height: 360 });
+  await page.evaluate(() => window.readerFixture.menu('information'));
+  const information = page.getByRole('dialog', {
+    name: 'Document Information',
+  });
+  await expect(information).toContainText('nested-folder/');
+  await capture(page, info, 'information-narrow-640x360');
+  await information.getByRole('button', { name: 'Close' }).click();
   const short = await settings(page);
   await short.getByRole('button', { name: 'Close', exact: true }).focus();
   await expect(

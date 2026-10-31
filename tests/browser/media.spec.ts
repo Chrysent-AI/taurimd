@@ -57,7 +57,7 @@ async function open(page: Page, text: string, id = 1) {
     },
     { text, id },
   );
-  await page.getByRole('button', { name: 'Open File…' }).click();
+  await page.evaluate(() => window.readerFixture.menu('open'));
   await expect(
     page.getByRole('region', { name: 'Reader status' }),
   ).toContainText('Opened media.md.');
@@ -453,7 +453,7 @@ test('trusted activation only, native acknowledgement, linked worker/commit frag
       error: { code: 'notFound', message: 'Failed replacement' },
     });
   });
-  await page.getByRole('button', { name: 'Open File…' }).click();
+  await page.evaluate(() => window.readerFixture.menu('open'));
   const stale = await page.getByRole('alert').textContent();
   await page.evaluate(() => {
     window.readerFixture.enqueue('activate_link', {
@@ -574,7 +574,7 @@ test('last-good media survives pending/fail/cancel; same text/new context replac
   await page.evaluate(() => {
     window.readerFixture.enqueue('select_document', { hold: 'pending-open' });
   });
-  await page.getByRole('button', { name: 'Open File…' }).click();
+  await page.evaluate(() => window.readerFixture.menu('open'));
   expect(
     await old?.evaluate(
       (node) => node === document.querySelector('article audio'),
@@ -594,7 +594,7 @@ test('last-good media survives pending/fail/cancel; same text/new context replac
       error: { code: 'notFound', message: 'Missing replacement' },
     });
   });
-  await page.getByRole('button', { name: 'Reload', exact: true }).click();
+  await page.evaluate(() => window.readerFixture.menu('reload'));
   await expect(page.getByRole('alert')).toContainText('Reload failed');
   expect(
     await old?.evaluate(
@@ -636,6 +636,148 @@ test('last-good media survives pending/fail/cancel; same text/new context replac
   );
   expect(await late?.evaluate((node) => node.hasAttribute('src'))).toBe(false);
   await expect(page.locator('article img,audio,video')).toHaveCount(0);
+});
+
+test('scrolled playing media, article, selection and disclosures survive status/Guide round trips without file authority or reparse', async ({
+  page,
+}, info) => {
+  await queueMedia(page);
+  await open(
+    page,
+    `${'A long reading paragraph before the media. '.repeat(160)}\n\n${source}\n\n${'Reading continues after the media. '.repeat(160)}`,
+  );
+  const article = page.getByRole('article');
+  const audio = page.locator('article audio');
+  await expect
+    .poll(() => audio.evaluate((node: HTMLAudioElement) => node.readyState))
+    .toBeGreaterThan(0);
+  await page.getByText('Reading disclosure', { exact: true }).click();
+  await article.focus();
+  await page.evaluate(() => {
+    const text = document.querySelector('article details')?.lastChild;
+    if (!text) throw new Error('Missing disclosure');
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    getSelection()?.removeAllRanges();
+    getSelection()?.addRange(range);
+    document.querySelector('main')?.scrollTo(0, 700);
+  });
+  const originalArticle = await article.elementHandle();
+  const originalAudio = await audio.elementHandle();
+  const before = await page.evaluate(() => ({
+    y: document.querySelector('main')?.scrollTop,
+    selection: getSelection()?.toString(),
+    calls: window.readerFixture.calls(),
+    parses: window.readerFixture.parses(),
+  }));
+  const announcements = await page
+    .getByRole('status')
+    .evaluateHandle((node) => {
+      const entries: string[] = [];
+      const observer = new MutationObserver(() => {
+        entries.push(node.textContent);
+      });
+      observer.observe(node, {
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+      return { entries, observer };
+    });
+  await audio.evaluate(async (node: HTMLAudioElement) => {
+    node.loop = true;
+    node.currentTime = 0.1;
+    await node.play();
+  });
+  await expect
+    .poll(() =>
+      audio.evaluate(
+        (node: HTMLAudioElement) => !node.paused && node.currentTime > 0.1,
+      ),
+    )
+    .toBe(true);
+  const playing = await audio.evaluate(
+    (node: HTMLAudioElement) => node.currentTime,
+  );
+  await page.evaluate(() => window.readerFixture.menu('status-bar'));
+  await expect(page.getByLabel('Displayed document')).toHaveCount(0);
+  await page.evaluate(() => window.readerFixture.menu('guide'));
+  const guide = page.getByRole('dialog', { name: 'User Guide' });
+  await expect(
+    guide.getByRole('link', { name: 'Reading safely', exact: true }),
+  ).toBeVisible();
+  await guide
+    .getByRole('link', { name: 'Reading safely', exact: true })
+    .click();
+  await expect(
+    guide.getByRole('heading', { name: 'Reading safely', exact: true }),
+  ).toBeFocused();
+  await expect
+    .poll(() =>
+      audio.evaluate(
+        (node: HTMLAudioElement, previous) =>
+          !node.paused && node.currentTime !== previous,
+        playing,
+      ),
+    )
+    .toBe(true);
+  const escape = guide.getByRole('link', {
+    name: 'Back to User Guide',
+    exact: true,
+  });
+  const underlying = await article.locator('h1').getAttribute('id');
+  await escape.evaluate((node, id) => {
+    node.setAttribute('href', `#${id ?? ''}`);
+  }, underlying);
+  await escape.click();
+  expect(
+    await guide.evaluate((node) => node.contains(document.activeElement)),
+  ).toBe(true);
+  await guide.getByRole('button', { name: 'Close' }).click();
+  await expect(article).toBeFocused();
+  expect(await page.getByRole('main').evaluate((node) => node.scrollTop)).toBe(
+    before.y,
+  );
+  expect(await page.evaluate(() => getSelection()?.toString())).toBe(
+    before.selection,
+  );
+  await expect(page.locator('article details')).toHaveAttribute('open', '');
+  expect(
+    await originalArticle?.evaluate(
+      (node) => node === document.querySelector('article'),
+    ),
+  ).toBe(true);
+  expect(
+    await originalAudio?.evaluate(
+      (node) => node === document.querySelector('article audio'),
+    ),
+  ).toBe(true);
+  expect(await audio.evaluate((node: HTMLAudioElement) => node.paused)).toBe(
+    false,
+  );
+  await page.evaluate(() => window.readerFixture.menu('status-bar'));
+  expect(await page.evaluate(() => window.readerFixture.calls())).toEqual(
+    before.calls,
+  );
+  expect(await page.evaluate(() => window.readerFixture.parses())).toBe(
+    before.parses,
+  );
+  expect(
+    await announcements.evaluate(({ entries, observer }) => {
+      observer.disconnect();
+      return entries;
+    }),
+  ).toEqual([]);
+  await announcements.dispose();
+  await capture(page, info, 'playing-media-after-guide', {
+    palette: 'githubLight',
+    viewport: page.viewportSize(),
+    zoom: 100,
+    noNewFileAuthority: true,
+    browserOnly: true,
+  });
+  await originalArticle?.dispose();
+  await originalAudio?.dispose();
 });
 
 test('hostile URL/style/action surfaces never connect fetch candidates or invoke native commands automatically', async ({

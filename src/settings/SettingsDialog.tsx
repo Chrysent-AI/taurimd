@@ -1,99 +1,58 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { palettes, type SettingsController, type SettingsV1 } from './model';
 
 export function SettingsFeedback({
   status,
   notice,
   retry,
+  recoveryOnly = false,
 }: {
   status: 'loading' | 'saving' | 'saved' | 'error';
   notice: string | null;
   retry: () => void;
+  recoveryOnly?: boolean;
 }) {
   return (
     <section className="preferences-feedback" aria-label="Preferences status">
-      <p aria-live="polite">
-        {status === 'error'
-          ? 'Applied for now; could not save or synchronize preferences.'
-          : status === 'saving'
-            ? 'Saving preferences…'
-            : status === 'loading'
-              ? 'Loading preferences…'
-              : 'Preferences saved.'}
-        {status === 'error' && (
-          <>
-            {' '}
-            <button onClick={retry}>Retry preferences</button>
-          </>
-        )}
-      </p>
-      {notice && <p className="warning">{notice}</p>}
+      {(!recoveryOnly || status === 'error') && (
+        <p aria-live="polite">
+          {status === 'error'
+            ? 'Applied for now; could not save or synchronize preferences.'
+            : status === 'saving'
+              ? 'Saving preferences…'
+              : status === 'loading'
+                ? 'Loading preferences…'
+                : 'Preferences saved.'}
+          {status === 'error' && (
+            <>
+              {' '}
+              <button onClick={retry}>Retry preferences</button>
+            </>
+          )}
+        </p>
+      )}
+      {notice && (
+        <p role="alert" className="warning">
+          {notice}
+        </p>
+      )}
     </section>
   );
 }
 export function SettingsDialog({
-  open,
-  close,
   controller,
   settings,
   slot,
-  composing,
   children,
 }: {
-  open: boolean;
-  close: () => void;
   controller: SettingsController;
   settings: SettingsV1;
   slot: 'light' | 'dark';
-  composing: { current: boolean };
   children: ReactNode;
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const origin = document.activeElement;
-    const element = dialog.current;
-    element?.showModal();
-    return () => {
-      element?.close();
-      if (origin instanceof HTMLElement && origin.isConnected)
-        origin.focus({ preventScroll: true });
-    };
-  }, [open]);
   const palette = settings[slot === 'light' ? 'lightPalette' : 'darkPalette'];
   return (
-    <dialog
-      ref={dialog}
-      aria-labelledby="settings-title"
-      onCancel={(event) => {
-        event.preventDefault();
-        if (!composing.current) close();
-      }}
-      onKeyDown={(event) => {
-        if (composing.current || event.nativeEvent.isComposing) {
-          if (event.key === 'Escape') event.preventDefault();
-          return;
-        }
-        if (event.key === 'Tab') {
-          const controls = dialog.current?.querySelectorAll<HTMLElement>(
-            'button:not(:disabled), select, input',
-          );
-          const first = controls?.[0];
-          const last = controls?.[controls.length - 1];
-          if (event.shiftKey && window.document.activeElement === first) {
-            event.preventDefault();
-            last?.focus();
-          } else if (
-            !event.shiftKey &&
-            window.document.activeElement === last
-          ) {
-            event.preventDefault();
-            first?.focus();
-          }
-        }
-      }}
-    >
-      <h2 id="settings-title">Settings</h2>
+    <>
       <p className="hint">
         Changes apply immediately. Closing does not undo them.
       </p>
@@ -196,7 +155,6 @@ export function SettingsDialog({
         features are available.
       </p>
       {children}
-      <button onClick={close}>Close</button>
-    </dialog>
+    </>
   );
 }

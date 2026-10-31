@@ -11,6 +11,7 @@ fn main() {
             "update_settings",
             "resolve_media",
             "activate_link",
+            "present_reader",
         ]),
     ))
     .expect("native build configuration failed");

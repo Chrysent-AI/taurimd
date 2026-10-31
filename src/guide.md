@@ -1,0 +1,44 @@
+# User Guide
+
+[Opening and recovery](#opening-and-recovery) · [Appearance and status](#appearance-and-status) · [Reading safely](#reading-safely) · [Current limits](#current-limits)
+
+## Opening and recovery
+
+Use **File → Open File…** (⌘O on macOS, Ctrl+O on Windows/Linux) to select a local document. Supported Markdown extensions are `.md`, `.markdown`, `.mdown`, `.mkd` and `.mkdown`, case-insensitively. `.txt` and `.log` display literally, not as Markdown. All files must be UTF-8. MDX and editing are not supported.
+
+**File → Reload** (⌘R / Ctrl+R) explicitly reads the displayed file again. Files do not reload automatically. A failed Open or Reload keeps the last good content, identifies the attempted target and marks the displayed content stale. Choose another file or retry Reload after correcting the problem. Opening an empty file is different from having no document.
+
+**Cancel** is available during supported pending reading and formatting work. It ignores late results without replacing the displayed file. It is not available during the final display commit and cannot interrupt a blocked browser engine. The native file chooser also has its own Cancel.
+
+Files are read only: reading, changing appearance and using this guide do not write to the source document or its directory. This guide is bundled with the application, not opened as a local file; closing it returns to the same reading context.
+
+## Appearance and status
+
+Open **Settings…** from the application menu on macOS or the Settings menu elsewhere (⌘, / Ctrl+,). Changes apply immediately; Close and Escape do not undo them. System appearance follows the OS. Both Light and Dark palette slots offer GitHub Light, GitHub Dark, Solarized Light, Solarized Dark, Dracula, Monokai and Nord, including opposite-toned combinations.
+
+**View** provides page zoom in, out and reset (⌘/Ctrl+=, ⌘/Ctrl+− and ⌘/Ctrl+0). Reading content scales from 50% to 300%, in steps of 10%; controls stay at their normal size. Fit diagrams and sidebar-default preferences are saved for those future features.
+
+**View → Show Status Bar** remembers whether the compact bottom summary is visible. It starts visible. Hiding it never hides errors, supported Cancel or preference recovery. **File → Document Information…** shows the displayed file's full selectable location, name, type, read-only and stale state even with status hidden.
+
+Preferences are saved in application configuration, never beside documents. If saving or synchronization fails, the choice remains applied for now; use **Retry preferences**. A fallback notice means valid stored fields were retained while invalid fields use defaults. A valid older record without the new status preference starts with status visible.
+
+## Reading safely
+
+Leading YAML frontmatter is shown as read-only metadata. Invalid metadata exposes an escaped diagnostic and raw fallback while the body remains readable. Expand raw details for deep or lengthy values. Code fences are highlighted locally, task boxes are disabled, and heading/footnote links navigate within the displayed document.
+
+```text
+A .txt or .log file shows Markdown and HTML literally.
+No document scripts or embedded programs are executed.
+```
+
+Local images, audio and video are scoped to the active file's canonical directory. Native player controls and codec support depend on the platform engine. Missing, blocked or undecodable resources show local feedback. Automatic remote resources, document CSS, caption tracks and srcset are not enabled. External SVG stays image-only.
+
+Only a real pointer or keyboard activation can send permitted HTTP, HTTPS, mail or telephone links to the OS handler. That acknowledgement does not prove the external page loaded. Supported local-document links stay inside the active file's canonical directory, including symlink checks; currently they replace this reader. A denied link neither grants another directory nor automatically opens a chooser.
+
+## Current limits
+
+Folder browsing, sidebar/navigation/outlines, quick open, document Find, Mermaid rendering, diagram export, multiple document windows and OS file associations are not implemented yet. Mermaid fences remain literal code. These features are planned, not supplied by the preferences or this guide.
+
+The intended targets are macOS 14+ Apple Silicon, Windows 11 x64 and Ubuntu 24.04 x86_64 with X11/Wayland. Native menus, IME, assistive technology, restart persistence, real media/CSP transport and platform packaging still require recorded testing on those targets. Browser fixtures and compilation are not native qualification. No signing, public release or complete dependency-notice clearance is claimed.
+
+[Back to User Guide](#user-guide)
