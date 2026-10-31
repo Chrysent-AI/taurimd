@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { palettes } from '../../src/settings/model';
 import type { Snapshot } from '../../src/types';
@@ -213,6 +213,93 @@ test('real offline engine renders ordered flow sequence class duplicates and loc
       path: info.outputPath(`ordinary-diagram-${String(ordinal + 1)}.png`),
     });
   }
+});
+test('real example files render twelve offline varieties and recover after the intentional error', async ({
+  page,
+}, info) => {
+  const requests: string[] = [];
+  page.on('request', (request) => {
+    if (new URL(request.url()).hostname !== '127.0.0.1')
+      requests.push(request.url());
+  });
+  const gallery = readFileSync(
+    new URL('../../examples/mermaid.md', import.meta.url),
+    'utf8',
+  );
+  await open(page, gallery);
+  await settle(page, 12);
+  await expect(page.locator('.diagram')).toHaveCount(12);
+  await expect(page.locator('.diagram-scene > svg')).toContainText([
+    'Read offline',
+    'Local snapshot exchange',
+    'LocalReader',
+    'Reloading',
+    'COLLECTION',
+    'Offline review schedule',
+    'Document mix',
+    'Quiet reading session',
+    'combined',
+    'Reading checklist',
+    'Handbook revisions',
+    'Review priorities',
+  ]);
+  await expect(page.locator('.diagram [role="status"]')).toHaveText(
+    Array<string>(12).fill(''),
+  );
+  expect(
+    await page.locator('.diagram-scene > svg').evaluateAll((svgs) =>
+      svgs.every((svg) => {
+        const box = (svg as SVGSVGElement).viewBox.baseVal;
+        const bounds = svg.getBoundingClientRect();
+        return (
+          [
+            box.x,
+            box.y,
+            box.width,
+            box.height,
+            bounds.width,
+            bounds.height,
+          ].every(Number.isFinite) &&
+          box.width > 0 &&
+          box.height > 0 &&
+          bounds.width > 0 &&
+          bounds.height > 0
+        );
+      }),
+    ),
+  ).toBe(true);
+  await expect(page.locator('article pre').last()).toContainText(
+    'Not rendered',
+  );
+  await record(page, info, 'example-gallery', gallery);
+  const errors = readFileSync(
+    new URL('../../examples/mermaid-errors.md', import.meta.url),
+    'utf8',
+  );
+  await open(page, errors, 2);
+  await settle(page, 2);
+  await expect(page.locator('.diagram')).toHaveCount(3);
+  await expect(page.locator('.diagram').nth(1)).toContainText(
+    'Diagram 2 could not render:',
+  );
+  await expect(page.locator('.diagram').nth(1).locator('svg')).toHaveCount(0);
+  await expect(page.locator('.diagram-scene > svg')).toContainText([
+    'Café & tea',
+    'Café & tea',
+  ]);
+  await page
+    .locator('.diagram')
+    .last()
+    .getByText('Original definition', { exact: true })
+    .click();
+  await expect(page.locator('.diagram').last().locator('pre')).toContainText(
+    'Café & tea',
+  );
+  await expect(
+    page.getByRole('heading', { name: 'Reading continues' }),
+  ).toBeVisible();
+  expect(requests).toEqual([]);
+  await record(page, info, 'example-local-error', errors);
 });
 test('strict built-in configuration resists diagram directives, never binds, and CSP blocks remote image delivery', async ({
   page,

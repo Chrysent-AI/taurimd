@@ -22,4 +22,8 @@ A small idea, clearly written.
 
 [An inactive example link](https://example.com)
 
-Images and links are currently blocked. Rich reading features are not yet implemented.
+Rich text, Mermaid diagrams, scoped local media and supported links are available.
+Remote images remain blocked; folder browsing/directory navigation and export
+are not yet implemented. See the [example index](README.md),
+[Mermaid gallery](mermaid.md) and
+[intentional failure and recovery](mermaid-errors.md).
