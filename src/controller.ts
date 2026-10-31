@@ -1,12 +1,15 @@
+import type { EntryIntent } from './navigation/types';
 import type { Reading } from './reader/parse';
 import type { NativeReader, ReaderState, Snapshot, Rendered } from './types';
 import type { ParseJob } from './reader/worker';
 export class ReaderController {
   state: ReaderState = {
+    requestId: 0,
     displayed: null,
     phase: 'empty',
     message: 'Open a local document to begin.',
     stale: false,
+    previewEpoch: 0,
   };
   private sequence = 0;
   private job: ParseJob | null = null;
@@ -44,7 +47,14 @@ export class ReaderController {
       return;
     await this.run('link', href);
   }
-  async run(action: 'open' | 'reload' | 'link', href = '') {
+  openEntry(intent: EntryIntent) {
+    return this.run('entry', '', intent);
+  }
+  async run(
+    action: 'open' | 'reload' | 'link' | 'entry',
+    href = '',
+    intent?: EntryIntent,
+  ) {
     // Do not interleave another action across the native/display commit boundary.
     if (
       this.state.phase === 'committing' ||
@@ -58,19 +68,25 @@ export class ReaderController {
     const before = this.state;
     let linkedDocument = false;
     this.publish({
+      requestId: request,
       phase: 'loading',
+      previewEpoch: (before.previewEpoch ?? 0) + (action === 'reload' ? 1 : 0),
       linkMessage: action === 'link' ? 'Opening link…' : '',
       message:
         action === 'link'
           ? before.message
-          : action === 'open'
-            ? 'Choosing and opening a document…'
-            : `Reloading ${previous?.snapshot.name ?? 'document'}…`,
+          : action === 'entry'
+            ? `Opening ${intent?.name ?? 'file'}…`
+            : action === 'open'
+              ? 'Choosing and opening a document…'
+              : `Reloading ${previous?.snapshot.name ?? 'document'}…`,
     });
     try {
       let snapshot: Snapshot;
       let fragment: string | null = null;
-      if (action === 'link') {
+      if (action === 'entry' && intent) {
+        snapshot = await this.bridge.openEntry(request, intent.binding);
+      } else if (action === 'link') {
         if (!previous) return;
         const result = await this.bridge.activate(
           request,
@@ -127,12 +143,27 @@ export class ReaderController {
         message: `Displaying ${snapshot.name}…`,
       });
       await this.bridge.commit(request);
+      const changed =
+        intent?.preview &&
+        (snapshot.contextId !== intent.preview.contextId ||
+          snapshot.source !== intent.preview.source);
       this.publish({
-        displayed: { ...reading, snapshot, html, fragment },
+        displayed: {
+          requestId: request,
+          ...reading,
+          snapshot,
+          html,
+          fragment,
+          focus: intent?.focus,
+          headingKey: changed ? undefined : intent?.key,
+          previewChanged: !!changed,
+        },
         phase: 'ready',
         stale: false,
         linkMessage: '',
-        message: `${action === 'reload' ? 'Reloaded' : 'Opened'} ${snapshot.name}${snapshot.source.length === 0 ? ' — empty file' : ''}.`,
+        message: changed
+          ? 'File changed; choose a heading again.'
+          : `${action === 'reload' ? 'Reloaded' : 'Opened'} ${snapshot.name}${snapshot.source.length === 0 ? ' — empty file' : ''}.`,
       });
     } catch (error) {
       if (request !== this.sequence) return;

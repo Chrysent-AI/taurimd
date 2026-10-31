@@ -22,7 +22,14 @@ export interface ParsedMarkdown {
   codeKeys: string[];
   diagrams: DiagramDefinition[];
 }
+export interface Heading {
+  level: 1 | 2;
+  label: string;
+  id: string;
+  key: number;
+}
 export interface Reading {
+  headings?: Heading[];
   html: string;
   metadata: Metadata;
   resources?: Resource[];

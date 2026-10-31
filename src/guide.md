@@ -16,7 +16,7 @@ Files are read only: reading, changing appearance and using this guide do not wr
 
 Open **Settings…** from the application menu on macOS or the Settings menu elsewhere (⌘, / Ctrl+,). Changes apply immediately; Close and Escape do not undo them. System appearance follows the OS. Both Light and Dark palette slots offer GitHub Light, GitHub Dark, Solarized Light, Solarized Dark, Dracula, Monokai and Nord, including opposite-toned combinations.
 
-**View** provides page zoom in, out and reset (⌘/Ctrl+=, ⌘/Ctrl+− and ⌘/Ctrl+0). Reading content scales from 50% to 300%, in steps of 10%; controls stay at their normal size. Fit diagrams applies immediately to current diagrams without reparsing; the sidebar default is saved for its future feature.
+**View** provides page zoom in, out and reset (⌘/Ctrl+=, ⌘/Ctrl+− and ⌘/Ctrl+0). Reading content scales from 50% to 300%, in steps of 10%; controls stay at their normal size. Fit diagrams applies immediately to current diagrams without reparsing. **View → Show Sidebar** applies and remembers sidebar visibility independently of the status bar.
 
 **View → Show Status Bar** remembers whether the compact bottom summary is visible. It starts visible. Hiding it never hides errors, supported Cancel or preference recovery. **File → Document Information…** shows the displayed file's full selectable location, name, type, read-only and stale state even with status hidden.
 
@@ -35,6 +35,16 @@ Local images, audio and video are scoped to the active file's canonical director
 
 Only a real pointer or keyboard activation can send permitted HTTP, HTTPS, mail or telephone links to the OS handler. That acknowledgement does not prove the external page loaded. Supported local-document links stay inside the active file's canonical directory, including symlink checks; currently they replace this reader. A denied link neither grants another directory nor automatically opens a chooser.
 
+## Navigating files and headings
+
+**File → Open Folder…** selects a recursive navigation root without opening its first file or replacing the displayed article. Files lists nested supported entries; use folder Expand/Collapse buttons. Dot/native-hidden entries and directory links are excluded. Supported file links are included only when their regular targets stay inside the selected folder. An explicitly opened hidden or outside file can remain readable without appearing in Files.
+
+A filename opens the file; its separate **Show headings** button lazily reads H1/H2 previews. Plain text has no heading preview. **On this page** always describes the displayed document. Heading actions focus the exact section, including repeated names. If a preview's source changed before opening, the fresh file opens without guessing the old destination: choose a heading again.
+
+**Navigate → Refresh Folder** explicitly refreshes file metadata and previews, not the active article. Partial/unavailable folders are labeled rather than shown as complete empty results. **File → Reload** also invalidates previews, including failed reloads. Files do not reload automatically.
+
+Previous/Next File and Sibling order in **Navigate** or the sidebar browse only the displayed file's immediate folder, alphabetically or newest modified with stable ties. They stop at endpoints, never wrap, and do not invent a neighbor if the displayed file is excluded. **File → Reveal** sends the active file to the platform file manager without changing the reader; failures are reported.
+
 ## Exporting diagrams
 
 Use **Diagram → Export diagrams as SVG ZIP…** or **Export diagrams as PNG ZIP…** after the current palette finishes rendering. Export uses whole diagrams, not the panned or zoomed viewport. A partial export names failed diagram ordinals before confirmation and keeps numbering gaps. With no successful diagrams there is no Save action. A new conversion failure stops the whole export rather than silently omitting another diagram.
@@ -47,7 +57,7 @@ SVG files retain bundled vendor styling and may reference resources another view
 
 Mermaid fences render offline using the bundled engine and the current palette. Use **Interact with diagram** to focus its viewport: arrows pan, +/− zoom, 0 resets to the current fit preference, and Escape returns to Interact without resetting. Tab leaves naturally. Equivalent buttons include local Fit, which does not change the saved preference. Plain wheel scrolls the document; ⌘+wheel on macOS or Ctrl+wheel elsewhere zooms only the diagram under the pointer. **Original definition** is available on success and failure. Each diagram has a 50,000-character and 500-edge limit; failures show escaped local diagnostics and leave other content readable. Diagram layout cannot be interrupted synchronously. Bundled strict-mode Mermaid SVG/CSS is trusted; ordinary document HTML/CSS and native grants retain their separate protections.
 
-Folder browsing, sidebar/navigation/outlines, quick open, document Find, multiple document windows and OS file associations are not implemented yet. These features are planned, not supplied by the preferences or this guide.
+Quick open, document Find, multiple document windows and OS file associations are not implemented yet. These features are planned, not supplied by the preferences or this guide.
 
 The intended targets are macOS 14+ Apple Silicon, Windows 11 x64 and Ubuntu 24.04 x86_64 with X11/Wayland. Native menus, IME, assistive technology, restart persistence, real media/CSP transport and platform packaging still require recorded testing on those targets. Browser fixtures and compilation are not native qualification. No signing, public release or complete dependency-notice clearance is claimed.
 

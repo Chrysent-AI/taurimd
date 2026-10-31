@@ -120,6 +120,7 @@ describe('mounted media ownership and actual controller', () => {
       .mockImplementation(() => {});
     const pending = deferred<{ id: string; mime: string }>();
     const bridge: NativeReader = {
+      openEntry: () => Promise.reject(new Error('No navigation fixture')),
       select: () => Promise.resolve({ status: 'ready', snapshot }),
       reload: () => Promise.resolve(snapshot),
       commit: async () => {},

@@ -238,6 +238,7 @@ export function sanitizeReading(
     }
   }
   const usedSlugs = new Set<string>();
+  const headings: NonNullable<Reading['headings']> = [];
   let headingNumber = 0;
   for (const heading of fragment.querySelectorAll('h1,h2,h3,h4,h5,h6')) {
     if (prefix && originalId(heading) === `${prefix}label`) {
@@ -251,6 +252,16 @@ export function sanitizeReading(
     usedSlugs.add(key);
     const id = `${namespace}heading-${String(++headingNumber)}`;
     assign(heading, { id, tabindex: '-1' });
+    if (
+      (heading.tagName === 'H1' || heading.tagName === 'H2') &&
+      !heading.closest('pre,code')
+    )
+      headings.push({
+        level: heading.tagName === 'H1' ? 1 : 2,
+        label: heading.textContent,
+        id,
+        key: headingNumber,
+      });
     if (!fragments.has(key)) fragments.set(key, id);
     const rawId = originalId(heading);
     if (rawId && !fragments.has(rawId)) fragments.set(rawId, id);
@@ -351,5 +362,6 @@ export function sanitizeReading(
     actions,
     fragments: Object.fromEntries(fragments),
     diagrams,
+    headings,
   };
 }

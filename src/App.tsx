@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
@@ -9,7 +10,10 @@ import {
 import { flushSync } from 'react-dom';
 import { listen } from '@tauri-apps/api/event';
 import type { ReaderController } from './controller';
-import { preferences } from './native';
+import { preferences, navigation as navigationBridge } from './native';
+import { NavigationController } from './navigation/model';
+import { Navigation } from './navigation/Navigation';
+import { binding, neighbors, type EntryIntent } from './navigation/types';
 import { useDiagramExport } from './diagrams/useExport';
 import { mountDiagram, type DiagramView } from './diagrams/view';
 import { mountMedia } from './reader/media';
@@ -21,8 +25,72 @@ import { TemporaryDialog } from './TemporaryDialog';
 import { Guide } from './Guide';
 import { syncMenu } from './presentation';
 import { version } from '../package.json';
+function usableFocus(
+  node: HTMLElement | null | undefined,
+): node is HTMLElement {
+  return (
+    !!node?.isConnected &&
+    node !== window.document.body &&
+    !node.closest('[hidden]') &&
+    !node.matches(':disabled')
+  );
+}
 export function App({ controller }: { controller: ReaderController }) {
   const state = useSyncExternalStore(controller.subscribe, controller.getState);
+  const [navigation] = useState(
+    () => new NavigationController(navigationBridge),
+  );
+  const navigationState = useSyncExternalStore(
+    navigation.subscribe,
+    navigation.getState,
+  );
+  const sidebar = useRef<HTMLElement | null>(null);
+  const siblingGroup = useRef<HTMLDivElement>(null);
+  const siblingGroupRef = useCallback((node: HTMLDivElement | null) => {
+    siblingGroup.current = node;
+  }, []);
+  const focusIntent = useRef<{
+    requestId: number;
+    anchor: HTMLElement | null;
+    before: Rendered | null;
+    action: 'entry' | 'reload';
+    inSiblings: boolean;
+  } | null>(null);
+  const rootFocus = useRef<{
+    anchor: HTMLElement | null;
+    scope: number | undefined;
+    inSidebar: boolean;
+  } | null>(null);
+  const [section, setSection] = useState<number | null>(null);
+  useEffect(
+    () => () => {
+      navigation.dispose();
+    },
+    [navigation],
+  );
+  useEffect(() => {
+    if (
+      !navigationState.choosing &&
+      !['loading', 'parsing', 'committing'].includes(state.phase)
+    )
+      void navigation.update(state.displayed);
+  }, [
+    navigation,
+    state.displayed,
+    state.phase,
+    navigationState.root,
+    navigationState.rootBusy,
+    navigationState.choosing,
+  ]);
+  useEffect(() => {
+    navigation.invalidate();
+  }, [navigation, state.previewEpoch]);
+  useEffect(() => {
+    if (state.displayed?.previewChanged) {
+      navigation.invalidate();
+      navigation.notice('File changed; choose a heading again.', true);
+    }
+  }, [navigation, state.displayed]);
   const readingHTML = useMemo(
     () => ({ __html: state.displayed?.html ?? '' }),
     [state.displayed],
@@ -77,16 +145,50 @@ export function App({ controller }: { controller: ReaderController }) {
   }, [palette]);
   const article = useRef<HTMLElement>(null);
   const composing = useRef(false);
-  const lastDocument = useRef<number | null>(null);
+  const lastDocument = useRef<Rendered | null>(null);
   const [menuError, setMenuError] = useState('');
   const [linkFeedback, setLinkFeedback] = useState<{
     document: Rendered;
     message: string;
   } | null>(null);
   const busy = ['loading', 'parsing', 'committing'].includes(state.phase);
+  const rootProblem =
+    navigationState.rootStatus === 'unavailable' ||
+    navigationState.rootStatus === 'partial';
   const focusReading = useCallback(() => {
     (article.current ?? main.current)?.focus({ preventScroll: true });
   }, []);
+  const sidebarRef = useCallback(
+    (node: HTMLElement | null) => {
+      if (!node && sidebar.current?.contains(window.document.activeElement))
+        focusReading();
+      sidebar.current = node;
+    },
+    [focusReading],
+  );
+  useLayoutEffect(() => {
+    const pending = rootFocus.current;
+    if (!pending || navigationState.choosing) return;
+    rootFocus.current = null;
+    if (pending.inSidebar && pending.scope !== navigationState.root?.scope)
+      sidebar.current
+        ?.querySelector<HTMLElement>('nav h2')
+        ?.focus({ preventScroll: true });
+    else if (
+      pending.anchor?.isConnected &&
+      !pending.anchor.closest('[hidden]') &&
+      !pending.anchor.matches(':disabled')
+    )
+      pending.anchor.focus({ preventScroll: true });
+    else if (pending.inSidebar) focusReading();
+  }, [navigationState.choosing, navigationState.root?.scope, focusReading]);
+  useLayoutEffect(() => {
+    if (
+      !settings.sidebarDefault &&
+      sidebar.current?.contains(window.document.activeElement)
+    )
+      focusReading();
+  }, [settings.sidebarDefault, focusReading]);
   const diagrams = useRef<DiagramView[]>([]);
   const exportSurface = useCallback(
     (phase: 'preparing' | 'native' | 'closed') => {
@@ -121,6 +223,84 @@ export function App({ controller }: { controller: ReaderController }) {
     },
     [focusReading],
   );
+  const allowNavigation = useCallback(() => {
+    if (
+      composing.current ||
+      modalOpen.current ||
+      navigation.state.choosing ||
+      ['loading', 'parsing', 'committing'].includes(controller.state.phase)
+    ) {
+      setActionFeedback({
+        message:
+          'Command unavailable during composition, pending reading or an open dialog. Try again after finishing it.',
+        state: controller.state,
+      });
+      return false;
+    }
+    return true;
+  }, [controller, navigation]);
+  const jump = useCallback(
+    (key: number) => {
+      const heading = controller.state.displayed?.headings?.find(
+        (h) => h.key === key,
+      );
+      const target =
+        heading &&
+        [
+          ...(article.current?.querySelectorAll<HTMLElement>('[id]') ?? []),
+        ].find((node) => node.id === heading.id);
+      if (!target) {
+        navigation.notice('This section is no longer present.', true);
+        return;
+      }
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ block: 'start' });
+      setSection(key);
+    },
+    [controller, navigation],
+  );
+  const openNavigation = useCallback(
+    (intent: EntryIntent, invoker?: HTMLElement) => {
+      if (!allowNavigation()) return;
+      const indexes = [navigation.state.root, navigation.state.siblings?.index];
+      if (
+        !indexes.some(
+          (index) =>
+            index?.scope === intent.binding.scope &&
+            index.revision === intent.binding.revision &&
+            index.entries.some((e) => e.id === intent.binding.entry),
+        )
+      ) {
+        navigation.notice('Folder changed; choose the file again.', true);
+        return;
+      }
+      const document = controller.state.displayed;
+      if (
+        intent.key !== undefined &&
+        intent.preview &&
+        document?.snapshot.contextId !== undefined &&
+        document.snapshot.contextId === intent.preview.contextId &&
+        document.snapshot.source === intent.preview.source
+      ) {
+        jump(intent.key);
+        return;
+      }
+      const anchor =
+        invoker ??
+        (window.document.activeElement instanceof HTMLElement
+          ? window.document.activeElement
+          : null);
+      void controller.openEntry(intent);
+      focusIntent.current = {
+        requestId: controller.state.requestId,
+        anchor,
+        before: document,
+        action: 'entry',
+        inSiblings: !!anchor && !!siblingGroup.current?.contains(anchor),
+      };
+    },
+    [allowNavigation, controller, jump, navigation],
+  );
   const dispatch = useCallback(
     (payload: string, invoker?: HTMLElement) => {
       const phase = controller.state.phase;
@@ -132,6 +312,7 @@ export function App({ controller }: { controller: ReaderController }) {
       if (
         composing.current ||
         pending ||
+        navigation.state.choosing ||
         (modalOpen.current && !(zoom && modalOpen.current === 'settings'))
       ) {
         setActionFeedback({
@@ -142,7 +323,40 @@ export function App({ controller }: { controller: ReaderController }) {
         return;
       }
       setActionFeedback(null);
-      if (payload === 'export-svg' || payload === 'export-png') {
+      if (payload === 'open-folder') {
+        if (!navigation.state.rootBusy) {
+          const active = invoker ?? window.document.activeElement;
+          rootFocus.current = {
+            anchor: active instanceof HTMLElement ? active : null,
+            scope: navigation.state.root?.scope,
+            inSidebar: !!sidebar.current?.contains(active),
+          };
+        }
+        void navigation.choose();
+      } else if (payload === 'refresh-folder') {
+        void navigation.refresh();
+      } else if (payload === 'reveal' && controller.state.displayed) {
+        void navigation.reveal(controller.state.displayed);
+      } else if (payload === 'sidebar') {
+        if (sidebar.current?.contains(window.document.activeElement))
+          focusReading();
+        settingsController.change({
+          sidebarDefault:
+            !settingsController.getState().settings.sidebarDefault,
+        });
+      } else if (payload === 'sort-alpha' || payload === 'sort-date') {
+        navigation.sort(payload === 'sort-date');
+      } else if (payload === 'previous' || payload === 'next') {
+        const siblings = navigation.state.siblings;
+        const entry = neighbors(siblings, navigation.state.newest)[payload];
+        if (entry && siblings)
+          openNavigation({
+            binding: binding(siblings.index, entry),
+            name: entry.name,
+            focus: 'preserve',
+          });
+        else navigation.notice('No file in that direction.');
+      } else if (payload === 'export-svg' || payload === 'export-png') {
         startExport(payload === 'export-svg' ? 'svg' : 'png');
       } else if (zoom) {
         settingsController.zoom(payload);
@@ -182,16 +396,46 @@ export function App({ controller }: { controller: ReaderController }) {
           });
           return;
         }
+        const anchor =
+          invoker ??
+          (window.document.activeElement instanceof HTMLElement
+            ? window.document.activeElement
+            : null);
+        const before = controller.state.displayed;
         void controller.run(payload);
+        focusIntent.current =
+          payload === 'reload'
+            ? {
+                requestId: controller.state.requestId,
+                anchor,
+                before,
+                action: 'reload',
+                inSiblings:
+                  !!anchor && !!siblingGroup.current?.contains(anchor),
+              }
+            : null;
       }
     },
-    [controller, settingsController, focusReading, startExport],
+    [
+      controller,
+      settingsController,
+      focusReading,
+      startExport,
+      navigation,
+      openNavigation,
+    ],
   );
   useEffect(() => {
     let disposed = false;
     void syncMenu({
       statusVisible: settings.statusVisible,
-      busy: busy || exporting.progress !== null,
+      sidebarVisible: settings.sidebarDefault,
+      hasRoot: !!navigationState.root && !navigationState.rootBusy,
+      previous: !!neighbors(navigationState.siblings, navigationState.newest)
+        .previous,
+      next: !!neighbors(navigationState.siblings, navigationState.newest).next,
+      newest: navigationState.newest,
+      busy: busy || exporting.progress !== null || navigationState.choosing,
       modal:
         surface === null
           ? 'none'
@@ -212,6 +456,8 @@ export function App({ controller }: { controller: ReaderController }) {
     };
   }, [
     settings.statusVisible,
+    settings.sidebarDefault,
+    navigationState,
     settings.pageZoom,
     busy,
     surface,
@@ -241,12 +487,31 @@ export function App({ controller }: { controller: ReaderController }) {
     };
   }, [dispatch]);
   useEffect(() => {
-    const id = state.displayed?.snapshot.documentId;
-    if (id !== undefined && id !== lastDocument.current) {
-      lastDocument.current = id;
+    const document = state.displayed;
+    if (document && document !== lastDocument.current) {
+      const previous = lastDocument.current;
+      lastDocument.current = document;
       const host = article.current;
-      const document = state.displayed;
-      if (document?.fragment && host) {
+      const pending = focusIntent.current;
+      const ownsFocus =
+        pending !== null && pending.requestId === document.requestId;
+      if (document.headingKey !== undefined) {
+        focusIntent.current = null;
+        jump(document.headingKey);
+      } else if (
+        ownsFocus &&
+        (document.focus === 'preserve' || pending.action === 'reload')
+      ) {
+        // Resolve after the matching sibling projection settles, not against
+        // controls that still describe the previous displayed document.
+      } else if (
+        document.focus === 'preserve' ||
+        previous?.snapshot.documentId === document.snapshot.documentId
+      ) {
+        focusIntent.current = null;
+        host?.focus({ preventScroll: true });
+      } else if (document.fragment && host) {
+        focusIntent.current = null;
         let key = document.fragment;
         try {
           key = decodeURIComponent(key);
@@ -267,10 +532,85 @@ export function App({ controller }: { controller: ReaderController }) {
           });
         }
       } else {
+        focusIntent.current = null;
         host?.focus();
         host?.scrollIntoView({ block: 'start' });
       }
     }
+  }, [state.displayed, jump]);
+  useEffect(() => {
+    const pending = focusIntent.current;
+    if (!pending || busy) return;
+    if (modalOpen.current || composing.current || navigationState.choosing) {
+      focusIntent.current = null;
+      return;
+    }
+    const document = state.displayed;
+    if (
+      state.requestId !== pending.requestId ||
+      (document?.requestId !== pending.requestId && document !== pending.before)
+    ) {
+      focusIntent.current = null;
+      return;
+    }
+    if (pending.inSiblings && navigation.state.siblingDocument !== document)
+      return;
+    focusIntent.current = null;
+    if (usableFocus(pending.anchor))
+      pending.anchor.focus({ preventScroll: true });
+    else if (pending.inSiblings && usableFocus(siblingGroup.current)) {
+      const remaining = siblingGroup.current.querySelector<HTMLButtonElement>(
+        'button:not(:disabled)',
+      );
+      (usableFocus(remaining) ? remaining : siblingGroup.current).focus({
+        preventScroll: true,
+      });
+    } else focusReading();
+  }, [
+    busy,
+    state.requestId,
+    state.displayed,
+    navigation,
+    navigationState.siblings,
+    navigationState.siblingDocument,
+    navigationState.choosing,
+    surface,
+    exporting.progress,
+    composition,
+    focusReading,
+  ]);
+  useEffect(() => {
+    const host = article.current;
+    const root = main.current;
+    if (
+      !host ||
+      !root ||
+      !state.displayed ||
+      typeof IntersectionObserver === 'undefined'
+    )
+      return;
+    const headings = state.displayed.headings ?? [];
+    const targets = [...host.querySelectorAll<HTMLElement>('[id]')].flatMap(
+      (node) => {
+        const heading = headings.find((h) => h.id === node.id);
+        return heading ? [{ node, key: heading.key }] : [];
+      },
+    );
+    const observer = new IntersectionObserver(
+      () => {
+        const top = root.getBoundingClientRect().top + 60;
+        const current =
+          targets
+            .filter((t) => t.node.getBoundingClientRect().top <= top)
+            .at(-1) ?? targets.at(0);
+        setSection(current?.key ?? null);
+      },
+      { root },
+    );
+    for (const target of targets) observer.observe(target.node);
+    return () => {
+      observer.disconnect();
+    };
   }, [state.displayed]);
   useEffect(() => {
     const document = state.displayed;
@@ -398,6 +738,17 @@ export function App({ controller }: { controller: ReaderController }) {
       }}
     >
       <section className="sr-only" aria-label="Reader status">
+        <p aria-live="polite" aria-label="Folder status">
+          {!settings.sidebarDefault && rootProblem
+            ? ''
+            : navigationState.rootMessage}
+        </p>
+        <p aria-live="polite" aria-label="Navigation status">
+          {(navigationState.error && !settings.sidebarDefault) ||
+          navigationState.message === state.message
+            ? ''
+            : navigationState.message}
+        </p>
         <p role="status">
           {(!surface && commandMessage) ||
             (state.phase === 'error' ||
@@ -410,11 +761,18 @@ export function App({ controller }: { controller: ReaderController }) {
         state.phase === 'error' ||
         exporting.feedback ||
         exporting.progress?.phase === 'native' ||
+        ((navigationState.error || rootProblem) && !settings.sidebarDefault) ||
         menuError ||
         presentationError ||
         preferenceState.status === 'error' ||
         preferenceState.notice) && (
         <aside className="recovery" aria-label="Reader recovery">
+          {rootProblem && !settings.sidebarDefault && (
+            <p role="alert">{navigationState.rootMessage}</p>
+          )}
+          {navigationState.error && !settings.sidebarDefault && (
+            <p role="alert">{navigationState.message}</p>
+          )}
           {exporting.progress?.phase === 'native' && (
             <p role="status">{exporting.progress.message}</p>
           )}
@@ -610,44 +968,70 @@ export function App({ controller }: { controller: ReaderController }) {
           )}
         </TemporaryDialog>
       )}
-      <main ref={main} tabIndex={-1} aria-busy={busy}>
-        {!document ? (
-          <p className="empty hint">
-            Open a document with File → Open File… (
-            {/Mac/.test(navigator.platform) ? '⌘O' : 'Ctrl+O'}).
-          </p>
-        ) : (
-          <>
-            <p
-              className="link-feedback"
-              aria-live="polite"
-              aria-label="Reading link status"
-            >
-              {linkFeedback?.document === document
-                ? linkFeedback.message
-                : (state.linkMessage ?? '')}
+      <div className="workspace">
+        <aside
+          hidden={!settings.sidebarDefault}
+          className="navigation"
+          aria-label="Document navigation"
+          ref={sidebarRef}
+        >
+          <Navigation
+            controller={navigation}
+            document={document}
+            disabled={
+              busy ||
+              surface !== null ||
+              exporting.progress !== null ||
+              navigationState.choosing ||
+              composition
+            }
+            allow={allowNavigation}
+            open={openNavigation}
+            jump={jump}
+            visible={settings.sidebarDefault}
+            siblingGroupRef={siblingGroupRef}
+            section={section}
+          />
+        </aside>
+        <main ref={main} tabIndex={-1} aria-busy={busy}>
+          {!document ? (
+            <p className="empty hint">
+              Open a document with File → Open File… (
+              {/Mac/.test(navigator.platform) ? '⌘O' : 'Ctrl+O'}).
             </p>
-            <article
-              ref={article}
-              data-zoom={settings.pageZoom}
-              tabIndex={-1}
-              aria-label={document.snapshot.name}
-            >
-              <MetadataCard
-                key={`${String(document.snapshot.documentId)}-${String(document.snapshot.revision)}`}
-                metadata={document.metadata}
-              />
-              {document.snapshot.source.length === 0 ? (
-                <p className="empty">This file is empty.</p>
-              ) : document.html === null ? (
-                <pre className="literal">{document.snapshot.source}</pre>
-              ) : (
-                <div dangerouslySetInnerHTML={readingHTML} />
-              )}
-            </article>
-          </>
-        )}
-      </main>
+          ) : (
+            <>
+              <p
+                className="link-feedback"
+                aria-live="polite"
+                aria-label="Reading link status"
+              >
+                {linkFeedback?.document === document
+                  ? linkFeedback.message
+                  : (state.linkMessage ?? '')}
+              </p>
+              <article
+                ref={article}
+                data-zoom={settings.pageZoom}
+                tabIndex={-1}
+                aria-label={document.snapshot.name}
+              >
+                <MetadataCard
+                  key={`${String(document.snapshot.documentId)}-${String(document.snapshot.revision)}`}
+                  metadata={document.metadata}
+                />
+                {document.snapshot.source.length === 0 ? (
+                  <p className="empty">This file is empty.</p>
+                ) : document.html === null ? (
+                  <pre className="literal">{document.snapshot.source}</pre>
+                ) : (
+                  <div dangerouslySetInnerHTML={readingHTML} />
+                )}
+              </article>
+            </>
+          )}
+        </main>
+      </div>
       {settings.statusVisible && (
         <footer
           ref={statusRef}

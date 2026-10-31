@@ -2,6 +2,11 @@ import { invoke } from '@tauri-apps/api/core';
 
 export interface MenuPresentation {
   statusVisible: boolean;
+  sidebarVisible: boolean;
+  hasRoot: boolean;
+  previous: boolean;
+  next: boolean;
+  newest: boolean;
   busy: boolean;
   modal: 'none' | 'settings' | 'other';
   composing: boolean;

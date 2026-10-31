@@ -45,7 +45,12 @@ export function TemporaryDialog({
     return () => {
       element?.close();
       if (!restoreFocus) return;
-      if (origin?.isConnected) origin.focus({ preventScroll: true });
+      if (
+        origin?.isConnected &&
+        !origin.closest('[hidden]') &&
+        !origin.matches(':disabled')
+      )
+        origin.focus({ preventScroll: true });
       else fallback();
       if (ranges.length) {
         const current = window.getSelection();

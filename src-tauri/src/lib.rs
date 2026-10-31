@@ -2,6 +2,12 @@ mod documents;
 mod export;
 mod links;
 mod media;
+mod navigation;
+mod navigation_commands;
+use navigation_commands::{
+    cancel_preview, get_siblings, open_index_entry, read_preview, refresh_index, reveal_document,
+    select_root,
+};
 mod presentation;
 mod settings;
 use documents::{read_document, AppError, Session, Snapshot};
@@ -60,7 +66,13 @@ fn session<'a>(
     window: &WebviewWindow,
     state: &'a ReaderState,
 ) -> Result<std::sync::MutexGuard<'a, Session>, AppError> {
-    if window.label() != "reader" {
+    session_for_caller(window.label(), state)
+}
+fn session_for_caller<'a>(
+    caller: &str,
+    state: &'a ReaderState,
+) -> Result<std::sync::MutexGuard<'a, Session>, AppError> {
+    if caller != "reader" {
         return Err(AppError::new(
             "denied",
             "This window has no document grant.",
@@ -507,7 +519,14 @@ pub fn run() {
             begin_export,
             append_export_image,
             finish_export,
-            cancel_export
+            cancel_export,
+            select_root,
+            refresh_index,
+            get_siblings,
+            read_preview,
+            cancel_preview,
+            open_index_entry,
+            reveal_document
         ])
         .setup(|app| {
             app.manage(SettingsStore::load(app.path().app_config_dir().ok()));
@@ -558,6 +577,40 @@ pub fn run() {
                 false,
                 None::<&str>,
             )?;
+            let sidebar =
+                CheckMenuItem::with_id(app, "sidebar", "Show Sidebar", true, true, None::<&str>)?;
+            let alphabetical = CheckMenuItem::with_id(
+                app,
+                "sort-alpha",
+                "Alphabetical",
+                true,
+                true,
+                None::<&str>,
+            )?;
+            let newest = CheckMenuItem::with_id(
+                app,
+                "sort-date",
+                "Newest modified",
+                true,
+                false,
+                None::<&str>,
+            )?;
+            let previous =
+                MenuItem::with_id(app, "previous", "Previous File", false, None::<&str>)?;
+            let next = MenuItem::with_id(app, "next", "Next File", false, None::<&str>)?;
+            let refresh =
+                MenuItem::with_id(app, "refresh-folder", "Refresh Folder", false, None::<&str>)?;
+            let navigate = Submenu::with_items(
+                app,
+                "Navigate",
+                true,
+                &[
+                    &previous,
+                    &next,
+                    &Submenu::with_items(app, "Sibling order", true, &[&alphabetical, &newest])?,
+                    &refresh,
+                ],
+            )?;
             let view = Submenu::with_items(
                 app,
                 "View",
@@ -568,6 +621,7 @@ pub fn run() {
                     &zoom_reset,
                     &PredefinedMenuItem::separator(app)?,
                     &status,
+                    &sidebar,
                 ],
             )?;
             let export_svg = MenuItem::with_id(
@@ -588,12 +642,28 @@ pub fn run() {
                 Submenu::with_items(app, "Diagram", true, &[&export_svg, &export_png])?;
             let open = MenuItem::with_id(app, "open", "Open File…", true, Some("CmdOrCtrl+O"))?;
             let reload = MenuItem::with_id(app, "reload", "Reload", false, Some("CmdOrCtrl+R"))?;
+            let folder = MenuItem::with_id(app, "open-folder", "Open Folder…", true, None::<&str>)?;
+            let reveal = MenuItem::with_id(
+                app,
+                "reveal",
+                if cfg!(target_os = "macos") {
+                    "Reveal in Finder"
+                } else if cfg!(windows) {
+                    "Reveal in File Explorer"
+                } else {
+                    "Reveal in File Manager"
+                },
+                false,
+                None::<&str>,
+            )?;
             let file = Submenu::with_items(
                 app,
                 "File",
                 true,
                 &[
                     &open,
+                    &folder,
+                    &reveal,
                     &reload,
                     &information,
                     &PredefinedMenuItem::close_window(app, None)?,
@@ -616,6 +686,7 @@ pub fn run() {
                     )?,
                     &file,
                     &view,
+                    &navigate,
                     &diagram_menu,
                     &Submenu::with_items(app, "Help", true, &[&guide])?,
                 ],
@@ -626,6 +697,7 @@ pub fn run() {
                 &[
                     &file,
                     &view,
+                    &navigate,
                     &diagram_menu,
                     &Submenu::with_items(app, "Settings", true, &[&settings])?,
                     &Submenu::with_items(app, "Help", true, &[&guide, &about])?,
@@ -634,6 +706,11 @@ pub fn run() {
             app.set_menu(menu)?;
             app.manage(ReaderMenu {
                 actions: vec![
+                    ("open-folder", folder),
+                    ("reveal", reveal),
+                    ("previous", previous),
+                    ("next", next),
+                    ("refresh-folder", refresh),
                     ("export-svg", export_svg),
                     ("export-png", export_png),
                     ("open", open),
@@ -645,6 +722,11 @@ pub fn run() {
                     ("zoom-in", zoom_in),
                     ("zoom-out", zoom_out),
                     ("zoom-reset", zoom_reset),
+                ],
+                navigation_checks: vec![
+                    ("sidebar", sidebar),
+                    ("sort-alpha", alphabetical),
+                    ("sort-date", newest),
                 ],
                 status,
                 applied: Mutex::new(Presentation::default()),
@@ -675,7 +757,7 @@ pub fn run() {
                 if window.is_focused().unwrap_or(false) {
                     let menu = app.state::<ReaderMenu>();
                     if let Ok(applied) = menu.applied.lock() {
-                        if let Err(error) = menu.status.set_checked(applied.status_visible) {
+                        if let Err(error) = menu.restore_checks(&applied) {
                             eprintln!("Menu checkmark restoration failed: {error}");
                         }
                     }
@@ -906,6 +988,7 @@ mod protocol_tests {
     fn reader_responses_match_the_javascript_adapter_wire_shape() {
         let snapshot = Snapshot {
             document_id: 7,
+            context_id: 0,
             revision: 11,
             name: "literal.log".into(),
             location: "fixture/literal.log".into(),
@@ -921,7 +1004,7 @@ mod protocol_tests {
             json!({
                 "status": "ready",
                 "snapshot": {
-                    "documentId": 7, "revision": 11, "name": "literal.log",
+                    "documentId": 7, "contextId": 0, "revision": 11, "name": "literal.log",
                     "location": "fixture/literal.log", "format": "text",
                     "source": "<script>literal</script>"
                 }

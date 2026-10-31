@@ -1,3 +1,4 @@
+import type { NavigationBridge, EntryBinding } from './navigation/types';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
@@ -57,7 +58,27 @@ export function mediaURL(value: ResolvedMedia) {
     throw new Error('Invalid native media response.');
   return convertFileSrc(value.id, 'reader-media');
 }
+export const navigation: NavigationBridge = {
+  choose: (requestId) => invoke('select_root', { requestId }),
+  refresh: (scopeId, requestId) =>
+    invoke('refresh_index', { scopeId, requestId }),
+  siblings: (document) =>
+    invoke('get_siblings', {
+      documentId: document.documentId,
+      revision: document.revision,
+    }),
+  preview: (binding, requestId) =>
+    invoke('read_preview', { binding, requestId }),
+  cancelPreview: (requestId) => invoke('cancel_preview', { requestId }),
+  reveal: (document) =>
+    invoke('reveal_document', {
+      documentId: document.documentId,
+      revision: document.revision,
+    }),
+};
 export const native: NativeReader = {
+  openEntry: (requestId: number, binding: EntryBinding) =>
+    invoke<Snapshot>('open_index_entry', { requestId, binding }),
   select: (requestId) => invoke<Selection>('select_document', { requestId }),
   reload: (requestId, document) =>
     invoke<Snapshot>('reload_document', {

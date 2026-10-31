@@ -107,6 +107,75 @@ body {
   display: flex;
   flex-direction: column;
 }
+.workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+.navigation {
+  flex: 0 1 16.25rem;
+  width: 38%;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.6rem;
+  background: var(--panel);
+  border-inline-end: 1px solid var(--border);
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+}
+.navigation h2 {
+  font-size: 1rem;
+}
+.navigation ul {
+  list-style: none;
+  padding-inline-start: 0.65rem;
+}
+.navigation nav > ul,
+.navigation nav > div > ul {
+  padding-inline-start: 0;
+}
+.navigation li {
+  margin-block: 0.45rem;
+}
+.navigation a,
+.navigation button {
+  overflow-wrap: anywhere;
+  white-space: normal;
+  max-width: 100%;
+  text-align: start;
+}
+.navigation a {
+  color: var(--link);
+}
+.navigation button {
+  padding: 0.25rem 0.4rem;
+}
+.navigation [aria-current] {
+  font-weight: 700;
+  border-inline-start: 3px solid var(--link);
+}
+.navigation h2:focus,
+.sibling-controls:focus {
+  outline: 3px solid var(--focus);
+}
+.file-row,
+.sibling-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.sibling-controls {
+  border-top: 1px solid var(--border);
+  padding-block: 0.7rem;
+}
+.sibling-controls select {
+  max-width: 100%;
+}
+.folder-identity {
+  font-weight: 600;
+}
 .sr-only {
   position: absolute;
   inline-size: 1px;

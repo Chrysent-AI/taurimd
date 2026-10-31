@@ -13,6 +13,7 @@ import { ReaderController } from '../../src/controller';
 import { native } from '../../src/native';
 import { parseInWorker } from '../../src/reader/worker';
 import type { MenuPresentation } from '../../src/presentation';
+import type { Siblings } from '../../src/navigation/types';
 import type { AppError } from '../../src/types';
 import {
   defaults,
@@ -21,6 +22,13 @@ import {
 } from '../../src/settings/model';
 
 type Command =
+  | 'select_root'
+  | 'refresh_index'
+  | 'get_siblings'
+  | 'read_preview'
+  | 'cancel_preview'
+  | 'open_index_entry'
+  | 'reveal_document'
   | 'select_document'
   | 'reload_document'
   | 'commit_document'
@@ -45,6 +53,13 @@ const settled: Command[] = [];
 const replies = new Map<Command, Reply[]>();
 const pending = new Map<string, (outcome: Outcome) => void>();
 let parses = 0;
+let workerParses = 0;
+let siblingReply: Siblings = {
+  index: { scope: 1, revision: 1, name: 'fixture', entries: [], issues: [] },
+  active: null,
+  rootActive: null,
+  inRoot: false,
+};
 const diagramRenders: { id: string; config: unknown }[] = [];
 let diagramInitializations = 0;
 let diagramBindings = 0;
@@ -97,6 +112,7 @@ class ObservedWorker extends Worker {
     message: unknown,
     options: Transferable[] | StructuredSerializeOptions = [],
   ): void {
+    workerParses++;
     if (this.mode === 'hold') return;
     if (this.mode === 'fail') {
       queueMicrotask(() => {
@@ -140,6 +156,13 @@ mockIPC(
   async (command, payload) => {
     if (
       ![
+        'select_root',
+        'refresh_index',
+        'get_siblings',
+        'read_preview',
+        'cancel_preview',
+        'open_index_entry',
+        'reveal_document',
         'select_document',
         'reload_document',
         'commit_document',
@@ -167,6 +190,10 @@ mockIPC(
         if (!presentation || next.sequence > presentation.sequence)
           presentation = structuredClone(next);
       };
+      if (!reply && name === 'get_siblings')
+        return structuredClone(siblingReply);
+      if (!reply && (name === 'cancel_preview' || name === 'reveal_document'))
+        return null;
       if (!reply && name === 'begin_export') return ++exportId;
       if (
         !reply &&
@@ -277,6 +304,10 @@ function listenerCount() {
   return 0;
 }
 const fixture = {
+  setSiblings: (value: Siblings) => {
+    siblingReply = structuredClone(value);
+  },
+  workerParses: () => workerParses,
   enqueue(command: Command, reply: Reply) {
     const queue = replies.get(command) ?? [];
     queue.push(reply);
@@ -288,10 +319,25 @@ const fixture = {
     pending.delete(key);
     resolve(outcome);
   },
+  navigationCalls: () =>
+    structuredClone(
+      calls.filter((call) =>
+        [
+          'select_root',
+          'refresh_index',
+          'get_siblings',
+          'read_preview',
+          'cancel_preview',
+          'open_index_entry',
+          'reveal_document',
+        ].includes(call.command),
+      ),
+    ),
   calls: () =>
     structuredClone(
       calls.filter(
         (call) =>
+          call.command !== 'get_siblings' &&
           call.command !== 'get_settings' &&
           call.command !== 'update_settings' &&
           call.command !== 'present_reader',
@@ -335,6 +381,14 @@ const fixture = {
   listenerCount,
   menu: (
     action:
+      | 'open-folder'
+      | 'refresh-folder'
+      | 'reveal'
+      | 'sidebar'
+      | 'sort-alpha'
+      | 'sort-date'
+      | 'previous'
+      | 'next'
       | 'open'
       | 'reload'
       | 'settings'

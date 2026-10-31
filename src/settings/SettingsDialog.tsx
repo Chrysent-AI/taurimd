@@ -151,8 +151,8 @@ export function SettingsDialog({
         Show sidebar by default
       </label>
       <p className="hint">
-        Fit updates current diagrams without rerendering them. The sidebar
-        default is saved for its future feature.
+        Fit updates current diagrams without rerendering them. Sidebar
+        visibility applies immediately and is remembered.
       </p>
       {children}
     </>

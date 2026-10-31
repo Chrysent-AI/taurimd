@@ -848,6 +848,20 @@ test('diagram recoloring and temporary dialogs preserve scrolled playing media s
     });
   });
   await expect(diagram).toHaveAttribute('data-palette', 'nord');
+  for (const visible of [false, true]) {
+    await page.evaluate(() => window.readerFixture.menu('sidebar'));
+    await expect(
+      page.getByLabel('Document navigation', { exact: true }),
+    ).toBeVisible({ visible });
+  }
+  await page.evaluate(() => window.readerFixture.menu('sort-date'));
+  await expect(page.getByLabel('Sibling order', { exact: true })).toHaveValue(
+    'date',
+  );
+  await page.evaluate(() => window.readerFixture.menu('sort-alpha'));
+  await expect(page.getByLabel('Sibling order', { exact: true })).toHaveValue(
+    'alpha',
+  );
   for (const surface of [
     'settings',
     'guide',

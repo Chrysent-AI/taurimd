@@ -28,6 +28,26 @@ vi.mock('@tauri-apps/api/event', () => ({
   },
 }));
 vi.mock('../src/native', () => ({
+  navigation: {
+    siblings: () =>
+      Promise.resolve({
+        index: {
+          scope: 1,
+          revision: 1,
+          name: 'fixture',
+          entries: [],
+          issues: [],
+        },
+        active: null,
+        rootActive: null,
+        inRoot: false,
+      }),
+    choose: () => Promise.resolve({ status: 'cancelled' }),
+    refresh: vi.fn(),
+    preview: vi.fn(),
+    cancelPreview: () => Promise.resolve(null),
+    reveal: () => Promise.resolve(null),
+  },
   preferences: {
     get: () =>
       Promise.resolve({
@@ -78,6 +98,9 @@ function reader(source: string, format: Snapshot['format'] = 'markdown') {
     source,
   };
   const bridge = {
+    openEntry: vi
+      .fn()
+      .mockRejectedValue(new Error('No navigation selection queued')),
     select: vi.fn().mockResolvedValue({ status: 'ready', snapshot }),
     reload: vi.fn().mockRejectedValue({ message: 'File missing' }),
     commit: vi.fn().mockResolvedValue(undefined),

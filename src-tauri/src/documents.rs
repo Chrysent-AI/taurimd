@@ -65,6 +65,7 @@ pub fn classify(path: &Path) -> Result<Format, AppError> {
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     pub document_id: u32,
+    pub context_id: u32,
     pub revision: u32,
     pub name: String,
     pub location: String,
@@ -182,6 +183,7 @@ pub fn read_document(
             .to_path_buf();
         let snapshot = Snapshot {
             document_id: id,
+            context_id: 0,
             revision,
             name: canonical
                 .file_name()
@@ -203,6 +205,8 @@ pub fn read_document(
 
 #[derive(Default)]
 pub struct Session {
+    pub(crate) navigation: crate::navigation::Navigation,
+    pending_navigation: Option<Arc<AtomicBool>>,
     pub(crate) export: Option<Arc<crate::export::Job>>,
     latest: u32,
     cancel: Arc<AtomicBool>,
@@ -221,6 +225,7 @@ impl Session {
         self.cancel = Arc::new(AtomicBool::new(false));
         self.latest = request;
         self.pending = None;
+        self.pending_navigation = None;
         Ok(self.cancel.clone())
     }
     pub fn current(&self, request: u32) -> Result<(), AppError> {
@@ -230,10 +235,26 @@ impl Session {
             Ok(())
         }
     }
-    pub fn stage(&mut self, request: u32, document: GrantedDocument) -> Result<Snapshot, AppError> {
+    pub fn stage(
+        &mut self,
+        request: u32,
+        mut document: GrantedDocument,
+    ) -> Result<Snapshot, AppError> {
         self.current(request)?;
+        document.snapshot.context_id = self.navigation.context(&document.path)?;
         let snapshot = document.snapshot.clone();
         self.pending = Some(document);
+        Ok(snapshot)
+    }
+    pub fn stage_navigation(
+        &mut self,
+        request: u32,
+        document: GrantedDocument,
+        scope: &crate::navigation::Scope,
+    ) -> Result<Snapshot, AppError> {
+        scope.live()?;
+        let snapshot = self.stage(request, document)?;
+        self.pending_navigation = Some(scope.cancel.clone());
         Ok(snapshot)
     }
     pub fn active(&self, id: u32, revision: u32) -> Result<GrantedDocument, AppError> {
@@ -250,8 +271,17 @@ impl Session {
     }
     pub fn commit(&mut self, request: u32) -> Result<String, AppError> {
         self.current(request)?;
+        if self
+            .pending_navigation
+            .as_ref()
+            .is_some_and(|cancel| cancel.load(Ordering::Acquire))
+        {
+            return Err(Self::stale());
+        }
         self.retire_export()?;
         let document = self.pending.take().ok_or_else(Self::stale)?;
+        self.pending_navigation = None;
+        self.navigation.retire_siblings();
         let name = document.snapshot.name.clone();
         self.media_lifetime.store(true, Ordering::Release);
         self.media.clear();

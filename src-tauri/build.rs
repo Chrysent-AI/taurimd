@@ -3,6 +3,13 @@ fn main() {
     compile_error!("macOS builds support Apple Silicon only");
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
+            "select_root",
+            "refresh_index",
+            "get_siblings",
+            "read_preview",
+            "cancel_preview",
+            "open_index_entry",
+            "reveal_document",
             "select_document",
             "reload_document",
             "commit_document",

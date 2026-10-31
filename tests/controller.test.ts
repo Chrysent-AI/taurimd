@@ -29,6 +29,9 @@ function deferred<T>() {
 }
 function setup() {
   const bridge = {
+    openEntry: vi
+      .fn<NativeReader['openEntry']>()
+      .mockResolvedValue(snapshot('entry.md', 2)),
     select: vi
       .fn<NativeReader['select']>()
       .mockResolvedValue({ status: 'ready', snapshot: snapshot() }),

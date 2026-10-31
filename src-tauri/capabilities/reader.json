@@ -6,6 +6,13 @@
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
+    "allow-select-root",
+    "allow-refresh-index",
+    "allow-get-siblings",
+    "allow-read-preview",
+    "allow-cancel-preview",
+    "allow-open-index-entry",
+    "allow-reveal-document",
     "allow-select-document",
     "allow-reload-document",
     "allow-commit-document",

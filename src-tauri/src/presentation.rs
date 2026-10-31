@@ -15,16 +15,34 @@ pub enum Modal {
 pub struct Presentation {
     pub sequence: u32,
     pub status_visible: bool,
+    #[serde(default = "sidebar_default")]
+    pub sidebar_visible: bool,
+    #[serde(default)]
+    pub has_root: bool,
+    #[serde(default)]
+    pub previous: bool,
+    #[serde(default)]
+    pub next: bool,
+    #[serde(default)]
+    pub newest: bool,
     pub busy: bool,
     pub modal: Modal,
     pub composing: bool,
     pub page_zoom: u16,
+}
+fn sidebar_default() -> bool {
+    true
 }
 impl Default for Presentation {
     fn default() -> Self {
         Self {
             sequence: 0,
             status_visible: true,
+            sidebar_visible: true,
+            has_root: false,
+            previous: false,
+            next: false,
+            newest: false,
             busy: false,
             modal: Modal::None,
             composing: false,
@@ -57,26 +75,43 @@ impl Presentation {
             "zoom-in" => free && self.modal != Modal::Other && self.page_zoom < 300,
             "zoom-out" => free && self.modal != Modal::Other && self.page_zoom > 50,
             "zoom-reset" => free && self.modal != Modal::Other && self.page_zoom != 100,
-            "reload" | "information" | "export-svg" | "export-png" => {
+            "previous" => free && self.modal == Modal::None && self.previous,
+            "next" => free && self.modal == Modal::None && self.next,
+            "refresh-folder" => free && self.modal == Modal::None && self.has_root,
+            "reload" | "information" | "reveal" | "export-svg" | "export-png" => {
                 free && self.modal == Modal::None && has_document
             }
-            "open" | "settings" | "guide" | "about" | "status-bar" => {
-                free && self.modal == Modal::None
-            }
+            "open" | "open-folder" | "sidebar" | "sort-alpha" | "sort-date" | "settings"
+            | "guide" | "about" | "status-bar" => free && self.modal == Modal::None,
             _ => false,
         }
     }
 }
 pub struct ReaderMenu {
     pub actions: Vec<(&'static str, MenuItem<tauri::Wry>)>,
+    pub navigation_checks: Vec<(&'static str, CheckMenuItem<tauri::Wry>)>,
     pub status: CheckMenuItem<tauri::Wry>,
     pub applied: std::sync::Mutex<Presentation>,
 }
 impl ReaderMenu {
+    pub fn restore_checks(&self, presentation: &Presentation) -> tauri::Result<()> {
+        self.status.set_checked(presentation.status_visible)?;
+        for (id, item) in &self.navigation_checks {
+            item.set_checked(match *id {
+                "sidebar" => presentation.sidebar_visible,
+                "sort-date" => presentation.newest,
+                _ => !presentation.newest,
+            })?;
+        }
+        Ok(())
+    }
     pub fn apply(&self, presentation: &Presentation, has_document: bool) -> tauri::Result<()> {
         // Native check items toggle on activation; restore the applied value
         // until the reader acknowledges the change (even if saving fails).
-        self.status.set_checked(presentation.status_visible)?;
+        self.restore_checks(presentation)?;
+        for (id, item) in &self.navigation_checks {
+            item.set_enabled(presentation.enabled(id, has_document))?;
+        }
         self.status
             .set_enabled(presentation.enabled("status-bar", has_document))?;
         for (id, item) in &self.actions {
