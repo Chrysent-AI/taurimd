@@ -780,6 +780,136 @@ test('scrolled playing media, article, selection and disclosures survive status/
   await originalAudio?.dispose();
 });
 
+test('diagram recoloring and temporary dialogs preserve scrolled playing media selection nodes and local interaction', async ({
+  page,
+}, info) => {
+  await queueMedia(page);
+  const text = `${'Reading before diagrams. '.repeat(100)}\n\n${source}\n\n\`\`\`mermaid\nsequenceDiagram\n Alice->>Bob: Keep reading\n\`\`\`\n\n${'Reading continues. '.repeat(100)}`;
+  await open(page, text);
+  const diagram = page.locator('.diagram');
+  await expect(diagram.locator('svg')).toHaveCount(1);
+  const audio = page.locator('article audio');
+  await expect
+    .poll(() => audio.evaluate((node: HTMLAudioElement) => node.readyState))
+    .toBeGreaterThan(0);
+  await diagram.getByText('Original definition', { exact: true }).click();
+  await page.getByText('Reading disclosure', { exact: true }).click();
+  await diagram
+    .getByRole('button', { name: 'Interact with diagram 1' })
+    .click();
+  await diagram.getByRole('region').press('ArrowRight');
+  const retained = await page.evaluateHandle(() => {
+    const article = document.querySelector('article');
+    const figure = document.querySelector('.diagram');
+    const audio = document.querySelector('audio');
+    const scene = document.querySelector<HTMLElement>('.diagram-scene');
+    const text = document.querySelector('article details')?.lastChild;
+    if (!text) throw new Error('No disclosure source');
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    getSelection()?.removeAllRanges();
+    getSelection()?.addRange(range);
+    document.querySelector('main')?.scrollTo(0, 700);
+    return {
+      article,
+      figure,
+      audio,
+      scene,
+      control: figure?.querySelector('button'),
+      focused: document.activeElement,
+      selected: getSelection()?.toString(),
+      transform: scene?.style.transform,
+      scroll: document.querySelector('main')?.scrollTop,
+      calls: window.readerFixture.calls(),
+      parses: window.readerFixture.parses(),
+    };
+  });
+  await audio.evaluate(async (node: HTMLAudioElement) => {
+    node.loop = true;
+    node.currentTime = 0.1;
+    await node.play();
+  });
+  await expect
+    .poll(() =>
+      audio.evaluate(
+        (node: HTMLAudioElement) => !node.paused && node.currentTime > 0.1,
+      ),
+    )
+    .toBe(true);
+  const previousTime = await audio.evaluate(
+    (node: HTMLAudioElement) => node.currentTime,
+  );
+  await page.evaluate(async () => {
+    const record = window.readerFixture.settings();
+    await window.readerFixture.settingsEvent({
+      ...record,
+      revision: 20,
+      settings: { ...record.settings, mode: 'light', lightPalette: 'nord' },
+    });
+  });
+  await expect(diagram).toHaveAttribute('data-palette', 'nord');
+  for (const surface of [
+    'settings',
+    'guide',
+    'information',
+    'about',
+  ] as const) {
+    await page.evaluate(
+      (surface) => window.readerFixture.menu(surface),
+      surface,
+    );
+    await expect(page.getByRole('dialog')).toBeVisible();
+    await page
+      .getByRole('dialog')
+      .getByRole('button', { name: 'Close', exact: true })
+      .click();
+    await expect(diagram.getByRole('region')).toBeFocused();
+  }
+  expect(
+    await retained.evaluate((before) => ({
+      article: before.article === document.querySelector('article'),
+      figure: before.figure === document.querySelector('.diagram'),
+      control: before.control === document.querySelector('.diagram button'),
+      audio: before.audio === document.querySelector('audio'),
+      scene: before.scene === document.querySelector('.diagram-scene'),
+      selection: before.selected === getSelection()?.toString(),
+      scroll: before.scroll === document.querySelector('main')?.scrollTop,
+      transform:
+        before.transform ===
+        document.querySelector<HTMLElement>('.diagram-scene')?.style.transform,
+      calls:
+        JSON.stringify(before.calls) ===
+        JSON.stringify(window.readerFixture.calls()),
+    })),
+  ).toEqual({
+    article: true,
+    figure: true,
+    control: true,
+    audio: true,
+    scene: true,
+    selection: true,
+    scroll: true,
+    transform: true,
+    calls: true,
+  });
+  await expect(diagram.locator('details')).toHaveAttribute('open', '');
+  await expect
+    .poll(() =>
+      audio.evaluate(
+        (node: HTMLAudioElement, before) =>
+          !node.paused && node.currentTime !== before,
+        previousTime,
+      ),
+    )
+    .toBe(true);
+  await capture(page, info, 'diagram-media-continuity', {
+    sameMountedNodesAndContext: true,
+    source: 'original browser-only fixture',
+    playing: true,
+  });
+  await retained.dispose();
+});
+
 test('hostile URL/style/action surfaces never connect fetch candidates or invoke native commands automatically', async ({
   page,
 }, info) => {

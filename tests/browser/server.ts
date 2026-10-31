@@ -10,6 +10,7 @@ export default async function setup() {
         'marked-footnote',
         'highlight.js/lib/common',
         'js-yaml',
+        'mermaid',
       ],
     },
     server: {
@@ -17,7 +18,7 @@ export default async function setup() {
       port: 0,
       headers: {
         'Content-Security-Policy':
-          "default-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self'; connect-src 'self'; img-src reader-media: http://reader-media.localhost; media-src reader-media: http://reader-media.localhost; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'",
+          "default-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; img-src reader-media: http://reader-media.localhost; media-src reader-media: http://reader-media.localhost; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'",
       },
     },
   });

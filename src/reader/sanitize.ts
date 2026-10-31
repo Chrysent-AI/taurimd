@@ -270,6 +270,27 @@ export function sanitizeReading(
       if (classes.length) assign(span, { class: classes.join(' ') });
     }
   }
+  const diagrams: NonNullable<Reading['diagrams']> = [];
+  if (typeof parsed !== 'string') {
+    for (const definition of parsed.diagrams) {
+      const candidates = [
+        ...fragment.querySelectorAll('pre[data-reader-code]'),
+      ].filter(
+        (node) => node.getAttribute('data-reader-code') === definition.slot,
+      );
+      const pre = candidates[0];
+      if (
+        candidates.length !== 1 ||
+        pre.children.length !== 1 ||
+        pre.firstElementChild?.tagName !== 'CODE' ||
+        pre.textContent !== definition.source
+      )
+        continue;
+      const slot = String(diagrams.length + 1);
+      diagrams.push({ slot, source: definition.source });
+      assign(pre, { 'data-reader-diagram': slot });
+    }
+  }
   let missing = 0;
   for (const [link, href] of links) {
     const attrs = attributes.get(link);
@@ -329,5 +350,6 @@ export function sanitizeReading(
     resources,
     actions,
     fragments: Object.fromEntries(fragments),
+    diagrams,
   };
 }

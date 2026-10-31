@@ -10,12 +10,17 @@ export interface Note {
   number: number;
   occurrences: number;
 }
+export interface DiagramDefinition {
+  slot: string;
+  source: string;
+}
 export interface ParsedMarkdown {
   html: string;
   metadata: Metadata;
   prefix: string;
   notes: Note[];
   codeKeys: string[];
+  diagrams: DiagramDefinition[];
 }
 export interface Reading {
   html: string;
@@ -23,6 +28,7 @@ export interface Reading {
   resources?: Resource[];
   actions?: ReadingAction[];
   fragments?: Record<string, string>;
+  diagrams?: DiagramDefinition[];
 }
 export function escapeCode(text: string) {
   return text
@@ -41,6 +47,7 @@ export function parseMarkdown(source: string): ParsedMarkdown {
   const prefix = `mdr-${nonce}-`;
   const notes = new Map<string, Note>();
   const codeKeys: string[] = [];
+  const diagrams: DiagramDefinition[] = [];
   const parser = new Marked({ gfm: true, breaks: false });
   parser.use(
     markedFootnote({
@@ -93,6 +100,7 @@ export function parseMarkdown(source: string): ParsedMarkdown {
         }
         const key = `${prefix}code-${String(codeKeys.length + 1)}`;
         codeKeys.push(key);
+        if (language === 'mermaid') diagrams.push({ slot: key, source: text });
         return `<pre data-reader-code="${key}"><code>${code}</code></pre>\n`;
       },
     },
@@ -103,5 +111,6 @@ export function parseMarkdown(source: string): ParsedMarkdown {
     prefix,
     notes: [...notes.values()].filter((note) => note.occurrences > 0),
     codeKeys,
+    diagrams,
   };
 }

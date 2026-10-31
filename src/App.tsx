@@ -9,6 +9,7 @@ import {
 import { listen } from '@tauri-apps/api/event';
 import type { ReaderController } from './controller';
 import { preferences } from './native';
+import { mountDiagram, type DiagramView } from './diagrams/view';
 import { mountMedia } from './reader/media';
 import { MetadataCard } from './reader/MetadataCard';
 import type { Rendered } from './types';
@@ -307,6 +308,57 @@ export function App({ controller }: { controller: ReaderController }) {
       host.removeEventListener('auxclick', preventEscape);
     };
   }, [state.displayed, controller]);
+  const diagrams = useRef<DiagramView[]>([]);
+  useEffect(() => {
+    const document = state.displayed;
+    const host = article.current;
+    if (!document || !host) return;
+    const context = `d${String(document.snapshot.documentId)}-r${String(document.snapshot.revision)}`;
+    diagrams.current = (document.diagrams ?? []).flatMap((definition) => {
+      const slot = host.querySelector(
+        `[data-reader-diagram="${definition.slot}"]`,
+      );
+      return slot
+        ? [
+            mountDiagram(
+              slot,
+              definition,
+              context,
+              () =>
+                !composing.current &&
+                !modalOpen.current &&
+                controller.state.phase !== 'committing' &&
+                controller.state.displayed === document,
+            ),
+          ]
+        : [];
+    });
+    return () => {
+      for (const diagram of diagrams.current) diagram.dispose();
+      diagrams.current = [];
+    };
+  }, [state.displayed, controller]);
+  useEffect(() => {
+    const lifetime = { retired: false };
+    const views = diagrams.current;
+    void (async () => {
+      for (const view of views) {
+        if (lifetime.retired) break;
+        await view.palette(palette);
+      }
+    })();
+    return () => {
+      lifetime.retired = true;
+      for (const view of views) view.retire();
+    };
+  }, [state.displayed, palette]);
+  useEffect(() => {
+    for (const diagram of diagrams.current) diagram.fit(settings.fitDiagrams);
+  }, [state.displayed, settings.fitDiagrams]);
+  useEffect(() => {
+    if (surface || composition || state.phase === 'committing')
+      for (const diagram of diagrams.current) diagram.interrupt();
+  }, [surface, composition, state.phase]);
   const document = state.displayed;
   return (
     <div

@@ -1,3 +1,4 @@
+import mermaid from 'mermaid';
 import { createRoot } from 'react-dom/client';
 import {
   clearMocks,
@@ -40,6 +41,40 @@ const settled: Command[] = [];
 const replies = new Map<Command, Reply[]>();
 const pending = new Map<string, (outcome: Outcome) => void>();
 let parses = 0;
+const diagramRenders: { id: string; config: unknown }[] = [];
+let diagramInitializations = 0;
+let diagramBindings = 0;
+let diagramConfig: unknown;
+let holdDiagram = false;
+let releaseDiagram: (() => void) | undefined;
+const initializeDiagram = mermaid.initialize;
+mermaid.initialize = (config) => {
+  diagramInitializations++;
+  diagramConfig = structuredClone(config);
+  initializeDiagram(config);
+};
+const renderDiagram = mermaid.render;
+mermaid.render = async (id, source, container) => {
+  diagramRenders.push({
+    id,
+    config: diagramConfig,
+  });
+  if (holdDiagram) {
+    holdDiagram = false;
+    await new Promise<void>((resolve) => {
+      releaseDiagram = resolve;
+    });
+    releaseDiagram = undefined;
+  }
+  const result = await renderDiagram(id, source, container);
+  return {
+    ...result,
+    bindFunctions: (element) => {
+      diagramBindings++;
+      result.bindFunctions?.(element);
+    },
+  };
+};
 let workerMode: 'normal' | 'fail' | 'hold' = 'normal';
 const activeWorkers = new Set<Worker>();
 class ObservedWorker extends Worker {
@@ -267,6 +302,18 @@ const fixture = {
     return emit('settings_changed', record);
   },
   settled: () => [...settled],
+  diagrams: () => ({
+    renders: structuredClone(diagramRenders),
+    initializations: diagramInitializations,
+    bindings: diagramBindings,
+    held: !!releaseDiagram,
+  }),
+  holdDiagram: () => {
+    holdDiagram = true;
+  },
+  releaseDiagram: () => {
+    releaseDiagram?.();
+  },
   parses: () => parses,
   pending: () => [...pending.keys()],
   listenerCount,
@@ -286,6 +333,7 @@ const fixture = {
   state: () => controller.getState(),
   unmount,
   cleanup() {
+    releaseDiagram?.();
     unmount();
     for (const resolve of pending.values())
       resolve({ error: { code: 'stale', message: 'Browser fixture closed' } });

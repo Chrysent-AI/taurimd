@@ -45,6 +45,19 @@ export function isParsedMarkdown(value: unknown): value is ParsedMarkdown {
       (key: unknown) =>
         typeof key === 'string' && key.startsWith(String(value.prefix)),
     ) &&
+    Array.isArray(value.diagrams) &&
+    value.diagrams.every(
+      (diagram: unknown, index: number) =>
+        record(diagram) &&
+        typeof diagram.slot === 'string' &&
+        value.codeKeys instanceof Array &&
+        value.codeKeys.includes(diagram.slot) &&
+        typeof diagram.source === 'string' &&
+        value.diagrams instanceof Array &&
+        value.diagrams.findIndex(
+          (item: unknown) => record(item) && item.slot === diagram.slot,
+        ) === index,
+    ) &&
     Array.isArray(value.notes) &&
     value.notes.every(
       (note: unknown) =>

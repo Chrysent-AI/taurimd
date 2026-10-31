@@ -307,6 +307,59 @@ article blockquote {
 article input {
   margin-right: 0.5em;
 }
+.diagram {
+  margin: 1.5em 0;
+  min-inline-size: 0;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  padding: 0.6rem;
+  background: var(--page);
+}
+.diagram > :not(details) {
+  font-size: 1rem;
+}
+.diagram figcaption {
+  font-weight: 600;
+}
+.diagram .commands {
+  margin-block: 0.5rem;
+}
+.diagram-instructions {
+  color: var(--muted);
+}
+.diagram-viewport {
+  position: relative;
+  overflow: hidden;
+  inline-size: 100%;
+  block-size: clamp(10rem, 40vh, 24rem);
+  margin-block: 0.5rem;
+  border: 1px solid var(--border);
+  touch-action: pan-y;
+  cursor: grab;
+}
+.diagram-viewport:focus {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+.diagram-scene {
+  position: absolute;
+  transform-origin: 0 0;
+  pointer-events: none;
+  user-select: none;
+}
+.diagram-scene > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none !important;
+}
+.diagram-measure {
+  position: fixed;
+  inset: 0 auto auto -100000px;
+  visibility: hidden;
+  pointer-events: none;
+  font-size: 16px;
+}
 .literal {
   white-space: pre-wrap;
   overflow-wrap: anywhere;

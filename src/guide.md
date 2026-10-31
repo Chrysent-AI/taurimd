@@ -16,7 +16,7 @@ Files are read only: reading, changing appearance and using this guide do not wr
 
 Open **Settings…** from the application menu on macOS or the Settings menu elsewhere (⌘, / Ctrl+,). Changes apply immediately; Close and Escape do not undo them. System appearance follows the OS. Both Light and Dark palette slots offer GitHub Light, GitHub Dark, Solarized Light, Solarized Dark, Dracula, Monokai and Nord, including opposite-toned combinations.
 
-**View** provides page zoom in, out and reset (⌘/Ctrl+=, ⌘/Ctrl+− and ⌘/Ctrl+0). Reading content scales from 50% to 300%, in steps of 10%; controls stay at their normal size. Fit diagrams and sidebar-default preferences are saved for those future features.
+**View** provides page zoom in, out and reset (⌘/Ctrl+=, ⌘/Ctrl+− and ⌘/Ctrl+0). Reading content scales from 50% to 300%, in steps of 10%; controls stay at their normal size. Fit diagrams applies immediately to current diagrams without reparsing; the sidebar default is saved for its future feature.
 
 **View → Show Status Bar** remembers whether the compact bottom summary is visible. It starts visible. Hiding it never hides errors, supported Cancel or preference recovery. **File → Document Information…** shows the displayed file's full selectable location, name, type, read-only and stale state even with status hidden.
 
@@ -37,7 +37,9 @@ Only a real pointer or keyboard activation can send permitted HTTP, HTTPS, mail 
 
 ## Current limits
 
-Folder browsing, sidebar/navigation/outlines, quick open, document Find, Mermaid rendering, diagram export, multiple document windows and OS file associations are not implemented yet. Mermaid fences remain literal code. These features are planned, not supplied by the preferences or this guide.
+Mermaid fences render offline using the bundled engine and the current palette. Use **Interact with diagram** to focus its viewport: arrows pan, +/− zoom, 0 resets to the current fit preference, and Escape returns to Interact without resetting. Tab leaves naturally. Equivalent buttons include local Fit, which does not change the saved preference. Plain wheel scrolls the document; ⌘+wheel on macOS or Ctrl+wheel elsewhere zooms only the diagram under the pointer. **Original definition** is available on success and failure. Each diagram has a 50,000-character and 500-edge limit; failures show escaped local diagnostics and leave other content readable. Diagram layout cannot be interrupted synchronously. Bundled strict-mode Mermaid SVG/CSS is trusted; ordinary document HTML/CSS and native grants retain their separate protections.
+
+Folder browsing, sidebar/navigation/outlines, quick open, document Find, diagram export, multiple document windows and OS file associations are not implemented yet. These features are planned, not supplied by the preferences or this guide.
 
 The intended targets are macOS 14+ Apple Silicon, Windows 11 x64 and Ubuntu 24.04 x86_64 with X11/Wayland. Native menus, IME, assistive technology, restart persistence, real media/CSP transport and platform packaging still require recorded testing on those targets. Browser fixtures and compilation are not native qualification. No signing, public release or complete dependency-notice clearance is claimed.
 

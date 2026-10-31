@@ -151,8 +151,8 @@ export function SettingsDialog({
         Show sidebar by default
       </label>
       <p className="hint">
-        Diagram and sidebar preferences are saved now; they apply when those
-        features are available.
+        Fit updates current diagrams without rerendering them. The sidebar
+        default is saved for its future feature.
       </p>
       {children}
     </>

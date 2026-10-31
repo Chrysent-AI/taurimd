@@ -4,17 +4,18 @@ The npm and Cargo lockfiles pin the actual dependency closure. No dependency sou
 
 ## Bundled frontend
 
-| Package           | Locked version | License selection                               |
-| ----------------- | -------------- | ----------------------------------------------- |
-| React / react-dom | 19.2.6         | MIT                                             |
-| scheduler         | 0.27.0         | MIT                                             |
-| @tauri-apps/api   | 2.12.4         | MIT or Apache-2.0                               |
-| Marked            | 18.0.3         | MIT                                             |
-| marked-footnote   | 1.4.0          | MIT; exact upstream notice retained below       |
-| Highlight.js      | 11.12.0        | BSD-3-Clause                                    |
-| js-yaml           | 4.3.2          | MIT                                             |
-| argparse          | 2.0.1          | Python-2.0; conservative npm production closure |
-| DOMPurify         | 3.4.17         | Apache-2.0 (its offered alternative to MPL-2.0) |
+| Package           | Locked version | License selection                                         |
+| ----------------- | -------------- | --------------------------------------------------------- |
+| React / react-dom | 19.2.6         | MIT                                                       |
+| scheduler         | 0.27.0         | MIT                                                       |
+| @tauri-apps/api   | 2.12.4         | MIT or Apache-2.0                                         |
+| Marked            | 18.0.3         | MIT                                                       |
+| marked-footnote   | 1.4.0          | MIT; exact upstream notice retained below                 |
+| Highlight.js      | 11.12.0        | BSD-3-Clause                                              |
+| js-yaml           | 4.3.2          | MIT                                                       |
+| argparse          | 2.0.1          | Python-2.0; conservative npm production closure           |
+| DOMPurify         | 3.4.17         | Apache-2.0 (its offered alternative to MPL-2.0)           |
+| Mermaid           | 12.2.0         | MIT; exact direct notice in `licenses/mermaid-12.2.0.txt` |
 
 The lock also records MIT-licensed `@types/trusted-types` 2.0.7; types are not executable runtime assets. Installed licenses for these packages were inspected and are collected by the notice generator.
 
@@ -24,6 +25,8 @@ The published `marked-footnote` archive omits a standalone license file. Its reg
 https://raw.githubusercontent.com/bent10/marked-extensions/faab750f00af4788397948286fb8f7fe0c929a7e/license
 
 The existing notice generator reports that missing archive notice; include the preserved exact text in the generated distribution notice before any binary distribution. This is not a license-gap waiver or distribution authorization. Runtime and transitive tarball integrity values are pinned in `package-lock.json`; a normal npm 11.6.2 clean install in an empty, owned manifest/lock context succeeded without bypasses. The production advisory audit reported zero vulnerabilities. The existing thirteen moderate development-only minimatch/lint-chain advisories remain separately tracked; no unrelated toolchain upgrade is included here.
+
+Mermaid is bundled locally for strict-mode inline SVG diagrams. Its generated SVG/CSS is trusted for display and later SVG export; it is not an independently sanitized or resource-free image contract. Only the direct Mermaid dependency was added; its locked production closure includes renderer/layout/math packages, KaTeX font assets and `elkjs` (EPL-2.0). The direct MIT notice is retained exactly in `licenses/mermaid-12.2.0.txt`. Preserve the actual transitive legal texts and bundled font notices, including the EPL layout obligations, during final distribution qualification; this addition does not claim that the application's MIT license covers that closure or that distribution has been cleared. The focused production-only npm advisory audit reported zero vulnerabilities; existing development advisories were not force-fixed.
 
 ## Native and build closure
 
