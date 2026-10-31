@@ -30,7 +30,10 @@
   "dependencies": {
     "@tauri-apps/api": "2.12.4",
     "dompurify": "3.4.17",
+    "highlight.js": "11.12.0",
+    "js-yaml": "4.3.2",
     "marked": "18.0.3",
+    "marked-footnote": "1.4.0",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },
@@ -40,8 +43,9 @@
     "@eslint/js": "9.39.4",
     "@playwright/test": "1.59.1",
     "@tauri-apps/cli": "2.12.3",
-    "@testing-library/react": "16.3.2",
     "@testing-library/dom": "10.4.1",
+    "@testing-library/react": "16.3.2",
+    "@types/js-yaml": "4.0.9",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",

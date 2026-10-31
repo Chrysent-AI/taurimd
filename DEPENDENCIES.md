@@ -10,9 +10,20 @@ The npm and Cargo lockfiles pin the actual dependency closure. No dependency sou
 | scheduler         | 0.27.0         | MIT                                             |
 | @tauri-apps/api   | 2.12.4         | MIT or Apache-2.0                               |
 | Marked            | 18.0.3         | MIT                                             |
+| marked-footnote   | 1.4.0          | MIT; exact upstream notice retained below       |
+| Highlight.js      | 11.12.0        | BSD-3-Clause                                    |
+| js-yaml           | 4.3.2          | MIT                                             |
+| argparse          | 2.0.1          | Python-2.0; conservative npm production closure |
 | DOMPurify         | 3.4.17         | Apache-2.0 (its offered alternative to MPL-2.0) |
 
 The lock also records MIT-licensed `@types/trusted-types` 2.0.7; types are not executable runtime assets. Installed licenses for these packages were inspected and are collected by the notice generator.
+
+The rich-text runtime uses the locally bundled Highlight.js common language set, the published Marked footnote extension, and js-yaml's standard schema. Installed types/source and actual worker integration were checked; no CDN, custom YAML executable tags, upstream patch, or dependency theme injection is used. js-yaml's ESM browser entry does not import its CLI's argparse; argparse nevertheless remains in the production lock/notice inventory. Its supplied Python-2.0 notice permits unmodified redistribution with the notice retained. Preserve Highlight.js's BSD copyright/disclaimer/non-endorsement terms and js-yaml's MIT notice. The added `@types/js-yaml` 4.0.9 is MIT, development/type-only.
+
+The published `marked-footnote` archive omits a standalone license file. Its registry `gitHead` is `faab750f00af4788397948286fb8f7fe0c929a7e`. The complete exact upstream lowercase `license` text is preserved in `licenses/marked-footnote-1.4.0.txt`, fetched from:
+https://raw.githubusercontent.com/bent10/marked-extensions/faab750f00af4788397948286fb8f7fe0c929a7e/license
+
+The existing notice generator reports that missing archive notice; include the preserved exact text in the generated distribution notice before any binary distribution. This is not a license-gap waiver or distribution authorization. Runtime and transitive tarball integrity values are pinned in `package-lock.json`; a normal npm 11.6.2 clean install in an empty, owned manifest/lock context succeeded without bypasses. The production advisory audit reported zero vulnerabilities. The existing thirteen moderate development-only minimatch/lint-chain advisories remain separately tracked; no unrelated toolchain upgrade is included here.
 
 ## Native and build closure
 

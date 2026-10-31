@@ -14,5 +14,5 @@ window.renderDocument = async (source, format) => {
   article.replaceChildren();
   literal.textContent = '';
   if (format === 'text') literal.textContent = source;
-  else article.innerHTML = await parseInWorker(source).result;
+  else article.innerHTML = (await parseInWorker(source).result).html;
 };

@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { ParseJob } from '../src/reader/worker';
+import type { Reading } from '../src/reader/parse';
 import { ReaderController } from '../src/controller';
 import type { NativeReader, Selection, Snapshot } from '../src/types';
 function snapshot(name = 'first.md', revision = 1): Snapshot {
@@ -31,10 +33,12 @@ function setup() {
     commit: vi.fn<NativeReader['commit']>().mockResolvedValue(),
     cancel: vi.fn<NativeReader['cancel']>().mockResolvedValue(),
   };
-  const parse = vi.fn(() => ({
-    result: Promise.resolve('<h1>Local</h1>'),
-    cancel: vi.fn(),
-  }));
+  const parse = vi.fn(
+    (): ParseJob => ({
+      result: Promise.resolve({ html: '<h1>Local</h1>', metadata: null }),
+      cancel: vi.fn(),
+    }),
+  );
   return { bridge, parse, controller: new ReaderController(bridge, parse) };
 }
 describe('production reader state and native commit boundary', () => {
@@ -98,7 +102,7 @@ describe('production reader state and native commit boundary', () => {
   });
   it('terminates parsing on cancellation and prevents late publication', async () => {
     const { bridge, controller, parse } = setup();
-    const result = deferred<string>();
+    const result = deferred<Reading>();
     const cancel = vi.fn(() => {
       result.reject(new Error('Cancelled'));
     });

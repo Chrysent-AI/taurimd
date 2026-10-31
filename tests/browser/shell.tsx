@@ -104,9 +104,9 @@ mockIPC(
   { shouldMockEvents: true },
 );
 
-const controller = new ReaderController(native, (source) => {
+const controller = new ReaderController(native, (source, snapshot) => {
   parses += 1;
-  return parseInWorker(source);
+  return parseInWorker(source, snapshot);
 });
 const container = document.getElementById('root');
 if (!container) throw new Error('Fixture root missing');

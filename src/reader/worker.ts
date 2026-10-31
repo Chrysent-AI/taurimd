@@ -1,26 +1,31 @@
+import { isParsedMarkdown } from './protocol';
+import type { Reading } from './parse';
+import type { Snapshot } from '../types';
 import { sanitizeReading } from './sanitize';
 export interface ParseJob {
-  result: Promise<string>;
+  result: Promise<Reading>;
   cancel(): void;
 }
-export function parseInWorker(source: string): ParseJob {
+export function parseInWorker(source: string, snapshot?: Snapshot): ParseJob {
   const worker = new Worker(new URL('./parse.worker.ts', import.meta.url), {
     type: 'module',
   });
   let rejectJob: (reason: Error) => void = () => {};
-  const result = new Promise<string>((resolve, reject) => {
+  const result = new Promise<Reading>((resolve, reject) => {
     rejectJob = reject;
     worker.onmessage = (event: MessageEvent<unknown>) => {
       worker.terminate();
       const data = event.data;
-      if (
-        typeof data === 'object' &&
-        data !== null &&
-        'html' in data &&
-        typeof data.html === 'string'
-      ) {
+      if (isParsedMarkdown(data)) {
         try {
-          resolve(sanitizeReading(data.html));
+          resolve(
+            sanitizeReading(
+              data,
+              snapshot
+                ? `d${String(snapshot.documentId)}-r${String(snapshot.revision)}`
+                : undefined,
+            ),
+          );
         } catch {
           reject(new Error('Content sanitization failed.'));
         }

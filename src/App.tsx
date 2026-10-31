@@ -8,6 +8,8 @@ import {
 import { listen } from '@tauri-apps/api/event';
 import type { ReaderController } from './controller';
 import { preferences } from './native';
+import { MetadataCard } from './reader/MetadataCard';
+import type { Rendered } from './types';
 import { SettingsController } from './settings/model';
 import { SettingsDialog, SettingsFeedback } from './settings/SettingsDialog';
 export function App({ controller }: { controller: ReaderController }) {
@@ -58,6 +60,10 @@ export function App({ controller }: { controller: ReaderController }) {
   const composing = useRef(false);
   const lastDocument = useRef<number | null>(null);
   const [menuError, setMenuError] = useState('');
+  const [linkFeedback, setLinkFeedback] = useState<{
+    document: Rendered;
+    message: string;
+  } | null>(null);
   const busy = ['loading', 'parsing', 'committing'].includes(state.phase);
   useEffect(() => {
     let disposed = false;
@@ -102,6 +108,44 @@ export function App({ controller }: { controller: ReaderController }) {
       article.current?.focus();
       article.current?.scrollIntoView({ block: 'start' });
     }
+  }, [state.displayed]);
+  useEffect(() => {
+    const document = state.displayed;
+    const host = article.current;
+    if (!document || !host) return;
+    // Native anchors already synthesize click on Enter; one delegated listener
+    // handles pointer and keyboard activation without intercepting reader keys.
+    const activate = (event: MouseEvent) => {
+      const link =
+        event.target instanceof Element ? event.target.closest('a') : null;
+      if (!link || !host.contains(link)) return;
+      event.preventDefault();
+      if (
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey
+      )
+        return;
+      const href = link.getAttribute('href');
+      if (!href?.startsWith('#')) return;
+      const target = window.document.getElementById(href.slice(1));
+      if (!target || !host.contains(target)) {
+        setLinkFeedback({
+          document,
+          message: 'Section or footnote not found in this document.',
+        });
+        return;
+      }
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ block: 'start' });
+      setLinkFeedback(null);
+    };
+    host.addEventListener('click', activate);
+    return () => {
+      host.removeEventListener('click', activate);
+    };
   }, [state.displayed]);
   const document = state.displayed;
   return (
@@ -216,17 +260,27 @@ export function App({ controller }: { controller: ReaderController }) {
           <>
             {document.snapshot.format === 'markdown' && (
               <p className="reading-note">
-                Links and media are inactive. Metadata, syntax colors, footnotes
-                and diagrams are not yet enhanced; their source remains
-                readable.
+                Non-fragment links and media are inactive. Diagrams remain
+                literal code until diagram rendering is available.
               </p>
             )}
+            <p
+              className="link-feedback"
+              aria-live="polite"
+              aria-label="Reading link status"
+            >
+              {linkFeedback?.document === document ? linkFeedback.message : ''}
+            </p>
             <article
               ref={article}
               data-zoom={settings.pageZoom}
               tabIndex={-1}
               aria-label={document.snapshot.name}
             >
+              <MetadataCard
+                key={`${String(document.snapshot.documentId)}-${String(document.snapshot.revision)}`}
+                metadata={document.metadata}
+              />
               {document.snapshot.source.length === 0 ? (
                 <p className="empty">This file is empty.</p>
               ) : document.html === null ? (

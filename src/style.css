@@ -246,6 +246,81 @@ article input {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+article .metadata {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 1em;
+  margin-block: 1em 2em;
+}
+.metadata dl,
+.metadata ul {
+  margin-block: 0.5em;
+}
+.metadata dt {
+  font-weight: 600;
+}
+.metadata dd {
+  margin-inline: 1em 0;
+  white-space: pre-wrap;
+}
+.metadata-diagnostic {
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+.metadata summary {
+  cursor: pointer;
+  text-decoration: underline;
+}
+.metadata pre {
+  max-block-size: 16em;
+  white-space: pre;
+}
+article [tabindex='-1']:focus {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+article code [class*='hljs-'] {
+  color: var(--text);
+}
+article code .hljs-comment,
+article code .hljs-quote {
+  color: var(--muted);
+  font-style: italic;
+}
+article code .hljs-keyword,
+article code .hljs-type,
+article code .hljs-built_in,
+article code .hljs-title,
+article code .hljs-attr,
+article code .hljs-attribute,
+article code .hljs-selector-tag,
+article code .hljs-section {
+  color: var(--link);
+}
+article code .hljs-string,
+article code .hljs-regexp,
+article code .hljs-symbol,
+article code .hljs-addition,
+article code .hljs-deletion {
+  color: var(--error);
+}
+article code .hljs-number,
+article code .hljs-literal,
+article code .hljs-meta {
+  color: var(--focus);
+}
+article code .hljs-emphasis {
+  font-style: italic;
+}
+article code .hljs-strong {
+  font-weight: bold;
+}
+.link-feedback {
+  max-width: 76ch;
+  margin-inline: auto;
+  color: var(--muted);
+}
 dialog {
   width: min(32rem, calc(100% - 2rem));
   max-height: calc(100% - 2rem);

@@ -1,7 +1,7 @@
 import { parseMarkdown } from './parse';
 self.onmessage = (event: MessageEvent<string>) => {
   try {
-    self.postMessage({ html: parseMarkdown(event.data) });
+    self.postMessage(parseMarkdown(event.data));
   } catch {
     self.postMessage({
       error:

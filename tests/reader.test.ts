@@ -9,7 +9,7 @@ describe('production Markdown and sanitizer boundary', () => {
       ),
     );
     const host = document.createElement('div');
-    host.innerHTML = safe;
+    host.innerHTML = safe.html;
     expect(host.querySelector('h1')?.textContent).toBe('Local reader');
     expect(host.querySelector('td')?.textContent).toBe('A');
     expect(host.querySelector('input')?.disabled).toBe(true);
@@ -29,7 +29,7 @@ describe('production Markdown and sanitizer boundary', () => {
       <input type="text" value="not a task">`;
     const safe = sanitizeReading(parseMarkdown(hostile.replace(/^ {6}/gm, '')));
     const host = document.createElement('div');
-    host.innerHTML = safe;
+    host.innerHTML = safe.html;
     expect(
       host.querySelector(
         'script,iframe,object,form,button,meta,style,img,video,source,svg,input',

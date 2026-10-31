@@ -1,3 +1,4 @@
+import type { Metadata } from './reader/frontmatter';
 export interface Snapshot {
   documentId: number;
   revision: number;
@@ -23,6 +24,7 @@ export interface NativeReader {
 export interface Rendered {
   snapshot: Snapshot;
   html: string | null;
+  metadata: Metadata;
 }
 export interface ReaderState {
   displayed: Rendered | null;

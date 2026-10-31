@@ -1,3 +1,4 @@
+import type { Metadata } from './reader/frontmatter';
 import type { NativeReader, ReaderState, Snapshot } from './types';
 import type { ParseJob } from './reader/worker';
 export class ReaderController {
@@ -12,7 +13,7 @@ export class ReaderController {
   private listeners = new Set<() => void>();
   constructor(
     private bridge: NativeReader,
-    private parse: (source: string) => ParseJob,
+    private parse: (source: string, snapshot: Snapshot) => ParseJob,
   ) {}
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
@@ -64,13 +65,16 @@ export class ReaderController {
       }
       if (request !== this.sequence) return;
       let html: string | null = null;
+      let metadata: Metadata = null;
       if (snapshot.format === 'markdown') {
         this.publish({
           phase: 'parsing',
           message: `Formatting ${snapshot.name}…`,
         });
-        this.job = this.parse(snapshot.source);
-        html = await this.job.result;
+        this.job = this.parse(snapshot.source, snapshot);
+        const reading = await this.job.result;
+        html = reading.html;
+        metadata = reading.metadata;
         if (request !== this.sequence) return;
         this.job = null;
       }
@@ -80,7 +84,7 @@ export class ReaderController {
       });
       await this.bridge.commit(request);
       this.publish({
-        displayed: { snapshot, html },
+        displayed: { snapshot, html, metadata },
         phase: 'ready',
         stale: false,
         message: `${action === 'reload' ? 'Reloaded' : 'Opened'} ${snapshot.name}${snapshot.source.length === 0 ? ' — empty file' : ''}.`,

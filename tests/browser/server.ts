@@ -2,6 +2,16 @@ import { createServer } from 'vite';
 export default async function setup() {
   const server = await createServer({
     configFile: false,
+    // Pre-optimize the worker's runtime imports so its first parse cannot
+    // trigger a dev-server reload that discards the queued native double.
+    optimizeDeps: {
+      include: [
+        'marked',
+        'marked-footnote',
+        'highlight.js/lib/common',
+        'js-yaml',
+      ],
+    },
     server: {
       host: '127.0.0.1',
       port: 0,
