@@ -249,19 +249,9 @@ test('actual rich worker output, keyboard fragment/footnote round trips, hostile
   expect(source).toBe(rich);
   expect(await page.evaluate(() => 'compromised' in window)).toBe(false);
   expect(external).toEqual([]);
-  // Chromium reports its rejection while parsing the intentionally hostile
-  // author's style attribute in DOMPurify's inert document. Assert that exact
-  // blocked payload, rather than masking CSP diagnostics or relaxing CSP.
-  const blockedAuthorStyle =
-    "Applying inline style violates the following Content Security Policy directive 'style-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-J1S1jbdWj2lXX16T6gCMhdlMUmRXBXo6Nu0KAAPVcgs='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present. The action has been blocked.";
-  expect(
-    createHash('sha256')
-      .update('background:url(https://invalid.example/css)')
-      .digest('base64'),
-  ).toBe('J1S1jbdWj2lXX16T6gCMhdlMUmRXBXo6Nu0KAAPVcgs=');
-  expect(violations).toEqual(
-    info.project.name === 'chromium' ? [blockedAuthorStyle] : [],
-  );
+  // CSP allows inline styles for trusted Mermaid output; ordinary author styles
+  // are still stripped above, so this fixture should emit no CSP violations.
+  expect(violations).toEqual([]);
   expect(
     (await page.evaluate(() => window.readerFixture.calls())).map(
       (call) => call.command,
