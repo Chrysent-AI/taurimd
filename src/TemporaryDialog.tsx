@@ -8,6 +8,9 @@ export function TemporaryDialog({
   fallback,
   children,
   initialControl = false,
+  restoreFocus = true,
+  footer,
+  dismissDisabled = false,
 }: {
   title: string;
   close: () => void;
@@ -16,6 +19,9 @@ export function TemporaryDialog({
   fallback: () => void;
   children: ReactNode;
   initialControl?: boolean;
+  restoreFocus?: boolean;
+  footer?: ReactNode;
+  dismissDisabled?: boolean;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -38,6 +44,7 @@ export function TemporaryDialog({
     else heading.current?.focus({ preventScroll: true });
     return () => {
       element?.close();
+      if (!restoreFocus) return;
       if (origin?.isConnected) origin.focus({ preventScroll: true });
       else fallback();
       if (ranges.length) {
@@ -49,14 +56,24 @@ export function TemporaryDialog({
         }
       }
     };
-  }, [origin, fallback, initialControl]);
+  }, [origin, fallback, initialControl, restoreFocus]);
+  useEffect(() => {
+    if (
+      dialog.current?.open &&
+      !dialog.current.contains(document.activeElement)
+    )
+      (
+        dialog.current.querySelector<HTMLElement>('button:not(:disabled)') ??
+        heading.current
+      )?.focus({ preventScroll: true });
+  });
   return (
     <dialog
       ref={dialog}
       aria-labelledby="temporary-title"
       onCancel={(event) => {
         event.preventDefault();
-        if (!composing.current) close();
+        if (!composing.current && !dismissDisabled) close();
       }}
       onKeyDown={(event) => {
         if (composing.current || event.nativeEvent.isComposing) {
@@ -87,7 +104,7 @@ export function TemporaryDialog({
         {title}
       </h2>
       {children}
-      <button onClick={close}>Close</button>
+      {footer === undefined ? <button onClick={close}>Close</button> : footer}
     </dialog>
   );
 }

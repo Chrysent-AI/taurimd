@@ -40,6 +40,12 @@ export function trustedConfig(colors: Record<string, string>): MermaidConfig {
     startOnLoad: false,
     securityLevel: 'strict',
     htmlLabels: false,
+    // Journey has a separate HTML-label switch; use its public SVG text mode
+    // so original vendor images remain canvas-readable without rewriting them.
+    journey: { textPlacement: 'tspan' },
+    // Journey's section classes also color its text, and task text has a
+    // presentation fill. Emit a more specific palette rule in vendor SVG.
+    themeCSS: `text.journey-section, text.task { fill: ${colors.text}; }`,
     suppressErrorRendering: true,
     maxTextSize: 50_000,
     maxEdges: 500,
@@ -73,6 +79,7 @@ export function trustedConfig(colors: Record<string, string>): MermaidConfig {
       'startOnLoad',
       'securityLevel',
       'htmlLabels',
+      'textPlacement',
       'suppressErrorRendering',
       'maxTextSize',
       'maxEdges',

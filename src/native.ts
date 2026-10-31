@@ -12,6 +12,34 @@ import type {
   Selection,
   Snapshot,
 } from './types';
+import type { ExportMode } from './diagrams/export';
+import type { Snapshot as ExportSnapshot } from './types';
+export interface ExportBinding {
+  exportId: number;
+  documentId: number;
+  revision: number;
+  mode: ExportMode;
+}
+export type ExportOutcome =
+  | { status: 'cancelled' }
+  | { status: 'committed'; location: string; count: number };
+export const diagramExport = {
+  begin: (document: ExportSnapshot, mode: ExportMode, ordinals: number[]) =>
+    invoke<number>('begin_export', {
+      request: {
+        documentId: document.documentId,
+        revision: document.revision,
+        mode,
+        ordinals,
+      },
+    }),
+  append: (binding: ExportBinding, ordinal: number, bytes: Uint8Array) =>
+    invoke<null>('append_export_image', { image: { binding, ordinal, bytes } }),
+  finish: (binding: ExportBinding) =>
+    invoke<ExportOutcome>('finish_export', { binding }),
+  cancel: (binding: ExportBinding) =>
+    invoke<null>('cancel_export', { binding }),
+};
 export const preferences: SettingsBridge = {
   get: () => invoke<SettingsRecord>('get_settings'),
   update: (expectedRevision, patch) =>

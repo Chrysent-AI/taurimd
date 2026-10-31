@@ -1,4 +1,5 @@
 mod documents;
+mod export;
 mod links;
 mod media;
 mod presentation;
@@ -296,6 +297,132 @@ async fn activate_link(
 }
 
 #[tauri::command]
+async fn begin_export(window: WebviewWindow, request: export::Begin) -> Result<u32, AppError> {
+    let job = export::Job::enroll(
+        &mut *session(&window, &window.state::<ReaderState>())?,
+        window.label(),
+        request,
+    )?;
+    let id = job.id;
+    let handle = window.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let result = handle
+            .path()
+            .app_cache_dir()
+            .map_err(|_| AppError::new("io", "Export cache is unavailable."))
+            .and_then(|root| job.prepare(&root.join("diagram-exports")));
+        if result.is_err() {
+            let _ = job.retire();
+            job.reap()?;
+        }
+        result
+    })
+    .await
+    .map_err(|_| AppError::new("resourceFailure", "Export preparation was interrupted."))?;
+    if result.is_err() {
+        release_export(&window, id);
+    }
+    result.map(|()| id)
+}
+fn release_export(window: &WebviewWindow, id: u32) {
+    if let Ok(mut session) = session(window, &window.state::<ReaderState>()) {
+        if session.export.as_ref().is_some_and(|job| job.id == id) {
+            session.export = None;
+        }
+    }
+}
+#[tauri::command]
+async fn append_export_image(window: WebviewWindow, image: export::Image) -> Result<(), AppError> {
+    let job = export::Job::append_registration(
+        &*session(&window, &window.state::<ReaderState>())?,
+        window.label(),
+        image.binding.export_id,
+    )?;
+    tauri::async_runtime::spawn_blocking(move || job.append_bound(&image))
+        .await
+        .map_err(|_| {
+            AppError::new(
+                "resourceFailure",
+                "Export image preparation was interrupted.",
+            )
+        })?
+}
+#[tauri::command]
+async fn cancel_export(window: WebviewWindow, binding: export::Binding) -> Result<(), AppError> {
+    let job = {
+        let state = window.state::<ReaderState>();
+        let session = session(&window, &state)?;
+        let job = export::Job::lookup(&session, window.label(), &binding)?;
+        job.retire()?;
+        job
+    };
+    let id = job.id;
+    let result = tauri::async_runtime::spawn_blocking(move || job.reap())
+        .await
+        .map_err(|_| AppError::new("resourceFailure", "Export cancellation was interrupted."))?;
+    release_export(&window, id);
+    result
+}
+#[tauri::command]
+async fn finish_export(
+    window: WebviewWindow,
+    binding: export::Binding,
+) -> Result<export::Outcome, AppError> {
+    let job = export::Job::lookup(
+        &*session(&window, &window.state::<ReaderState>())?,
+        window.label(),
+        &binding,
+    )?;
+    let id = job.id;
+    let handle = window.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        job.finish(
+            || {
+                handle
+                    .dialog()
+                    .file()
+                    .set_parent(&handle)
+                    .set_title("Export diagrams")
+                    .add_filter("ZIP archive", &["zip"])
+                    .set_file_name("diagrams.zip")
+                    .blocking_save_file()
+                    .map(|path| {
+                        path.into_path().map_err(|_| {
+                            AppError::new("unsupported", "Choose a local ZIP destination.")
+                        })
+                    })
+                    .transpose()
+            },
+            |path| {
+                handle
+                    .dialog()
+                    .message(format!(
+                        "Replace the existing ZIP archive {}?",
+                        path.display()
+                    ))
+                    .title("Replace ZIP archive?")
+                    .parent(&handle)
+                    .buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancelCustom(
+                        "Replace".into(),
+                        "Cancel".into(),
+                    ))
+                    .blocking_show()
+            },
+            || job.commit_start(&*session(&handle, &handle.state::<ReaderState>())?),
+        )
+    })
+    .await
+    .map_err(|_| {
+        AppError::new(
+            "resourceFailure",
+            "Export finishing was interrupted; check the selected destination.",
+        )
+    })?;
+    release_export(&window, id);
+    result
+}
+
+#[tauri::command]
 fn get_settings(
     window: WebviewWindow,
     store: State<'_, SettingsStore>,
@@ -376,10 +503,21 @@ pub fn run() {
             update_settings,
             resolve_media,
             activate_link,
-            present_reader
+            present_reader,
+            begin_export,
+            append_export_image,
+            finish_export,
+            cancel_export
         ])
         .setup(|app| {
             app.manage(SettingsStore::load(app.path().app_config_dir().ok()));
+            if let Ok(cache) = app.path().app_cache_dir() {
+                tauri::async_runtime::spawn_blocking(move || {
+                    if let Err(error) = export::sweep(&cache.join("diagram-exports")) {
+                        eprintln!("Export cache recovery: {}", error.message);
+                    }
+                });
+            }
             let settings =
                 MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
             let zoom_in = MenuItem::with_id(
@@ -432,6 +570,22 @@ pub fn run() {
                     &status,
                 ],
             )?;
+            let export_svg = MenuItem::with_id(
+                app,
+                "export-svg",
+                "Export diagrams as SVG ZIP…",
+                false,
+                None::<&str>,
+            )?;
+            let export_png = MenuItem::with_id(
+                app,
+                "export-png",
+                "Export diagrams as PNG ZIP…",
+                false,
+                None::<&str>,
+            )?;
+            let diagram_menu =
+                Submenu::with_items(app, "Diagram", true, &[&export_svg, &export_png])?;
             let open = MenuItem::with_id(app, "open", "Open File…", true, Some("CmdOrCtrl+O"))?;
             let reload = MenuItem::with_id(app, "reload", "Reload", false, Some("CmdOrCtrl+R"))?;
             let file = Submenu::with_items(
@@ -462,6 +616,7 @@ pub fn run() {
                     )?,
                     &file,
                     &view,
+                    &diagram_menu,
                     &Submenu::with_items(app, "Help", true, &[&guide])?,
                 ],
             )?;
@@ -471,6 +626,7 @@ pub fn run() {
                 &[
                     &file,
                     &view,
+                    &diagram_menu,
                     &Submenu::with_items(app, "Settings", true, &[&settings])?,
                     &Submenu::with_items(app, "Help", true, &[&guide, &about])?,
                 ],
@@ -478,6 +634,8 @@ pub fn run() {
             app.set_menu(menu)?;
             app.manage(ReaderMenu {
                 actions: vec![
+                    ("export-svg", export_svg),
+                    ("export-png", export_png),
                     ("open", open),
                     ("reload", reload),
                     ("information", information),

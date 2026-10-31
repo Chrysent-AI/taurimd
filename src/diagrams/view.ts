@@ -61,6 +61,8 @@ export function mountDiagram(
   let y = 0;
   let disposed = false;
   let generation = 0;
+  let readiness: 'pending' | 'ready' | 'failed' = 'pending';
+  let published = 0;
   let palette: Palette | undefined;
   let drag: { id: number; x: number; y: number } | undefined;
   const events = new AbortController();
@@ -264,8 +266,35 @@ export function mountDiagram(
     get image() {
       return image;
     },
+    exportState(requested: Palette) {
+      if (
+        disposed ||
+        readiness === 'pending' ||
+        palette !== requested ||
+        published !== generation
+      )
+        return { status: 'pending' as const };
+      if (readiness === 'failed' || !image)
+        return { status: 'failed' as const, ordinal: Number(definition.slot) };
+      const fonts = [...scene.querySelectorAll('text, tspan')]
+        .map((text) => {
+          const style = getComputedStyle(text);
+          return {
+            font: `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`,
+            text: text.textContent,
+          };
+        })
+        .filter((request) => request.text.length > 0);
+      return {
+        status: 'ready' as const,
+        ordinal: Number(definition.slot),
+        image,
+        fonts,
+      };
+    },
     interrupt: release,
     retire() {
+      readiness = 'pending';
       generation++;
       palette = undefined;
     },
@@ -278,6 +307,7 @@ export function mountDiagram(
     async palette(value: Palette) {
       if (palette === value || disposed) return;
       palette = value;
+      readiness = 'pending';
       const revision = ++generation;
       const current = () =>
         !disposed && revision === generation && figure.isConnected;
@@ -291,6 +321,8 @@ export function mountDiagram(
         );
         if (!current() || !result) return;
         image = result;
+        published = revision;
+        readiness = 'ready';
         scene.innerHTML = result.svg;
         const svg = scene.querySelector('svg');
         svg?.setAttribute('role', 'img');
@@ -304,6 +336,8 @@ export function mountDiagram(
         paint();
       } catch (error) {
         if (!current()) return;
+        readiness = 'failed';
+        published = revision;
         image = undefined;
         scene.replaceChildren();
         enable(false);

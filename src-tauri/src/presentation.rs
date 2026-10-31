@@ -57,7 +57,9 @@ impl Presentation {
             "zoom-in" => free && self.modal != Modal::Other && self.page_zoom < 300,
             "zoom-out" => free && self.modal != Modal::Other && self.page_zoom > 50,
             "zoom-reset" => free && self.modal != Modal::Other && self.page_zoom != 100,
-            "reload" | "information" => free && self.modal == Modal::None && has_document,
+            "reload" | "information" | "export-svg" | "export-png" => {
+                free && self.modal == Modal::None && has_document
+            }
             "open" | "settings" | "guide" | "about" | "status-bar" => {
                 free && self.modal == Modal::None
             }

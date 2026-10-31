@@ -74,6 +74,8 @@ describe('generated Mermaid associations through the production worker boundary'
       startOnLoad: false,
       securityLevel: 'strict',
       htmlLabels: false,
+      journey: { textPlacement: 'tspan' },
+      themeCSS: 'text.journey-section, text.task { fill: #111111; }',
       suppressErrorRendering: true,
       maxTextSize: 50_000,
       maxEdges: 500,
@@ -82,6 +84,7 @@ describe('generated Mermaid associations through the production worker boundary'
       expect.arrayContaining([
         'securityLevel',
         'htmlLabels',
+        'textPlacement',
         'themeVariables',
         'themeCSS',
         'fontFamily',
@@ -90,5 +93,8 @@ describe('generated Mermaid associations through the production worker boundary'
       ]),
     );
     expect(config.secure?.some((key) => key.includes('.'))).toBe(false);
+    expect(trustedConfig({ text: '#eceff4' }).themeCSS).toBe(
+      'text.journey-section, text.task { fill: #eceff4; }',
+    );
   });
 });

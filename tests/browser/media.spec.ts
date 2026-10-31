@@ -902,6 +902,80 @@ test('diagram recoloring and temporary dialogs preserve scrolled playing media s
       ),
     )
     .toBe(true);
+  for (const [mode, result] of [
+    ['svg', { value: { status: 'cancelled' } }],
+    ['png', { error: { code: 'io', message: 'Injected destination failure' } }],
+    [
+      'png',
+      {
+        value: {
+          status: 'committed',
+          count: 1,
+          location: 'selected/media-diagram.zip',
+        },
+      },
+    ],
+  ] as const) {
+    await page.evaluate(
+      ({ mode, result }) => {
+        window.readerFixture.enqueue('finish_export', result);
+        return window.readerFixture.menu(
+          mode === 'svg' ? 'export-svg' : 'export-png',
+        );
+      },
+      { mode, result },
+    );
+    await expect(
+      page.getByText(
+        'error' in result
+          ? 'Export stopped: Injected destination failure'
+          : result.value.status === 'committed'
+            ? 'Exported 1 PNG diagrams to selected/media-diagram.zip.'
+            : 'Export cancelled.',
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expect(diagram.getByRole('region')).toBeFocused();
+    expect(
+      await retained.evaluate((before) => ({
+        article: before.article === document.querySelector('article'),
+        figure: before.figure === document.querySelector('.diagram'),
+        audio: before.audio === document.querySelector('audio'),
+        control: before.control === document.querySelector('.diagram button'),
+        selected: before.selected === getSelection()?.toString(),
+        scroll: before.scroll === document.querySelector('main')?.scrollTop,
+        transform:
+          before.transform ===
+          document.querySelector<HTMLElement>('.diagram-scene')?.style
+            .transform,
+        parses: before.parses === window.readerFixture.parses(),
+        readingCalls:
+          JSON.stringify(before.calls) ===
+          JSON.stringify(
+            window.readerFixture
+              .calls()
+              .filter(
+                (call) =>
+                  !call.command.endsWith('_export') &&
+                  call.command !== 'append_export_image',
+              ),
+          ),
+      })),
+    ).toEqual({
+      article: true,
+      figure: true,
+      audio: true,
+      control: true,
+      selected: true,
+      scroll: true,
+      transform: true,
+      parses: true,
+      readingCalls: true,
+    });
+    expect(await audio.evaluate((node: HTMLAudioElement) => !node.paused)).toBe(
+      true,
+    );
+  }
   await capture(page, info, 'diagram-media-continuity', {
     sameMountedNodesAndContext: true,
     source: 'original browser-only fixture',

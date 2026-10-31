@@ -14,6 +14,10 @@
     "allow-update-settings",
     "allow-resolve-media",
     "allow-activate-link",
-    "allow-present-reader"
+    "allow-present-reader",
+    "allow-begin-export",
+    "allow-append-export-image",
+    "allow-finish-export",
+    "allow-cancel-export"
   ]
 }

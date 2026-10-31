@@ -12,6 +12,10 @@ fn main() {
             "resolve_media",
             "activate_link",
             "present_reader",
+            "begin_export",
+            "append_export_image",
+            "finish_export",
+            "cancel_export",
         ]),
     ))
     .expect("native build configuration failed");

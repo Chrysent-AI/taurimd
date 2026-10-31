@@ -29,7 +29,11 @@ type Command =
   | 'update_settings'
   | 'resolve_media'
   | 'present_reader'
-  | 'activate_link';
+  | 'activate_link'
+  | 'begin_export'
+  | 'append_export_image'
+  | 'finish_export'
+  | 'cancel_export';
 type Outcome = { value: unknown } | { error: AppError };
 type Reply = Outcome | { hold: string };
 interface Call {
@@ -109,6 +113,7 @@ class ObservedWorker extends Worker {
   }
 }
 window.Worker = ObservedWorker;
+let exportId = 0;
 let presentation: (MenuPresentation & { sequence: number }) | null = null;
 let settings: SettingsRecord = (JSON.parse(
   sessionStorage.getItem('mock-preferences') ?? 'null',
@@ -144,6 +149,10 @@ mockIPC(
         'resolve_media',
         'activate_link',
         'present_reader',
+        'begin_export',
+        'append_export_image',
+        'finish_export',
+        'cancel_export',
       ].includes(command)
     )
       throw new Error(`Unexpected fixture command: ${command}`);
@@ -158,6 +167,13 @@ mockIPC(
         if (!presentation || next.sequence > presentation.sequence)
           presentation = structuredClone(next);
       };
+      if (!reply && name === 'begin_export') return ++exportId;
+      if (
+        !reply &&
+        (name === 'append_export_image' || name === 'cancel_export')
+      )
+        return null;
+      if (!reply && name === 'finish_export') return { status: 'cancelled' };
       if (!reply && name === 'present_reader') {
         applyPresentation();
         return null;
@@ -328,7 +344,9 @@ const fixture = {
       | 'status-bar'
       | 'guide'
       | 'information'
-      | 'about',
+      | 'about'
+      | 'export-svg'
+      | 'export-png',
   ) => emit('menu_action', action),
   state: () => controller.getState(),
   unmount,

@@ -79,7 +79,7 @@ pub struct GrantedDocument {
 }
 
 #[cfg(windows)]
-fn validate_windows_path(path: &Path) -> Result<(), AppError> {
+pub(crate) fn validate_windows_path(path: &Path) -> Result<(), AppError> {
     use std::{
         ffi::OsStr,
         os::windows::ffi::OsStrExt,
@@ -203,6 +203,7 @@ pub fn read_document(
 
 #[derive(Default)]
 pub struct Session {
+    pub(crate) export: Option<Arc<crate::export::Job>>,
     latest: u32,
     cancel: Arc<AtomicBool>,
     pending: Option<GrantedDocument>,
@@ -215,6 +216,7 @@ impl Session {
         if request <= self.latest {
             return Err(Self::stale());
         }
+        self.retire_export()?;
         self.cancel.store(true, Ordering::Relaxed);
         self.cancel = Arc::new(AtomicBool::new(false));
         self.latest = request;
@@ -248,6 +250,7 @@ impl Session {
     }
     pub fn commit(&mut self, request: u32) -> Result<String, AppError> {
         self.current(request)?;
+        self.retire_export()?;
         let document = self.pending.take().ok_or_else(Self::stale)?;
         let name = document.snapshot.name.clone();
         self.media_lifetime.store(true, Ordering::Release);
@@ -255,6 +258,18 @@ impl Session {
         self.media_lifetime = Arc::new(AtomicBool::new(false));
         self.active = Some(document);
         Ok(name)
+    }
+    fn retire_export(&mut self) -> Result<(), AppError> {
+        if self.export.as_ref().is_some_and(|job| job.committing()) {
+            return Err(AppError::new(
+                "export",
+                "Wait for the ZIP save to finish before replacing the document.",
+            ));
+        }
+        if let Some(job) = self.export.take() {
+            job.retire_detached();
+        }
+        Ok(())
     }
     pub fn cancel(&mut self, request: u32) {
         if self.latest == request {
@@ -269,6 +284,9 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        if let Some(job) = self.export.take() {
+            job.retire_detached();
+        }
         self.cancel.store(true, Ordering::Relaxed);
         self.media_lifetime.store(true, Ordering::Release);
     }

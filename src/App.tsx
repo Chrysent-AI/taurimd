@@ -6,9 +6,11 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
+import { flushSync } from 'react-dom';
 import { listen } from '@tauri-apps/api/event';
 import type { ReaderController } from './controller';
 import { preferences } from './native';
+import { useDiagramExport } from './diagrams/useExport';
 import { mountDiagram, type DiagramView } from './diagrams/view';
 import { mountMedia } from './reader/media';
 import { MetadataCard } from './reader/MetadataCard';
@@ -33,7 +35,7 @@ export function App({ controller }: { controller: ReaderController }) {
     settingsController.getState,
   );
   const settings = preferenceState.settings;
-  type Surface = 'settings' | 'guide' | 'information' | 'about';
+  type Surface = 'settings' | 'guide' | 'information' | 'about' | 'export';
   const [surface, setSurface] = useState<Surface | null>(null);
   const modalOpen = useRef<Surface | null>(null);
   const [origin, setOrigin] = useState<HTMLElement | null>(null);
@@ -85,6 +87,27 @@ export function App({ controller }: { controller: ReaderController }) {
   const focusReading = useCallback(() => {
     (article.current ?? main.current)?.focus({ preventScroll: true });
   }, []);
+  const diagrams = useRef<DiagramView[]>([]);
+  const exportSurface = useCallback(
+    (phase: 'preparing' | 'native' | 'closed') => {
+      modalOpen.current = phase === 'closed' ? null : 'export';
+      if (phase === 'native') {
+        // Save must never open beneath the DOM modal, even with deferred React work.
+        flushSync(() => {
+          setSurface(null);
+        });
+      } else setSurface(phase === 'preparing' ? 'export' : null);
+    },
+    [],
+  );
+  const exporting = useDiagramExport(
+    state.displayed,
+    palette,
+    diagrams,
+    exportSurface,
+    focusReading,
+  );
+  const startExport = exporting.start;
   const closeSurface = () => {
     modalOpen.current = null;
     setSurface(null);
@@ -119,7 +142,9 @@ export function App({ controller }: { controller: ReaderController }) {
         return;
       }
       setActionFeedback(null);
-      if (zoom) {
+      if (payload === 'export-svg' || payload === 'export-png') {
+        startExport(payload === 'export-svg' ? 'svg' : 'png');
+      } else if (zoom) {
         settingsController.zoom(payload);
       } else if (payload === 'status-bar') {
         if (statusBar.current?.contains(window.document.activeElement))
@@ -160,13 +185,13 @@ export function App({ controller }: { controller: ReaderController }) {
         void controller.run(payload);
       }
     },
-    [controller, settingsController, focusReading],
+    [controller, settingsController, focusReading, startExport],
   );
   useEffect(() => {
     let disposed = false;
     void syncMenu({
       statusVisible: settings.statusVisible,
-      busy,
+      busy: busy || exporting.progress !== null,
       modal:
         surface === null
           ? 'none'
@@ -191,6 +216,7 @@ export function App({ controller }: { controller: ReaderController }) {
     busy,
     surface,
     composition,
+    exporting.progress,
     syncAttempt,
   ]);
   useEffect(() => {
@@ -308,7 +334,6 @@ export function App({ controller }: { controller: ReaderController }) {
       host.removeEventListener('auxclick', preventEscape);
     };
   }, [state.displayed, controller]);
-  const diagrams = useRef<DiagramView[]>([]);
   useEffect(() => {
     const document = state.displayed;
     const host = article.current;
@@ -383,11 +408,26 @@ export function App({ controller }: { controller: ReaderController }) {
       </section>
       {(busy ||
         state.phase === 'error' ||
+        exporting.feedback ||
+        exporting.progress?.phase === 'native' ||
         menuError ||
         presentationError ||
         preferenceState.status === 'error' ||
         preferenceState.notice) && (
         <aside className="recovery" aria-label="Reader recovery">
+          {exporting.progress?.phase === 'native' && (
+            <p role="status">{exporting.progress.message}</p>
+          )}
+          {exporting.feedback && (
+            <div>
+              <p role={exporting.feedback.error ? 'alert' : 'status'}>
+                {exporting.feedback.message}
+              </p>
+              <button onClick={exporting.dismiss}>
+                Dismiss export message
+              </button>
+            </div>
+          )}
           {(busy || state.phase === 'error') && (
             <p role={state.phase === 'error' ? 'alert' : undefined}>
               {state.message}
@@ -469,16 +509,60 @@ export function App({ controller }: { controller: ReaderController }) {
                 ? 'User Guide'
                 : surface === 'information'
                   ? 'Document Information'
-                  : 'About MDViewerRSX'
+                  : surface === 'export'
+                    ? `Export diagrams — ${exporting.progress?.mode.toUpperCase() ?? ''} ZIP`
+                    : 'About MDViewerRSX'
           }
-          close={closeSurface}
+          close={surface === 'export' ? exporting.cancel : closeSurface}
+          restoreFocus={surface !== 'export'}
+          dismissDisabled={
+            surface === 'export' && exporting.progress?.phase === 'cancelling'
+          }
+          footer={
+            surface === 'export' ? (
+              <div className="commands">
+                <button
+                  disabled={exporting.progress?.phase === 'cancelling'}
+                  onClick={() => {
+                    if (!composing.current) exporting.cancel();
+                  }}
+                >
+                  Cancel
+                </button>
+                {exporting.progress?.phase === 'partial' && (
+                  <button
+                    onClick={() => {
+                      if (!composing.current) exporting.confirm();
+                    }}
+                  >
+                    Export {exporting.progress.count} diagrams…
+                  </button>
+                )}
+              </div>
+            ) : undefined
+          }
           composing={composing}
           origin={origin}
           fallback={focusReading}
           initialControl={surface === 'settings'}
         >
           {commandMessage && <p role="status">{commandMessage}</p>}
-          {surface === 'settings' ? (
+          {surface === 'export' ? (
+            <>
+              <p>{document?.snapshot.name}</p>
+              <p
+                role="status"
+                aria-busy={exporting.progress?.phase === 'preparing'}
+              >
+                {exporting.progress?.message}
+              </p>
+              {exporting.progress?.mode === 'svg' && (
+                <p>
+                  SVG files may reference resources another viewer can load.
+                </p>
+              )}
+            </>
+          ) : surface === 'settings' ? (
             <SettingsDialog
               controller={settingsController}
               settings={settings}
