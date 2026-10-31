@@ -9,6 +9,8 @@ fn main() {
             "cancel_operation",
             "get_settings",
             "update_settings",
+            "resolve_media",
+            "activate_link",
         ]),
     ))
     .expect("native build configuration failed");

@@ -117,10 +117,10 @@ test('untrusted document markup cannot invoke the native JS bridge from the actu
   await expect(
     article.getByRole('heading', { name: 'Safe reading' }),
   ).toBeVisible();
-  await expect(article).toContainText('[Blocked img: Blocked image]');
-  await expect(article.locator('script, img, [href], [onerror]')).toHaveCount(
-    0,
-  );
+  await expect(article).toContainText('Blocked img');
+  await expect(
+    article.locator('script, img[src], a[href]:not([href="#"]), [onerror]'),
+  ).toHaveCount(0);
   expect(await page.evaluate(() => window.readerFixture.calls())).toEqual([
     { command: 'select_document', payload: { requestId: 1 } },
     { command: 'commit_document', payload: { requestId: 1 } },

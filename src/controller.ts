@@ -1,5 +1,5 @@
-import type { Metadata } from './reader/frontmatter';
-import type { NativeReader, ReaderState, Snapshot } from './types';
+import type { Reading } from './reader/parse';
+import type { NativeReader, ReaderState, Snapshot, Rendered } from './types';
 import type { ParseJob } from './reader/worker';
 export class ReaderController {
   state: ReaderState = {
@@ -28,7 +28,23 @@ export class ReaderController {
       listener();
     });
   }
-  async run(action: 'open' | 'reload') {
+  async resolve(document: Rendered, reference: string) {
+    if (this.state.displayed !== document)
+      throw new Error('This media belongs to a retired document.');
+    const result = await this.bridge.resolve(document.snapshot, reference);
+    if (this.state.displayed !== document)
+      throw new Error('This media belongs to a retired document.');
+    return result;
+  }
+  async activate(document: Rendered, href: string) {
+    if (
+      document !== this.state.displayed ||
+      ['loading', 'parsing', 'committing'].includes(this.state.phase)
+    )
+      return;
+    await this.run('link', href);
+  }
+  async run(action: 'open' | 'reload' | 'link', href = '') {
     // Do not interleave another action across the native/display commit boundary.
     if (
       this.state.phase === 'committing' ||
@@ -39,16 +55,45 @@ export class ReaderController {
     this.job?.cancel();
     this.job = null;
     const previous = this.state.displayed;
+    const before = this.state;
+    let linkedDocument = false;
     this.publish({
       phase: 'loading',
+      linkMessage: action === 'link' ? 'Opening link…' : '',
       message:
-        action === 'open'
-          ? 'Choosing and opening a document…'
-          : `Reloading ${previous?.snapshot.name ?? 'document'}…`,
+        action === 'link'
+          ? before.message
+          : action === 'open'
+            ? 'Choosing and opening a document…'
+            : `Reloading ${previous?.snapshot.name ?? 'document'}…`,
     });
     try {
       let snapshot: Snapshot;
-      if (action === 'open') {
+      let fragment: string | null = null;
+      if (action === 'link') {
+        if (!previous) return;
+        const result = await this.bridge.activate(
+          request,
+          previous.snapshot,
+          href,
+        );
+        if (request !== this.sequence || this.state.displayed !== previous)
+          return;
+        if (result.status !== 'document') {
+          this.publish({
+            phase: before.phase,
+            message: before.message,
+            linkMessage:
+              result.status === 'externalOpened'
+                ? 'Sent link to the default application.'
+                : 'Use an in-document section link.',
+          });
+          return;
+        }
+        linkedDocument = true;
+        snapshot = result.snapshot;
+        fragment = result.fragment;
+      } else if (action === 'open') {
         const selection = await this.bridge.select(request);
         if (request !== this.sequence) return;
         if (selection.status === 'cancelled') {
@@ -64,17 +109,16 @@ export class ReaderController {
         snapshot = await this.bridge.reload(request, previous.snapshot);
       }
       if (request !== this.sequence) return;
+      let reading: Reading = { html: '', metadata: null };
       let html: string | null = null;
-      let metadata: Metadata = null;
       if (snapshot.format === 'markdown') {
         this.publish({
           phase: 'parsing',
           message: `Formatting ${snapshot.name}…`,
         });
         this.job = this.parse(snapshot.source, snapshot);
-        const reading = await this.job.result;
+        reading = await this.job.result;
         html = reading.html;
-        metadata = reading.metadata;
         if (request !== this.sequence) return;
         this.job = null;
       }
@@ -84,9 +128,10 @@ export class ReaderController {
       });
       await this.bridge.commit(request);
       this.publish({
-        displayed: { snapshot, html, metadata },
+        displayed: { ...reading, snapshot, html, fragment },
         phase: 'ready',
         stale: false,
+        linkMessage: '',
         message: `${action === 'reload' ? 'Reloaded' : 'Opened'} ${snapshot.name}${snapshot.source.length === 0 ? ' — empty file' : ''}.`,
       });
     } catch (error) {
@@ -113,9 +158,18 @@ export class ReaderController {
         if ('attempted' in error && typeof error.attempted === 'string')
           message = `${error.attempted}: ${message}`;
       }
+      if (action === 'link' && !linkedDocument) {
+        this.publish({
+          phase: before.phase,
+          message: before.message,
+          linkMessage: `Link unavailable: ${message}`,
+        });
+        return;
+      }
       this.publish({
         phase: 'error',
         stale: previous !== null,
+        linkMessage: '',
         message: `${action === 'reload' ? 'Reload failed' : 'Open failed'}: ${message}${previous ? ` Still showing last loaded ${previous.snapshot.name} (stale).` : ''}`,
       });
     }
@@ -129,6 +183,7 @@ export class ReaderController {
     this.publish({
       phase: this.state.displayed ? 'ready' : 'empty',
       message: 'Operation cancelled. The displayed document has not changed.',
+      linkMessage: '',
     });
     try {
       await this.bridge.cancel(request);

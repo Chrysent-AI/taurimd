@@ -1,3 +1,4 @@
+import type { Resource, ReadingAction } from './resources';
 import { Marked } from 'marked';
 import markedFootnote from 'marked-footnote';
 import hljs from 'highlight.js/lib/common';
@@ -19,6 +20,9 @@ export interface ParsedMarkdown {
 export interface Reading {
   html: string;
   metadata: Metadata;
+  resources?: Resource[];
+  actions?: ReadingAction[];
+  fragments?: Record<string, string>;
 }
 export function escapeCode(text: string) {
   return text

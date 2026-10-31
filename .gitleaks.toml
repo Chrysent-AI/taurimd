@@ -14,4 +14,4 @@ regex = '''(?i)[A-Za-z0-9._%+-]+@(?:gmail|icloud|outlook|hotmail|protonmail|fast
 [[rules]]
 id = "network-share"
 description = "UNC network share"
-regex = '''\\\\[A-Za-z0-9._-]+\\[A-Za-z0-9._$-]+'''
+regex = '''\\\\(?:[A-Za-z0-9_-]|[A-Za-z0-9._-]{2,})\\[A-Za-z0-9._$-]+'''

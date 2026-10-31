@@ -8,6 +8,7 @@ import {
 import { listen } from '@tauri-apps/api/event';
 import type { ReaderController } from './controller';
 import { preferences } from './native';
+import { mountMedia } from './reader/media';
 import { MetadataCard } from './reader/MetadataCard';
 import type { Rendered } from './types';
 import { SettingsController } from './settings/model';
@@ -105,14 +106,39 @@ export function App({ controller }: { controller: ReaderController }) {
     const id = state.displayed?.snapshot.documentId;
     if (id !== undefined && id !== lastDocument.current) {
       lastDocument.current = id;
-      article.current?.focus();
-      article.current?.scrollIntoView({ block: 'start' });
+      const host = article.current;
+      const document = state.displayed;
+      if (document?.fragment && host) {
+        let key = document.fragment;
+        try {
+          key = decodeURIComponent(key);
+        } catch {
+          /* Report missing target below. */
+        }
+        const target = window.document.getElementById(
+          document.fragments?.[key] ?? '',
+        );
+        if (target && host.contains(target)) {
+          target.focus({ preventScroll: true });
+          target.scrollIntoView({ block: 'start' });
+        } else {
+          host.focus();
+          setLinkFeedback({
+            document,
+            message: 'Section or footnote not found in this document.',
+          });
+        }
+      } else {
+        host?.focus();
+        host?.scrollIntoView({ block: 'start' });
+      }
     }
   }, [state.displayed]);
   useEffect(() => {
     const document = state.displayed;
     const host = article.current;
     if (!document || !host) return;
+    const stopMedia = mountMedia(host, document, controller);
     // Native anchors already synthesize click on Enter; one delegated listener
     // handles pointer and keyboard activation without intercepting reader keys.
     const activate = (event: MouseEvent) => {
@@ -128,6 +154,21 @@ export function App({ controller }: { controller: ReaderController }) {
         event.shiftKey
       )
         return;
+      const action = document.actions?.find(
+        (action) => action.slot === link.getAttribute('data-reader-link'),
+      );
+      if (action) {
+        if (
+          event.isTrusted &&
+          !composing.current &&
+          controller.state.displayed === document &&
+          controller.state.phase !== 'committing'
+        ) {
+          setLinkFeedback(null);
+          void controller.activate(document, action.href);
+        }
+        return;
+      }
       const href = link.getAttribute('href');
       if (!href?.startsWith('#')) return;
       const target = window.document.getElementById(href.slice(1));
@@ -142,11 +183,18 @@ export function App({ controller }: { controller: ReaderController }) {
       target.scrollIntoView({ block: 'start' });
       setLinkFeedback(null);
     };
-    host.addEventListener('click', activate);
-    return () => {
-      host.removeEventListener('click', activate);
+    const preventEscape = (event: Event) => {
+      if (event.target instanceof Element && event.target.closest('a'))
+        event.preventDefault();
     };
-  }, [state.displayed]);
+    host.addEventListener('click', activate);
+    host.addEventListener('auxclick', preventEscape);
+    return () => {
+      stopMedia();
+      host.removeEventListener('click', activate);
+      host.removeEventListener('auxclick', preventEscape);
+    };
+  }, [state.displayed, controller]);
   const document = state.displayed;
   return (
     <div
@@ -260,8 +308,8 @@ export function App({ controller }: { controller: ReaderController }) {
           <>
             {document.snapshot.format === 'markdown' && (
               <p className="reading-note">
-                Non-fragment links and media are inactive. Diagrams remain
-                literal code until diagram rendering is available.
+                Local media is scoped to this document’s directory. Diagrams
+                remain literal code until diagram rendering is available.
               </p>
             )}
             <p
@@ -269,7 +317,9 @@ export function App({ controller }: { controller: ReaderController }) {
               aria-live="polite"
               aria-label="Reading link status"
             >
-              {linkFeedback?.document === document ? linkFeedback.message : ''}
+              {linkFeedback?.document === document
+                ? linkFeedback.message
+                : (state.linkMessage ?? '')}
             </p>
             <article
               ref={article}

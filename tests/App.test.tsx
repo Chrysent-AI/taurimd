@@ -29,6 +29,8 @@ function markdownController(source: string) {
     reload: vi.fn().mockResolvedValue(snapshot),
     commit: vi.fn().mockResolvedValue(undefined),
     cancel: vi.fn().mockResolvedValue(undefined),
+    resolve: vi.fn(),
+    activate: vi.fn(),
   };
   return new ReaderController(bridge, (source) => ({
     result: Promise.resolve(sanitizeReading(parseMarkdown(source))),
@@ -56,6 +58,8 @@ it('renders literal text through the actual article and preserves identity on er
     reload: vi.fn().mockRejectedValue({ message: 'File missing' }),
     commit: vi.fn().mockResolvedValue(undefined),
     cancel: vi.fn().mockResolvedValue(undefined),
+    resolve: vi.fn(),
+    activate: vi.fn(),
   };
   const parser = vi.fn((source: string) => ({
     result: Promise.resolve(sanitizeReading(parseMarkdown(source))),

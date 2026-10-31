@@ -125,10 +125,21 @@ test('actual rich worker output, keyboard fragment/footnote round trips, hostile
   page,
 }, info) => {
   const external: string[] = [],
+    engineMediaImages: string[] = [],
     violations: string[] = [];
   page.on('request', (request) => {
-    if (new URL(request.url()).hostname !== '127.0.0.1')
-      external.push(request.url());
+    const url = new URL(request.url());
+    // A blocked player still has native controls. WebKit's control shadow UI
+    // uses same-origin Blob icons; retain this evidence separately, while all
+    // author Blob/data references and fetch-bearing attributes remain inert.
+    if (
+      info.project.name === 'webkit' &&
+      url.protocol === 'blob:' &&
+      url.origin === new URL(page.url()).origin &&
+      request.resourceType() === 'image'
+    ) {
+      engineMediaImages.push(request.url());
+    } else if (url.hostname !== '127.0.0.1') external.push(request.url());
   });
   page.on('console', (message) => {
     if (
@@ -156,10 +167,10 @@ test('actual rich worker output, keyboard fragment/footnote round trips, hostile
   expect(await article.locator('pre code').last().textContent()).toBe(literal);
   await expect(
     article.locator(
-      'script,img,video,source,[style],[data-action],[data-reader-slot],#root',
+      'script,img[src],video[src],source,[style],[data-action],[data-reader-slot],#root',
     ),
   ).toHaveCount(0);
-  await expect(article).toContainText('[Blocked img: Remote image]');
+  await expect(article).toContainText('Blocked img');
   await expect(
     article.getByText('Safe text', { exact: true }),
   ).not.toHaveAttribute('class');
@@ -255,6 +266,7 @@ test('actual rich worker output, keyboard fragment/footnote round trips, hostile
     ),
   ).toEqual(['select_document', 'commit_document']);
   const proof = {
+    engineMediaImages,
     sourceSha256: createHash('sha256')
       .update(source ?? '')
       .digest('hex'),

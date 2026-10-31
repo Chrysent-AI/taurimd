@@ -1,5 +1,10 @@
 import { createRoot } from 'react-dom/client';
-import { clearMocks, mockIPC, mockWindows } from '@tauri-apps/api/mocks';
+import {
+  clearMocks,
+  mockIPC,
+  mockWindows,
+  mockConvertFileSrc,
+} from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
 import { App } from '../../src/App';
 import { ReaderController } from '../../src/controller';
@@ -18,7 +23,9 @@ type Command =
   | 'commit_document'
   | 'cancel_operation'
   | 'get_settings'
-  | 'update_settings';
+  | 'update_settings'
+  | 'resolve_media'
+  | 'activate_link';
 type Outcome = { value: unknown } | { error: AppError };
 type Reply = Outcome | { hold: string };
 interface Call {
@@ -48,6 +55,9 @@ function retain(record: SettingsRecord) {
 // This is a browser-only backend double. It does not read files or emulate
 // native grants, permissions, menus, dialogs or source-byte preservation.
 mockWindows('reader');
+// Browser-only HTTP transport double. Production uses the same convertFileSrc
+// adapter with the native runtime's platform mapping, not this mock setting.
+mockConvertFileSrc('windows');
 mockIPC(
   async (command, payload) => {
     if (
@@ -58,6 +68,8 @@ mockIPC(
         'cancel_operation',
         'get_settings',
         'update_settings',
+        'resolve_media',
+        'activate_link',
       ].includes(command)
     )
       throw new Error(`Unexpected fixture command: ${command}`);

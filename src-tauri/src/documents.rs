@@ -109,6 +109,27 @@ fn validate_windows_path(path: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
+pub(crate) fn contained_file(path: &Path, parent: Option<&Path>) -> Result<PathBuf, AppError> {
+    #[cfg(windows)]
+    validate_windows_path(path)?;
+    let canonical = fs::canonicalize(path)?;
+    #[cfg(windows)]
+    validate_windows_path(&canonical)?;
+    if parent.is_some_and(|root| !canonical.starts_with(root)) {
+        return Err(AppError::new(
+            "denied",
+            "The file moved outside its granted directory. Choose it again with Open File.",
+        ));
+    }
+    if !fs::metadata(&canonical)?.is_file() {
+        return Err(AppError::new(
+            "unsupported",
+            "The selection is not a regular file.",
+        ));
+    }
+    Ok(canonical)
+}
+
 pub fn read_document(
     path: &Path,
     parent: Option<&Path>,
@@ -120,24 +141,8 @@ pub fn read_document(
         if cancel.load(Ordering::Relaxed) {
             return Err(Session::stale());
         }
-        #[cfg(windows)]
-        validate_windows_path(path)?;
-        let canonical = fs::canonicalize(path)?;
-        #[cfg(windows)]
-        validate_windows_path(&canonical)?;
-        if parent.is_some_and(|root| !canonical.starts_with(root)) {
-            return Err(AppError::new(
-                "denied",
-                "The file moved outside its granted directory. Choose it again with Open File.",
-            ));
-        }
+        let canonical = contained_file(path, parent)?;
         let format = classify(&canonical)?;
-        if !fs::metadata(&canonical)?.is_file() {
-            return Err(AppError::new(
-                "unsupported",
-                "The selection is not a regular file.",
-            ));
-        }
         let file = fs::File::open(&canonical)?;
         if !file.metadata()?.is_file() {
             return Err(AppError::new(
@@ -202,6 +207,8 @@ pub struct Session {
     cancel: Arc<AtomicBool>,
     pending: Option<GrantedDocument>,
     active: Option<GrantedDocument>,
+    pub(crate) media_lifetime: Arc<AtomicBool>,
+    pub(crate) media: std::collections::HashMap<String, crate::media::Grant>,
 }
 impl Session {
     pub fn begin(&mut self, request: u32) -> Result<Arc<AtomicBool>, AppError> {
@@ -228,16 +235,21 @@ impl Session {
         Ok(snapshot)
     }
     pub fn active(&self, id: u32, revision: u32) -> Result<GrantedDocument, AppError> {
+        self.active_ref(id, revision).cloned()
+    }
+    pub(crate) fn active_ref(&self, id: u32, revision: u32) -> Result<&GrantedDocument, AppError> {
         self.active
             .as_ref()
             .filter(|x| x.snapshot.document_id == id && x.snapshot.revision == revision)
-            .cloned()
             .ok_or_else(Self::stale)
     }
     pub fn commit(&mut self, request: u32) -> Result<String, AppError> {
         self.current(request)?;
         let document = self.pending.take().ok_or_else(Self::stale)?;
         let name = document.snapshot.name.clone();
+        self.media_lifetime.store(true, Ordering::Release);
+        self.media.clear();
+        self.media_lifetime = Arc::new(AtomicBool::new(false));
         self.active = Some(document);
         Ok(name)
     }
@@ -247,7 +259,7 @@ impl Session {
             self.pending = None;
         }
     }
-    fn stale() -> AppError {
+    pub(crate) fn stale() -> AppError {
         AppError::new("stale", "This operation has been superseded or cancelled.")
     }
 }
@@ -255,6 +267,7 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
+        self.media_lifetime.store(true, Ordering::Release);
     }
 }
 

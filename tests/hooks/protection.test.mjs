@@ -106,6 +106,81 @@ test('staged native Git traversal rejects introduced content, including allow co
     assert.equal(command(root, 'gitleaks', nativeArgs).status, 0);
     assert.notEqual(scan(root, 'staged').status, 0);
   }));
+test('Win32 local-device paths pass staged and full-message native scans', () =>
+  fixture((root) => {
+    const device = ['', '', '.', 'COM1'].join('\\');
+    const message = join(root, 'message.txt');
+    for (const value of [device, '%5c%5c.%5cCOM1']) {
+      writeFileSync(join(root, 'candidate.txt'), `${value}\n`);
+      git(root, 'add', 'candidate.txt');
+      const staged = scan(root, 'staged');
+      assert.equal(staged.status, 0, staged.output);
+      writeFileSync(message, `test: local device fixture\n\n${value}\n`);
+      const fullMessage = scan(root, 'message', message);
+      assert.equal(fullMessage.status, 0, fullMessage.output);
+    }
+  }));
+test('UNC hosts and admin shares remain rejected raw and percent-decoded', () =>
+  fixture((root) => {
+    const message = join(root, 'message.txt');
+    for (const host of [
+      'a',
+      '0',
+      '_',
+      '-',
+      '..',
+      '.a',
+      'a.',
+      'host.example.invalid',
+      'fixture-host',
+    ]) {
+      for (const share of ['share', 'C$']) {
+        const unc = ['', '', host, share].join('\\');
+        for (const value of [unc, encodeURIComponent(unc)]) {
+          writeFileSync(join(root, 'candidate.txt'), `${value}\n`);
+          git(root, 'add', 'candidate.txt');
+          writeFileSync(message, `test: network fixture\n\n${value}\n`);
+          for (const result of [
+            scan(root, 'staged'),
+            scan(root, 'message', message),
+          ]) {
+            assert.notEqual(result.status, 0, result.output);
+            assert.match(result.output, /RuleID:\s+network-share/);
+            assert.ok(
+              !result.output.includes(value),
+              'finding must be redacted',
+            );
+          }
+        }
+      }
+    }
+  }));
+test('home paths and default secrets still fail staged and full-message scans', () =>
+  fixture((root) => {
+    const message = join(root, 'message.txt');
+    for (const [rule, value] of [
+      [
+        'home-dir-path',
+        `path = "${['', 'home', 'fixture-reader', 'document.md'].join('/')}"`,
+      ],
+      [
+        'generic-api-key',
+        `api_key = "${['r7K2v9M4', 'q6T8n3W5', 'b1Y0f2H9'].join('')}"`,
+      ],
+    ]) {
+      writeFileSync(join(root, 'candidate.txt'), `${value}\n`);
+      git(root, 'add', 'candidate.txt');
+      writeFileSync(message, `test: privacy fixture\n\n${value}\n`);
+      for (const result of [
+        scan(root, 'staged'),
+        scan(root, 'message', message),
+      ]) {
+        assert.notEqual(result.status, 0, result.output);
+        assert.match(result.output, new RegExp(`RuleID:\\s+${rule}`));
+        assert.ok(!result.output.includes(value), 'finding must be redacted');
+      }
+    }
+  }));
 test('complete messages and strict subjects fail closed without merge/init exemptions', () =>
   fixture((root) => {
     const message = join(root, 'message.txt');

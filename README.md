@@ -6,11 +6,13 @@ A local, read-only document reader. Copyright © 2026 Chrysent. MIT licensed.
 
 Open a UTF-8 `.md`, `.markdown`, `.mdown`, `.mkd` or `.mkdown` file using **Open File** or the native File menu. Extension matching is case-insensitive. `.txt` and `.log` display literally and never enter Markdown parsing. MDX is not supported.
 
-Markdown uses a bundled worker and sanitizer. Tasks are disabled, and all document URLs, embedded resources and document CSS are inactive. A visible note explains this intermediate restriction. No network service is required. Try `examples/reading.md` and `examples/literal.txt` offline.
+Markdown uses a bundled worker and one inert sanitizer boundary. Frontmatter appears as read-only metadata, fenced code uses bundled highlighting, and footnotes/heading links focus their exact destinations. Task boxes remain disabled. Local images and native audio/video controls use revocable, read-only media grants within the active document's canonical directory; remote resources, document CSS and automatic navigation stay blocked. Missing, denied or undecodable media shows feedback beside that resource without hiding the article. No network service is required. Try `examples/rich-text.md`, `examples/reading.md` and `examples/literal.txt` offline.
+
+Only a real pointer or Enter activation can request a permitted external HTTP/HTTPS/mail/telephone handoff through the default OS application. The reader reports acknowledgement, not that an external page loaded. Local supported-document links use the normal read/format/commit transaction and currently replace the focused reader; opening/focusing a separate document window remains a later feature. A denied link does not grant a new directory or automatically open a chooser. Caption tracks and untrusted `srcset` are inactive with visible fallback; external SVG is image-only, never inline document markup.
 
 The identity area describes the displayed file, not the pending selection. Reload reads the granted file again. Failed replacement or reload preserves the last good document and marks it stale. Cancel never changes the displayed source. There are no document write commands.
 
-Folder browsing, rich metadata/media/link handling, highlighting, footnotes, diagrams, navigation, search, exports and OS file associations are not yet implemented. Open Folder is explicitly unavailable rather than a dead enabled control. This version is not a claim of full-feature parity.
+Folder browsing, diagrams, directory navigation, search, exports, multiple document windows and OS file associations are not yet implemented. Open Folder is explicitly unavailable rather than a dead enabled control. This version is not a claim of full-feature parity.
 
 ## Appearance and preferences
 
@@ -47,17 +49,23 @@ Intended support is macOS 14+ Apple Silicon, Windows 11 x64 and Ubuntu 24.04 x86
 
 Run the native executable or `npm run tauri -- dev` on the target machine. Record OS/CPU, engine and results; do not substitute a browser screenshot.
 
-1. Record source hashes: `git hash-object examples/reading.md examples/literal.txt`.
-2. From the empty reader, use the native File menu/accelerator to open `examples/reading.md`. Confirm formatted headings, table and disabled tasks; correct identity; reading focus; no active links/media.
+1. Record source hashes: `git hash-object examples/reading.md examples/literal.txt examples/rich-text.md`.
+2. From the empty reader, use the native File menu/accelerator to open `examples/rich-text.md`. Confirm metadata, highlighted code, disabled tasks, repeated heading/footnote destinations, exact return focus and correct identity. Malformed metadata in a scratch copy must leave the body readable and expose escaped raw YAML.
 3. Open `examples/literal.txt`; confirm literal angle brackets/Markdown punctuation and no execution. Cancel another native selection: the displayed document must not change.
 4. Reload from the visible control and native accelerator. An external edit to a **scratch copy** must appear only after Reload; preserve reading position where practical.
 5. Open an unsupported file or a scratch file containing invalid UTF-8. The prior file and identity remain visible with an attempted-target error and stale indication. Delete a scratch opened file, then Reload: report failure, not success.
 6. Cancel a formatting operation and open another file. A late response must not replace the newer document. Check long paths, Tab navigation and visible focus.
 7. Open Settings using the button and native accelerator. Check both palette slots, opposite-toned combinations, System changes, 50/100/300% content zoom, unchanged chrome and reachable final content. Tab/Shift+Tab remain in the dialog; Escape restores prior focus, while IME composition does not close it. Exercise native View zoom actions once each.
 8. Change all preferences, wait for **Preferences saved**, close and restart the native application, then verify values survived. Confirm a save failure remains separate from document errors and offers Retry; browser mock hydration is not this restart check.
-9. Re-run the source hash command. Original example bytes must be unchanged. Close the reader and check no app-owned helper process remains.
+9. In a scratch folder, create a Markdown document beside copies of the original fixtures in `tests/browser/media/`. Reference `figure.svg`, `tone.wav` and `clip.webm` as local image/audio/video. Confirm native controls, actual supported decoding and repeated seeking under the real application CSP. Record unsupported encodings explicitly; a damaged file must show a content-local error. Exercise HEAD and closed/open/suffix byte ranges through the native protocol, not browser fixture routes.
+10. Attempt remote/protocol-relative/data/file/blob references, `srcset`, poster/source/track/CSS fetches, parent-prefix lookalikes, encoded traversal and a symlink escaping that scratch directory. No automatic remote fetch, out-of-scope read, page replacement, new window or download is permitted. Permitted local assets remain read-only.
+11. While media is loaded, begin/cancel an Open and fail a replacement/Reload: preserve its node/player and last-good authority. Successful replacement/Reload and reader close revoke old opaque URLs; late resolutions must not repopulate grants. Bytes already buffered by the engine cannot be retracted. Change both palette slots and content zoom: retain playback, selection and disclosure state without reparsing.
+12. Use actual pointer/Enter activation for HTTP, HTTPS, mail and telephone links. The OS handler must receive only the permitted URL; handler failure stays separate from Reader/Preferences status. Test a contained document link with a fragment, a missing target and a denied escape; verify requested target focus after a matching commit and last-good recovery on failure. Do not run these OS-handler actions from automated tests.
+13. Re-run the source hash command. Original example bytes must be unchanged. Close the reader and check no app-owned helper process remains.
 
-Automated tests exercise native read/state/response-serialization seams and the actual React shell, controller, native JS adapter and worker in browsers with a mocked native backend. These mocks do not execute the real native chooser, IPC/capability enforcement or native menus. Native dialog, menu, focus and visual evidence must still be recorded on actual targets. A build or browser pass alone must not be recorded as a native-interaction pass.
+These native checks remain deferred until recorded on actual target systems; compilation and the headless media fixture do not mark them passed.
+
+Automated tests exercise the production native media GET/HEAD/range, lifetime, scoped-path and link-policy seams without invoking OS handlers. Browser tests additionally decode original media, seek, show decode/fallback errors and exercise the actual React shell, controller, native JS adapter and worker with explicit IPC/URL-conversion/HTTP transport doubles. These mocks do not execute the real native chooser, custom protocol, IPC/capability enforcement or native menus. Native dialog, menu, focus, CSP/transport, system-webview codec, OS handoff and visual evidence must still be recorded on actual targets. A build or browser pass alone must not be recorded as a native-interaction pass.
 
 ## Dependency notices
 

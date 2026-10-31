@@ -19,13 +19,11 @@ test('real worker and sanitizer do not execute or fetch document content', async
   });
   await expect(page.locator('#reading h1')).toHaveText('Safe title');
   await expect(page.locator('#reading input')).toBeDisabled();
-  await expect(page.locator('#reading')).toContainText(
-    '[Blocked img: Remote image]',
-  );
-  await expect(page.locator('#reading')).toContainText('[link inactive]');
+  await expect(page.locator('#reading')).toContainText('Blocked img');
+  await expect(page.locator('#reading a')).toHaveAttribute('href', '#');
   await expect(
     page.locator(
-      '#reading [src], #reading [href], #reading [style], #reading script, #reading iframe',
+      '#reading [src], #reading a[href]:not([href="#"]), #reading [style], #reading script, #reading iframe',
     ),
   ).toHaveCount(0);
   expect(await page.evaluate(() => 'compromised' in window)).toBe(false);

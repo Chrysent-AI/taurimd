@@ -32,16 +32,22 @@ describe('production Markdown and sanitizer boundary', () => {
     host.innerHTML = safe.html;
     expect(
       host.querySelector(
-        'script,iframe,object,form,button,meta,style,img,video,source,svg,input',
+        'script,iframe,object,form,button,meta,style,source,svg,input',
       ),
     ).toBeNull();
     expect(
       host.querySelector(
-        '[src],[srcset],[href],[style],[id],[data-action],[onclick],[onerror]',
+        '[src],[srcset],a[href]:not([href="#"]),[style],[id],[data-action],[onclick],[onerror]',
       ),
     ).toBeNull();
     expect(host.textContent).toContain('safe text');
-    expect(host.textContent).toContain('[Blocked img: Remote figure]');
-    expect(host.textContent).toContain('[link inactive]');
+    expect(host.textContent).toContain('Blocked img');
+    expect(
+      safe.resources?.every((resource) => resource.sources.length === 0),
+    ).toBe(true);
+    expect(safe.actions?.map((action) => action.href)).toEqual([
+      'javascript:alert(1)',
+      'file:///blocked',
+    ]);
   });
 });

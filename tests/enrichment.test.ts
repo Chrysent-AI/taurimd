@@ -141,7 +141,7 @@ describe('real bundled Marked/footnote/highlight/sanitizer integration', () => {
     ).toBe(
       `#${node.querySelector('a[aria-label="Footnote 1, occurrence 2"]')?.id ?? 'missing'}`,
     );
-    expect(node.querySelector('[onclick],img')).toBeNull();
+    expect(node.querySelector('[onclick],img[src]')).toBeNull();
   });
   it('generates collision-free heading fragments, Unicode and raw-ID mapping without clobbering', () => {
     const { node } = host(
@@ -184,14 +184,16 @@ describe('real bundled Marked/footnote/highlight/sanitizer integration', () => {
     );
   });
   it('removes author syntax classes even inside raw code, plus URLs and forged actions', () => {
-    const { node } = host(
+    const { node, reading } = host(
       '<pre data-reader-code="forged"><code><span class="hljs-keyword">fake</span></code></pre>\n\n<a href="https://invalid.example" id="reader" data-action="open">Link</a>',
     );
     expect(
       node.querySelector(
-        '[class],[id],[href],[data-action],[data-reader-code]',
+        '[class],[id],a[href]:not([href="#"]),[data-action],[data-reader-code]',
       ),
     ).toBeNull();
-    expect(node.textContent).toContain('[link inactive]');
+    expect(reading.actions).toEqual([
+      { slot: '0', href: 'https://invalid.example' },
+    ]);
   });
 });

@@ -183,6 +183,26 @@ article,
   max-width: 76ch;
   margin: 1.2em auto;
 }
+article img,
+article video {
+  max-inline-size: 100%;
+  block-size: auto;
+}
+article audio {
+  inline-size: 100%;
+  max-inline-size: 100%;
+}
+article .media-feedback {
+  display: block;
+  color: var(--muted);
+  background: var(--panel);
+  border-inline-start: 0.2em solid var(--border);
+  padding: 0.25em 0.5em;
+  white-space: normal;
+}
+article .media-feedback:empty {
+  display: none;
+}
 article {
   line-height: 1.65;
   overflow-wrap: anywhere;
