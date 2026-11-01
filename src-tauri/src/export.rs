@@ -14,6 +14,22 @@ use std::{
 use tempfile::TempPath;
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
+// Test observations evaluate each operation once and return its original result.
+macro_rules! observed {
+    (io $operation:literal, $result:expr) => {{
+        let result = $result;
+        #[cfg(test)]
+        tests::observe_io($operation, &result);
+        result
+    }};
+    ($operation:literal, $result:expr) => {{
+        let result = $result;
+        #[cfg(test)]
+        tests::observe_operation($operation, result.is_err());
+        result
+    }};
+}
+
 fn failure(message: impl Into<String>) -> AppError {
     AppError::new("export", message)
 }
@@ -24,7 +40,7 @@ fn zip_error(error: zip::result::ZipError) -> AppError {
     failure(format!("ZIP preparation failed: {error}"))
 }
 fn ordinary(path: &Path, directory: bool) -> Result<fs::Metadata, AppError> {
-    let meta = fs::symlink_metadata(path)?;
+    let meta = observed!(io "ordinary.metadata", fs::symlink_metadata(path))?;
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
@@ -57,20 +73,24 @@ impl OwnedPath {
     fn file(path: PathBuf, file: &File) -> Result<Self, AppError> {
         Ok(Self {
             path,
-            identity: Some(Handle::from_file(file.try_clone()?)?),
+            identity: Some(
+                observed!(io "owned.file.identity", Handle::from_file(observed!(io "owned.file.clone", file.try_clone())?))?,
+            ),
             directory: false,
         })
     }
     fn directory(path: PathBuf) -> Result<Self, AppError> {
         Ok(Self {
-            identity: Some(Handle::from_path(&path)?),
+            identity: Some(observed!(io "owned.directory.identity", Handle::from_path(&path))?),
             path,
             directory: true,
         })
     }
     fn check(&self) -> Result<(), AppError> {
         ordinary(&self.path, self.directory)?;
-        if self.identity.as_ref() != Some(&Handle::from_path(&self.path)?) {
+        if self.identity.as_ref()
+            != Some(&observed!(io "owned.check.identity", Handle::from_path(&self.path))?)
+        {
             return Err(failure(
                 "Temporary export path changed identity; it was preserved, not deleted.",
             ));
@@ -81,7 +101,7 @@ impl OwnedPath {
         if self.identity.is_none() {
             return Ok(());
         }
-        match fs::symlink_metadata(&self.path) {
+        match observed!(io "owned.remove.metadata", fs::symlink_metadata(&self.path)) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 self.identity = None;
                 return Ok(());
@@ -94,9 +114,9 @@ impl OwnedPath {
         // Retain the original handle on failure so a retry can revalidate it.
         // Windows handles here retain std's default delete-sharing access.
         if self.directory {
-            fs::remove_dir(&self.path)?;
+            observed!(io "owned.remove.directory", fs::remove_dir(&self.path))?;
         } else {
-            fs::remove_file(&self.path)?;
+            observed!(io "owned.remove.file", fs::remove_file(&self.path))?;
         }
         self.identity = None;
         Ok(())
@@ -120,7 +140,7 @@ fn combined<T>(result: Result<T, AppError>, cleanup: Result<(), AppError>) -> Re
     }
 }
 fn coordinate(root: &Path) -> Result<File, AppError> {
-    fs::create_dir_all(root)?;
+    observed!(io "coordination.create_directory", fs::create_dir_all(root))?;
     ordinary(root, true)?;
     let path = root.join("coordination.lock");
     let file = match OpenOptions::new()
@@ -132,11 +152,11 @@ fn coordinate(root: &Path) -> Result<File, AppError> {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             ordinary(&path, false)?;
-            OpenOptions::new().read(true).write(true).open(path)?
+            observed!(io "coordination.open", OpenOptions::new().read(true).write(true).open(path))?
         }
-        Err(error) => return Err(error.into()),
+        Err(error) => return observed!(io "coordination.create", Err(error)).map_err(Into::into),
     };
-    file.lock()?;
+    observed!(io "coordination.lock", file.lock())?;
     Ok(file)
 }
 struct Archive {
@@ -183,24 +203,26 @@ impl Archive {
         })
     }
     fn finish(&mut self) -> Result<(), AppError> {
-        let mut file = self
-            .writer
-            .take()
-            .ok_or_else(invalid)?
-            .finish()
-            .map_err(zip_error)?;
-        file.flush()?;
-        file.sync_all()?;
+        let mut file = observed!(
+            "archive.finish",
+            self.writer
+                .take()
+                .ok_or_else(invalid)?
+                .finish()
+                .map_err(zip_error)
+        )?;
+        observed!(io "archive.flush", file.flush())?;
+        observed!(io "archive.sync", file.sync_all())?;
         Ok(())
     }
     fn cleanup(&mut self) -> Result<(), AppError> {
-        let _coordination = coordinate(&self.root)?;
+        let _coordination = observed!("cache.cleanup.coordination", coordinate(&self.root))?;
         self.writer = None;
         self.file = None;
-        self.archive.remove()?;
+        observed!("cache.cleanup.archive", self.archive.remove())?;
         self.lock = None;
-        self.owner.remove()?;
-        self.run.remove()
+        observed!("cache.cleanup.owner", self.owner.remove())?;
+        observed!("cache.cleanup.run", self.run.remove())
     }
 }
 impl Drop for Archive {
@@ -522,35 +544,38 @@ impl Job {
         commit_start: impl FnOnce() -> Result<(), AppError>,
     ) -> Result<Outcome, AppError> {
         let result: Result<Outcome, AppError> = (|| {
-            self.finalize()?;
+            observed!("finish.finalize", self.finalize())?;
             let Some(path) = select()? else {
                 return Ok(Outcome::Cancelled);
             };
             self.live()?;
-            let destination = Destination::select(path)?;
+            let destination = observed!("destination.select", Destination::select(path))?;
             if destination.existing.is_some() && !replace(&destination.path) {
                 return Ok(Outcome::Cancelled);
             }
             self.live()?;
-            destination.check()?;
-            self.stage(&destination.parent)?;
+            observed!("destination.check.before_stage", destination.check())?;
+            observed!("stage.create_and_copy", self.stage(&destination.parent))?;
             self.live()?;
-            destination.check()?;
+            observed!("destination.check.after_stage", destination.check())?;
             {
                 let mut io = self.io.lock().map_err(|_| invalid())?;
                 self.live()?;
-                Self::clear_archive(&mut io)?;
-                io.stage.as_ref().ok_or_else(invalid)?.owned.check()?;
+                observed!("cache.clear.before_commit", Self::clear_archive(&mut io))?;
+                observed!(
+                    "stage.check.after_copy",
+                    io.stage.as_ref().ok_or_else(invalid)?.owned.check()
+                )?;
             }
             self.live()?;
-            destination.check()?;
+            observed!("destination.check.before_commit", destination.check())?;
             // Session authority is acquired only after releasing export I/O.
-            commit_start()?;
+            observed!("commit.start", commit_start())?;
             {
                 let mut io = self.io.lock().map_err(|_| invalid())?;
                 let stage = io.stage.as_mut().ok_or_else(invalid)?;
-                stage.owned.check()?;
-                stage.persist(&destination.path)?;
+                observed!("stage.check.before_persist", stage.owned.check())?;
+                observed!("stage.persist", stage.persist(&destination.path))?;
                 io.stage = None;
             }
             self.phase.store(3, Ordering::Release);
@@ -569,6 +594,8 @@ impl Job {
         } else {
             result
         };
+        #[cfg(test)]
+        tests::observe_before_reap(self, &result);
         let result = combined(result, self.reap());
         if let Ok(mut finished) = self.finished.0.lock() {
             *finished = true;
@@ -582,11 +609,11 @@ impl Job {
         io.stage = Some(Stage::create(parent)?);
         let Prepared { archive, stage } = &mut *io;
         let archive = archive.as_mut().ok_or_else(invalid)?;
-        archive.archive.check()?;
+        observed!("stage.input.identity", archive.archive.check())?;
         let file = archive.file.as_mut().ok_or_else(invalid)?;
-        file.seek(SeekFrom::Start(0))?;
+        observed!(io "stage.input.rewind", file.seek(SeekFrom::Start(0)))?;
         let stage = stage.as_ref().ok_or_else(invalid)?;
-        let mut output = OpenOptions::new().write(true).open(&stage.owned.path)?;
+        let mut output = observed!(io "stage.output.open", OpenOptions::new().write(true).open(&stage.owned.path))?;
         copy_checked(file, &mut output, || self.live(), File::sync_all)
     }
 }
@@ -599,14 +626,14 @@ fn copy_checked<W: Write>(
     let mut chunk = [0; 64 * 1024];
     loop {
         live()?;
-        let read = input.read(&mut chunk)?;
+        let read = observed!(io "stage.copy.read", input.read(&mut chunk))?;
         if read == 0 {
             break;
         }
-        output.write_all(&chunk[..read])?;
+        observed!(io "stage.copy.write", output.write_all(&chunk[..read]))?;
     }
-    output.flush()?;
-    sync(output)?;
+    observed!(io "stage.copy.flush", output.flush())?;
+    observed!(io "stage.copy.sync", sync(output))?;
     live()
 }
 fn complete_png(bytes: &[u8]) -> bool {
@@ -680,15 +707,16 @@ impl Destination {
             ));
         }
         let selected_parent = path.parent().ok_or_else(invalid)?.to_owned();
-        let parent = fs::canonicalize(&selected_parent)?;
+        let parent = observed!(io "destination.select.canonicalize_parent", fs::canonicalize(&selected_parent))?;
         ordinary(&parent, true)?;
-        let parent_identity = Handle::from_path(&parent)?;
+        let parent_identity =
+            observed!(io "destination.select.parent_identity", Handle::from_path(&parent))?;
         let path = parent.join(path.file_name().ok_or_else(invalid)?);
         let existing = match ordinary(&path, false) {
             Ok(meta) => Some(Target {
-                identity: Handle::from_path(&path)?,
+                identity: observed!(io "destination.select.target_identity", Handle::from_path(&path))?,
                 length: meta.len(),
-                modified: meta.modified()?,
+                modified: observed!(io "destination.select.modified", meta.modified())?,
             }),
             Err(error) if error.code == "notFound" => None,
             Err(error) => return Err(error),
@@ -702,8 +730,10 @@ impl Destination {
         })
     }
     fn check(&self) -> Result<(), AppError> {
-        if fs::canonicalize(&self.selected_parent)? != self.parent
-            || Handle::from_path(&self.parent)? != self.parent_identity
+        if observed!(io "destination.check.canonicalize_parent", fs::canonicalize(&self.selected_parent))?
+            != self.parent
+            || observed!(io "destination.check.parent_identity", Handle::from_path(&self.parent))?
+                != self.parent_identity
         {
             return Err(failure(
                 "The destination directory changed. Choose it again.",
@@ -713,9 +743,11 @@ impl Destination {
         match (&self.existing, ordinary(&self.path, false)) {
             (None, Err(error)) if error.code == "notFound" => Ok(()),
             (Some(target), Ok(meta))
-                if Handle::from_path(&self.path)? == target.identity
+                if observed!(io "destination.check.target_identity", Handle::from_path(&self.path))?
+                    == target.identity
                     && target.length == meta.len()
-                    && target.modified == meta.modified()? =>
+                    && target.modified
+                        == observed!(io "destination.check.modified", meta.modified())? =>
             {
                 Ok(())
             }
@@ -731,24 +763,28 @@ struct Stage {
 }
 impl Stage {
     fn create(parent: &Path) -> Result<Self, AppError> {
-        let file = tempfile::Builder::new()
+        let file = observed!(io "stage.file.create", tempfile::Builder::new()
             .prefix(".mdviewerrsx-export-")
             .suffix(".zip.part")
             .disable_cleanup(true)
-            .tempfile_in(parent)?;
-        let owned = OwnedPath::file(file.path().to_owned(), file.as_file())?;
+            .tempfile_in(parent))?;
+        let owned = observed!(
+            "stage.file.guard",
+            OwnedPath::file(file.path().to_owned(), file.as_file())
+        )?;
         Ok(Self {
             owned,
             temporary: Some(file.into_temp_path()),
         })
     }
     fn persist(&mut self, destination: &Path) -> Result<(), AppError> {
-        match self
-            .temporary
-            .take()
-            .ok_or_else(invalid)?
-            .persist(destination)
-        {
+        match observed!(
+            "stage.temporary.persist",
+            self.temporary
+                .take()
+                .ok_or_else(invalid)?
+                .persist(destination)
+        ) {
             Ok(()) => {
                 self.owned.identity = None;
                 Ok(())
