@@ -239,38 +239,40 @@ test.afterEach(async ({ page }) => {
   });
 });
 
-test('both complete seven-choice slots produce real legible palettes, opposite tones and settled screenshots', async ({
-  page,
-}, info) => {
-  const network: string[] = [];
-  const violations: string[] = [];
-  page.on('request', (request) => {
-    if (new URL(request.url()).hostname !== '127.0.0.1')
-      network.push(request.url());
-  });
-  page.on('console', (message) => {
-    if (
-      message.text().includes('Content Security Policy') &&
-      !(
-        info.project.name === 'webkit' &&
-        screenshotting.has(page) &&
-        message.text() === webkitScreenshotDiagnostic
-      )
-    )
-      violations.push(message.text());
-  });
-  // Real native fallback notice is an explicit fixture DTO, not a fake document error.
-  await page.evaluate(
-    (value) =>
-      window.readerFixture.settingsEvent({
-        ...value,
-        notice:
-          'Some saved preferences could not be loaded; defaults are being used.',
-      }),
-    record(1),
-  );
-  for (const mode of ['light', 'dark'] as const) {
-    for (const [id] of palettes) {
+// Each slot/palette combination owns its test budget; the browser and server
+// remain shared by the existing runner rather than restarted per combination.
+for (const mode of ['light', 'dark'] as const) {
+  for (const [id] of palettes) {
+    test(`palette coverage: ${mode} slot / ${id} is legible with settled evidence`, async ({
+      page,
+    }, info) => {
+      const network: string[] = [];
+      const violations: string[] = [];
+      page.on('request', (request) => {
+        if (new URL(request.url()).hostname !== '127.0.0.1')
+          network.push(request.url());
+      });
+      page.on('console', (message) => {
+        if (
+          message.text().includes('Content Security Policy') &&
+          !(
+            info.project.name === 'webkit' &&
+            screenshotting.has(page) &&
+            message.text() === webkitScreenshotDiagnostic
+          )
+        )
+          violations.push(message.text());
+      });
+      // Real native fallback notice is an explicit fixture DTO, not a fake document error.
+      await page.evaluate(
+        (value) =>
+          window.readerFixture.settingsEvent({
+            ...value,
+            notice:
+              'Some saved preferences could not be loaded; defaults are being used.',
+          }),
+        record(1),
+      );
       const dialog = await settings(page);
       for (const label of ['Light palette', 'Dark palette']) {
         expect(
@@ -369,17 +371,17 @@ test('both complete seven-choice slots produce real legible palettes, opposite t
         });
         await capture(page, info, `${id}-100-1280x800`);
       }
-    }
+      expect(await page.evaluate(() => window.readerFixture.parses())).toBe(1);
+      expect(
+        (await page.evaluate(() => window.readerFixture.calls())).map(
+          (call) => call.command,
+        ),
+      ).toEqual(['select_document', 'commit_document']);
+      expect(network).toEqual([]);
+      expect(violations).toEqual([]);
+    });
   }
-  expect(await page.evaluate(() => window.readerFixture.parses())).toBe(1);
-  expect(
-    (await page.evaluate(() => window.readerFixture.calls())).map(
-      (call) => call.command,
-    ),
-  ).toEqual(['select_document', 'commit_document']);
-  expect(network).toEqual([]);
-  expect(violations).toEqual([]);
-});
+}
 
 test('System observes both slots, forced modes ignore OS changes, inactive edits persist without recolor or parse', async ({
   page,
