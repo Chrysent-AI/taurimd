@@ -47,6 +47,29 @@ CI fetches complete ancestry and independently scans explicit PR merge-base/head
 
 CI uses the same quality commands. Browser tests and unsigned native release builds are separately owned jobs; macOS rejects Intel hosts/targets. The first-party runner image table lists `macos-15` as arm64: https://github.com/actions/runner-images/blob/4da2307112a0fad2fd2ecaca8ba7d08683b8c581/README.md#available-images . The runtime architecture guard remains in place; no Intel job is selected. Repository YAML does not prove remote execution or required-check/branch-protection settings. No publish or deployment job exists.
 
+## Manual Cargo build cleanup
+
+GNU Make with a POSIX shell is an optional convenience, not a Windows prerequisite. Bare `make` only prints help. Preview first, then explicitly clean a checkout that is not building or running validation:
+
+```sh
+make clean-builds-preview
+make clean-builds
+# Select a different checkout, including paths with spaces:
+make clean-builds-preview WORKTREE="../completed checkout"
+make clean-builds WORKTREE="../completed checkout"
+```
+
+`WORKTREE` defaults to the current checkout. Cleanup removes its `src-tauri/target/debug` and `release` outputs, plus the same profiles under existing targets recognized by `rustc --print target-list`. It preserves sibling `native-candidates`, `THIRD_PARTY_NOTICES.md`, documentation, custom profiles, evidence, source, npm/browser caches and other checkouts. Files inside a removed build profile are build outputs, so keep retained evidence outside those profiles. Cleanup is never automatic; the next Cargo validation/build will rebuild cold. Preview lists Cargo's proposed removals without changing the checkout.
+
+Without Make, run Cargo directly from the selected checkout:
+
+```sh
+cargo clean --frozen --manifest-path src-tauri/Cargo.toml --target-dir src-tauri/target --config 'build.build-dir="src-tauri/target"' --profile dev
+cargo clean --frozen --manifest-path src-tauri/Cargo.toml --target-dir src-tauri/target --config 'build.build-dir="src-tauri/target"' --profile release
+```
+
+These commands pin both output locations, overriding inherited Cargo directory configuration. For existing target-specific outputs, repeat both commands with `build.build-dir` set to `src-tauri/target/<triple>` (use a target from `rustc --print target-list`), leaving `--target-dir` unchanged. Cargo 1.97.1 ignores `--target` for whole-profile cleaning; the Make targets instead scope Cargo's build directory for each target. They also disable Cargo's compiler-info cache writes during preview. Nonstandard custom-target directories are left untouched. No worktree, global cache, retained candidate or notice cleanup is performed.
+
 ## Validation ownership and evidence
 
 Run focused checks while implementing. The finalization owner runs the full gate **once**, normally through the installed pre-commit hook; do not reflexively run `check:local` and then repeat the same full group in a commit. Report failed/unavailable checks honestly, preserve complete output in logs, and never bypass a hook to commit. Native manual smoke has its own checklist in `README.md` and must not be described as covered by browser tests.
