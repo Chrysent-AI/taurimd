@@ -7,6 +7,9 @@ export default async function setup() {
     optimizeDeps: {
       include: [
         'react-dom',
+        '@tauri-apps/api/webviewWindow',
+        '@tauri-apps/api/window',
+        '@tauri-apps/api/webview',
         'marked',
         'marked-footnote',
         'highlight.js/lib/common',

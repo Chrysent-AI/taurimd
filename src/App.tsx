@@ -8,9 +8,13 @@ import {
   useSyncExternalStore,
 } from 'react';
 import { flushSync } from 'react-dom';
-import { listen } from '@tauri-apps/api/event';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import type { ReaderController } from './controller';
-import { preferences, navigation as navigationBridge } from './native';
+import {
+  preferences,
+  documentRequests,
+  navigation as navigationBridge,
+} from './native';
 import { NavigationController } from './navigation/model';
 import { Navigation } from './navigation/Navigation';
 import { QuickOpen } from './navigation/QuickOpen';
@@ -439,11 +443,18 @@ export function App({ controller }: { controller: ReaderController }) {
       flushSync(() => {
         setSurface(null);
       });
-      void controller.openEntry(intent);
+      // Navigation controls become disabled during handoff. Retire that focus
+      // now, before native activation, never on the destination acknowledgement.
+      if (
+        sidebar.current?.contains(window.document.activeElement) ||
+        window.document.activeElement?.closest('.recovery')
+      )
+        focusReading();
+      void controller.openEntry(intent, true);
       modalOpen.current = null;
       pickerHandoff.current = false;
     },
-    [controller, navigation, picker],
+    [controller, navigation, picker, focusReading],
   );
   const chooseFromPicker = useCallback(
     async (kind: 'file' | 'folder') => {
@@ -461,6 +472,12 @@ export function App({ controller }: { controller: ReaderController }) {
         setPickerNative(true);
         setSurface(null);
       });
+      if (
+        kind === 'file' &&
+        (sidebar.current?.contains(window.document.activeElement) ||
+          window.document.activeElement?.closest('.recovery'))
+      )
+        focusReading();
       const outcome =
         kind === 'file'
           ? await controller.run('open')
@@ -478,7 +495,7 @@ export function App({ controller }: { controller: ReaderController }) {
         setSurface('quick-open');
       } else modalOpen.current = null;
     },
-    [controller, navigation, picker],
+    [controller, navigation, picker, focusReading],
   );
   const dispatch = useCallback(
     (payload: string, invoker?: HTMLElement) => {
@@ -645,6 +662,23 @@ export function App({ controller }: { controller: ReaderController }) {
         startExport(payload === 'export-svg' ? 'svg' : 'png');
       } else if (zoom) {
         settingsController.zoom(payload);
+      } else if (payload === 'fit-diagrams') {
+        settingsController.change({
+          fitDiagrams: !settingsController.getState().settings.fitDiagrams,
+        });
+      } else if (
+        payload === 'appearance-system' ||
+        payload === 'appearance-light' ||
+        payload === 'appearance-dark'
+      ) {
+        settingsController.change({
+          mode:
+            payload === 'appearance-system'
+              ? 'system'
+              : payload === 'appearance-light'
+                ? 'light'
+                : 'dark',
+        });
       } else if (payload === 'status-bar') {
         if (statusBar.current?.contains(window.document.activeElement))
           focusReading();
@@ -687,6 +721,12 @@ export function App({ controller }: { controller: ReaderController }) {
             ? window.document.activeElement
             : null);
         const before = controller.state.displayed;
+        if (
+          payload === 'open' &&
+          (sidebar.current?.contains(window.document.activeElement) ||
+            window.document.activeElement?.closest('.recovery'))
+        )
+          focusReading();
         void controller.run(payload);
         focusIntent.current =
           payload === 'reload'
@@ -742,6 +782,8 @@ export function App({ controller }: { controller: ReaderController }) {
                 : 'other',
       composing: composition,
       pageZoom: settings.pageZoom,
+      appearance: settings.mode,
+      fitDiagrams: settings.fitDiagrams,
     })
       .then(() => {
         if (!disposed) setPresentationError(false);
@@ -757,6 +799,8 @@ export function App({ controller }: { controller: ReaderController }) {
     settings.sidebarDefault,
     navigationState,
     settings.pageZoom,
+    settings.mode,
+    settings.fitDiagrams,
     busy,
     surface,
     composition,
@@ -767,12 +811,28 @@ export function App({ controller }: { controller: ReaderController }) {
     findOpen,
     findResult,
   ]);
+  const dispatchLatest = useRef(dispatch);
+  useLayoutEffect(() => {
+    dispatchLatest.current = dispatch;
+  }, [dispatch]);
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    void listen<string>('menu_action', ({ payload }) => {
-      dispatch(payload);
-    })
+    let sequence = 0;
+    void getCurrentWebviewWindow()
+      .listen<{ actionId: string; sequence: number }>(
+        'menu_action',
+        ({ payload }) => {
+          if (disposed) return;
+          if (
+            !Number.isSafeInteger(payload.sequence) ||
+            payload.sequence <= sequence
+          )
+            return;
+          sequence = payload.sequence;
+          dispatchLatest.current(payload.actionId);
+        },
+      )
       .then((stop) => {
         if (disposed) stop();
         else unlisten = stop;
@@ -787,7 +847,144 @@ export function App({ controller }: { controller: ReaderController }) {
       disposed = true;
       unlisten?.();
     };
-  }, [dispatch]);
+  }, []);
+  const receiveLatest = useRef<() => Promise<void>>(async () => {});
+  useLayoutEffect(() => {
+    receiveLatest.current = async () => {
+      const request = await documentRequests.pending();
+      if (!request || !readerMounted.current) return;
+      if (request.kind === 'error') {
+        controller.notice(
+          request.error.attempted
+            ? `${request.error.attempted}: ${request.error.message}`
+            : request.error.message,
+        );
+        await documentRequests.dismiss(request.token);
+        return;
+      }
+      if (!allowNavigation()) {
+        await documentRequests.dismiss(request.token);
+        const message =
+          'Incoming document or section unavailable during composition, pending reading or a native dialog. Use Open File or try again after finishing it.';
+        controller.notice(message);
+        if (modalOpen.current && modalOpen.current !== 'export')
+          setActionFeedback({ message, state: controller.state });
+        return;
+      }
+      if (request.kind === 'open') {
+        closeFind();
+        // The destination controller owns parsing after native acceptance;
+        // notification handling must remain free to reject later busy actions.
+        void controller.receive((requestId) =>
+          documentRequests.receive(request.token, requestId),
+        );
+      } else {
+        const displayed = controller.state.displayed;
+        if (
+          !displayed ||
+          displayed.snapshot.documentId !== request.document_id ||
+          displayed.snapshot.revision !== request.revision
+        ) {
+          await documentRequests.dismiss(request.token);
+          controller.notice(
+            'This section belongs to a replaced document. Open the link again.',
+          );
+          return;
+        }
+        await documentRequests.dismiss(request.token);
+        // Recheck actual owners after IPC, including logical native Save with no DOM modal.
+        if (!allowNavigation() || controller.state.displayed !== displayed)
+          return;
+        if (request.fragment) {
+          closeFind();
+          let fragment = request.fragment;
+          try {
+            fragment = decodeURIComponent(fragment);
+          } catch {
+            /* Missing section feedback below. */
+          }
+          const target = window.document.getElementById(
+            displayed.fragments?.[fragment] ?? '',
+          );
+          if (target && article.current?.contains(target)) {
+            target.focus({ preventScroll: true });
+            target.scrollIntoView({ block: 'start' });
+          } else
+            controller.notice(
+              'Section or footnote not found in this document.',
+            );
+        }
+      }
+    };
+  }, [controller, allowNavigation, closeFind]);
+  useEffect(() => {
+    let disposed = false;
+    let running = false;
+    let failed = false;
+    let again = false;
+    const stops: (() => void)[] = [];
+    const receive = async () => {
+      if (disposed) return;
+      if (running) {
+        again = true;
+        return;
+      }
+      running = true;
+      try {
+        await receiveLatest.current().catch(() => {
+          if (!disposed)
+            controller.notice(
+              'Native document delivery could not finish. Use Open File to recover.',
+            );
+        });
+      } finally {
+        running = false;
+        if (again) {
+          again = false;
+          void receive();
+        }
+      }
+    };
+    const register = async (subscription: Promise<() => void>) => {
+      const stop = await subscription;
+      if (disposed || failed) stop();
+      else stops.push(stop);
+    };
+    void Promise.all([
+      register(
+        getCurrentWebviewWindow().listen('document_requested', () => {
+          void receive();
+        }),
+      ),
+      register(
+        getCurrentWebviewWindow().listen<string>(
+          'reader_notice',
+          ({ payload }) => {
+            if (!disposed) controller.notice(payload);
+          },
+        ),
+      ),
+    ])
+      .then(() => {
+        if (!disposed) void receive();
+      })
+      .catch(() => {
+        failed = true;
+        stops.splice(0).forEach((stop) => {
+          stop();
+        });
+        if (!disposed)
+          controller.notice(
+            'Native document notifications unavailable. Use Open File to recover.',
+          );
+      });
+    return () => {
+      disposed = true;
+      stops.forEach((stop) => {
+        stop();
+      });
+    };
+  }, [controller]);
   useEffect(() => {
     const document = state.displayed;
     if (document && document !== lastDocument.current) {
@@ -946,7 +1143,38 @@ export function App({ controller }: { controller: ReaderController }) {
           !modalOpen.current
         ) {
           setLinkFeedback(null);
-          void controller.activate(document, action.href);
+          void controller.activate(document, action.href).then((result) => {
+            if (
+              typeof result !== 'object' ||
+              result.status !== 'anchor' ||
+              controller.state.displayed !== document
+            )
+              return;
+            if (!allowNavigation()) {
+              controller.notice(
+                'Section navigation is unavailable while another action owns this reader.',
+              );
+              return;
+            }
+            closeFind();
+            let fragment = result.fragment;
+            try {
+              fragment = decodeURIComponent(fragment);
+            } catch {
+              /* Missing section feedback below. */
+            }
+            const target = window.document.getElementById(
+              document.fragments?.[fragment] ?? '',
+            );
+            if (target && host.contains(target)) {
+              controller.notice('');
+              target.focus({ preventScroll: true });
+              target.scrollIntoView({ block: 'start' });
+            } else
+              controller.notice(
+                'Section or footnote not found in this document.',
+              );
+          });
         }
         return;
       }
@@ -975,7 +1203,7 @@ export function App({ controller }: { controller: ReaderController }) {
       host.removeEventListener('click', activate);
       host.removeEventListener('auxclick', preventEscape);
     };
-  }, [state.displayed, controller]);
+  }, [state.displayed, controller, allowNavigation, closeFind]);
   useEffect(() => {
     const document = state.displayed;
     const host = article.current;
@@ -1089,6 +1317,9 @@ export function App({ controller }: { controller: ReaderController }) {
                 Dismiss export message
               </button>
             </div>
+          )}
+          {!document && busy && state.linkMessage && (
+            <p role="alert">{state.linkMessage}</p>
           )}
           {(busy || state.phase === 'error') && (
             <p role={state.phase === 'error' ? 'alert' : undefined}>
@@ -1340,7 +1571,11 @@ export function App({ controller }: { controller: ReaderController }) {
             ) : (
               <>
                 <p
-                  className="link-feedback"
+                  className={
+                    state.quietLink && linkFeedback?.document !== document
+                      ? 'link-feedback sr-only'
+                      : 'link-feedback'
+                  }
                   aria-live="polite"
                   aria-label="Reading link status"
                 >

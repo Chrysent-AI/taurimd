@@ -88,4 +88,14 @@ jobs:
       - name: Rust quality on additional native targets
         if: runner.os != 'Linux'
         run: npm run check:rust
-      - run: npm run tauri -- build --no-bundle --ci --no-sign
+      - name: Build unsigned host-native installer candidates
+        run: npm run tauri -- build --ci --no-sign -- --locked
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: unsigned-native-${{ matrix.os }}
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: error
+          retention-days: 7

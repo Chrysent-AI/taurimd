@@ -105,16 +105,6 @@ pub fn destination(parent: &Path, href: &str) -> Result<Destination, AppError> {
     Ok(Destination::Document(path, fragment))
 }
 
-pub fn caller(label: &str) -> Result<(), AppError> {
-    if label == "reader" {
-        Ok(())
-    } else {
-        Err(AppError::new(
-            "denied",
-            "This webview has no document grant.",
-        ))
-    }
-}
 // The side-effect seam is injectable for tests; URL validation always precedes it.
 pub fn open_external(
     url: Url,

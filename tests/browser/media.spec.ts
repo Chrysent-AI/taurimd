@@ -158,7 +158,7 @@ test.beforeEach(async ({ page }) => {
   );
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.listenerCount()))
-    .toBe(3);
+    .toBe(5);
 });
 test.afterEach(async ({ page }) => {
   await page.evaluate(() => {
@@ -412,7 +412,7 @@ test('real decode/controls/seek and visible failures retain nodes, focus and pla
   await capture(page, info, 'media-narrow-300', { palette: 'nord', zoom: 300 });
 });
 
-test('trusted activation only, native acknowledgement, linked worker/commit fragment focus and failure preserve origin/reader status', async ({
+test('trusted activation only, native acknowledgement and cross-reader link handoff preserve origin/reader status', async ({
   page,
 }) => {
   await open(
@@ -479,18 +479,7 @@ test('trusted activation only, native acknowledgement, linked worker/commit frag
   await expect(page.getByLabel('Reading link status')).toBeEmpty();
   await page.evaluate(() => {
     window.readerFixture.release('cancelled-link', {
-      value: {
-        status: 'document',
-        fragment: null,
-        snapshot: {
-          documentId: 5,
-          revision: 5,
-          name: 'cancelled.md',
-          location: 'fixture/cancelled.md',
-          format: 'markdown',
-          source: '# Cancelled linked document',
-        },
-      },
+      value: { status: 'handedOff' },
     });
   });
   await expect(
@@ -504,32 +493,23 @@ test('trusted activation only, native acknowledgement, linked worker/commit frag
   ).toHaveCount(0);
   await page.evaluate(() => {
     window.readerFixture.enqueue('activate_link', {
-      value: {
-        status: 'document',
-        fragment: 'destination',
-        snapshot: {
-          documentId: 7,
-          revision: 7,
-          name: 'related.md',
-          location: 'fixture/related.md',
-          format: 'markdown',
-          source:
-            '---\ntitle: Linked metadata\n---\n# Destination\n\nLinked content.',
-        },
-      },
+      value: { status: 'handedOff' },
     });
   });
   await page.getByRole('link', { name: 'Related', exact: true }).click();
   await expect(
-    page.getByRole('heading', { name: 'Destination', exact: true }),
-  ).toBeFocused();
-  await expect(
-    page.getByRole('region', { name: 'Document metadata' }),
-  ).toContainText('Linked metadata');
-  await expect(page.getByLabel('Displayed document')).toContainText(
-    'related.md',
+    page.getByRole('heading', { name: 'Origin', exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel('Displayed document')).toContainText('media.md');
+  await expect(page.getByLabel('Reading link status')).toHaveText(
+    'Opened in another reader.',
   );
-  await expect(page.getByLabel('Reading link status')).toBeEmpty();
+  expect(await page.evaluate(() => window.readerFixture.parses())).toBe(1);
+  expect(
+    (await page.evaluate(() => window.readerFixture.calls())).filter(
+      (call) => call.command === 'commit_document',
+    ),
+  ).toHaveLength(1);
   const calls = await page.evaluate(() => window.readerFixture.calls());
   expect(
     calls

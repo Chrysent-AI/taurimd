@@ -336,6 +336,18 @@ impl Navigation {
         self.previews.insert(request, (scope.id, cancel.clone()));
         Ok((scope, record, cancel))
     }
+    pub fn stop(&self) {
+        for scope in self.root.iter().chain(self.siblings.iter()) {
+            scope.cancel.store(true, Ordering::Release);
+            scope.lifetime.store(true, Ordering::Release);
+        }
+        for (_, cancel) in self.previews.values() {
+            cancel.store(true, Ordering::Release);
+        }
+        if let Some(worker) = &self.worker {
+            worker.stop();
+        }
+    }
     pub fn cancel_preview(&mut self, request: u32) {
         if let Some((_, cancel)) = self.previews.remove(&request) {
             cancel.store(true, Ordering::Release);
@@ -344,13 +356,7 @@ impl Navigation {
 }
 impl Drop for Navigation {
     fn drop(&mut self) {
-        for scope in self.root.iter().chain(self.siblings.iter()) {
-            scope.cancel.store(true, Ordering::Release);
-            scope.lifetime.store(true, Ordering::Release);
-        }
-        for (_, cancel) in self.previews.values() {
-            cancel.store(true, Ordering::Release);
-        }
+        self.stop();
     }
 }
 

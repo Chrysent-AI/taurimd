@@ -86,7 +86,7 @@ test.beforeEach(async ({ page }) => {
   );
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.listenerCount()))
-    .toBe(3);
+    .toBe(5);
   await page.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
   await page.clock.pauseAt(new Date('2026-01-01T00:00:01Z'));
 });
@@ -109,7 +109,7 @@ test('manual refresh settles through cached getters when only index notification
   );
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.listenerCount()))
-    .toBe(2);
+    .toBe(4);
   await choose(page);
   await open(page);
   const article = await page.getByRole('article').elementHandle();
@@ -210,23 +210,17 @@ test('native action focuses once, debounces cache queries, file Tab hands off af
   await expect(options(page).filter({ hasText: 'alpha.md' })).toBeFocused();
   await page.evaluate(() => {
     window.readerFixture.enqueue('open_index_entry', {
-      value: {
-        documentId: 2,
-        contextId: 2,
-        revision: 2,
-        name: 'alpha.md',
-        location: 'fixture/authorized/alpha.md',
-        format: 'markdown',
-        source: '# Accepted',
-      },
+      hold: 'picker-handoff',
     });
-    window.readerFixture.enqueue('commit_document', { hold: 'picker-commit' });
   });
   await options(page).filter({ hasText: 'alpha.md' }).press('Enter');
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.pending()))
-    .toContain('picker-commit');
+    .toContain('picker-handoff');
+  await expect(page.getByLabel('Reader recovery')).toContainText(
+    'Opening alpha.md in another reader',
+  );
   await page.evaluate(() => window.readerFixture.menu('quick-open'));
   await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(
@@ -239,12 +233,26 @@ test('native action focuses once, debounces cache queries, file Tab hands off af
   ).toMatchObject({
     command: 'open_index_entry',
     dialog: false,
-    focused: 'Open alpha.md',
+    focused: 'kept.md',
   });
   await page.evaluate(() => {
-    window.readerFixture.release('picker-commit', { value: null });
+    window.readerFixture.release('picker-handoff', {
+      value: { status: 'handedOff' },
+    });
   });
-  await expect(page.getByRole('article', { name: 'alpha.md' })).toBeFocused();
+  await expect(page.getByRole('article', { name: 'kept.md' })).toBeVisible();
+  await expect(page.getByRole('article', { name: 'kept.md' })).toBeFocused();
+  expect(await page.evaluate(() => window.readerFixture.parses())).toBe(1);
+  expect(
+    (await page.evaluate(() => window.readerFixture.calls())).filter(
+      (call) => call.command === 'commit_document',
+    ),
+  ).toHaveLength(1);
+  expect(
+    (await page.evaluate(() => window.readerFixture.calls())).find(
+      (call) => call.command === 'open_index_entry',
+    )?.payload,
+  ).toMatchObject({ newWindow: true });
   expect(
     (await page.evaluate(() => window.readerFixture.calls())).filter(
       (call) => call.command === 'refresh_index',

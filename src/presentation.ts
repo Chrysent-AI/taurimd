@@ -13,6 +13,8 @@ export interface MenuPresentation {
   modal: 'none' | 'settings' | 'quickOpen' | 'other';
   composing: boolean;
   pageZoom: number;
+  appearance: 'system' | 'light' | 'dark';
+  fitDiagrams: boolean;
 }
 let sequence = 0;
 export function syncMenu(presentation: MenuPresentation) {

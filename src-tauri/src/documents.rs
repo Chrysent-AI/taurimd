@@ -23,7 +23,7 @@ impl AppError {
             attempted: None,
         }
     }
-    fn at(mut self, path: &Path) -> Self {
+    pub(crate) fn at(mut self, path: &Path) -> Self {
         self.attempted = Some(path.to_string_lossy().into_owned());
         self
     }
@@ -205,6 +205,9 @@ pub fn read_document(
 
 #[derive(Default)]
 pub struct Session {
+    pub(crate) owner: Option<String>,
+    pub(crate) closed: bool,
+    pub(crate) retired_exports: Vec<Arc<crate::export::Job>>,
     pub(crate) navigation: crate::navigation::Navigation,
     pending_navigation: Option<Arc<AtomicBool>>,
     pub(crate) export: Option<Arc<crate::export::Job>>,
@@ -216,12 +219,30 @@ pub struct Session {
     pub(crate) media: std::collections::HashMap<String, crate::media::Grant>,
 }
 impl Session {
+    pub fn enrolled(owner: String) -> Self {
+        let mut session = Self::default();
+        session.owner = Some(owner);
+        session
+    }
+    pub fn caller(&self, caller: &str) -> Result<(), AppError> {
+        if !self.closed && self.owner.as_deref().unwrap_or("reader") == caller {
+            Ok(())
+        } else {
+            Err(AppError::new(
+                "denied",
+                "This reader is not enrolled or has closed.",
+            ))
+        }
+    }
+    pub fn displayed(&self) -> Option<&GrantedDocument> {
+        self.active.as_ref().filter(|_| !self.closed)
+    }
     pub fn close_reads(&self) {
         self.cancel.store(true, Ordering::Relaxed);
         self.media_lifetime.store(true, Ordering::Release);
     }
     pub fn begin(&mut self, request: u32) -> Result<Arc<AtomicBool>, AppError> {
-        if request <= self.latest {
+        if self.closed || request <= self.latest {
             return Err(Self::stale());
         }
         self.retire_export()?;
@@ -233,7 +254,7 @@ impl Session {
         Ok(self.cancel.clone())
     }
     pub fn current(&self, request: u32) -> Result<(), AppError> {
-        if self.latest != request || self.cancel.load(Ordering::Relaxed) {
+        if self.closed || self.latest != request || self.cancel.load(Ordering::Relaxed) {
             Err(Self::stale())
         } else {
             Ok(())
@@ -265,6 +286,9 @@ impl Session {
         self.active_ref(id, revision).cloned()
     }
     pub(crate) fn active_ref(&self, id: u32, revision: u32) -> Result<&GrantedDocument, AppError> {
+        if self.closed {
+            return Err(Self::stale());
+        }
         self.active
             .as_ref()
             .filter(|x| x.snapshot.document_id == id && x.snapshot.revision == revision)
@@ -302,6 +326,7 @@ impl Session {
         }
         if let Some(job) = self.export.take() {
             job.retire_detached();
+            self.retired_exports.push(job);
         }
         Ok(())
     }

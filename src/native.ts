@@ -1,12 +1,14 @@
 import type { NavigationBridge, EntryBinding } from './navigation/types';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import type {
   SettingsBridge,
   SettingsRecord,
   SettingsUpdate,
 } from './settings/model';
 import type {
+  AppError,
   Activation,
   ResolvedMedia,
   NativeReader,
@@ -61,7 +63,7 @@ export function mediaURL(value: ResolvedMedia) {
 export const navigation: NavigationBridge = {
   get: () => invoke('get_index'),
   listen: (receive) =>
-    listen<import('./navigation/types').IndexStatus>(
+    getCurrentWebviewWindow().listen<import('./navigation/types').IndexStatus>(
       'index_status',
       ({ payload }) => {
         receive(payload);
@@ -85,9 +87,36 @@ export const navigation: NavigationBridge = {
       revision: document.revision,
     }),
 };
+export type DocumentRequest =
+  | { kind: 'open'; token: number }
+  | {
+      kind: 'focus';
+      token: number;
+      document_id: number;
+      revision: number;
+      fragment: string | null;
+    }
+  | { kind: 'error'; token: number; error: AppError };
+export const documentRequests = {
+  pending: () => invoke<DocumentRequest | null>('pending_document'),
+  receive: (token: number, requestId: number) =>
+    invoke<{ snapshot: Snapshot; fragment: string | null }>(
+      'receive_document',
+      { token, requestId },
+    ),
+  dismiss: (token: number) => invoke<null>('dismiss_document', { token }),
+};
 export const native: NativeReader = {
-  openEntry: (requestId: number, binding: EntryBinding) =>
-    invoke<Snapshot>('open_index_entry', { requestId, binding }),
+  openEntry: async (
+    requestId: number,
+    binding: EntryBinding,
+    newWindow = false,
+  ) => {
+    const result = await invoke<
+      { status: 'ready'; snapshot: Snapshot } | { status: 'handedOff' }
+    >('open_index_entry', { requestId, binding, newWindow });
+    return result.status === 'ready' ? result.snapshot : result;
+  },
   select: (requestId) => invoke<Selection>('select_document', { requestId }),
   reload: (requestId, document) =>
     invoke<Snapshot>('reload_document', {

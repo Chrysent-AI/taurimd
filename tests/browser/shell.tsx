@@ -7,10 +7,18 @@ import {
   mockConvertFileSrc,
 } from '@tauri-apps/api/mocks';
 import type { invoke } from '@tauri-apps/api/core';
-import { emit } from '@tauri-apps/api/event';
+import { emit, emitTo, type Event } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
+import {
+  FixtureEvents,
+  type EventIPC,
+  type ReaderEvent,
+} from './event-transport';
 import { App } from '../../src/App';
 import { ReaderController } from '../../src/controller';
-import { native } from '../../src/native';
+import { native, type DocumentRequest } from '../../src/native';
+import type { Snapshot } from '../../src/types';
 import { parseInWorker } from '../../src/reader/worker';
 import type { MenuPresentation } from '../../src/presentation';
 import type {
@@ -28,6 +36,9 @@ import {
 } from '../../src/settings/model';
 
 type Command =
+  | 'pending_document'
+  | 'receive_document'
+  | 'dismiss_document'
   | 'get_index'
   | 'query_index'
   | 'complete_path'
@@ -222,127 +233,200 @@ function retain(record: SettingsRecord) {
 
 // This is a browser-only backend double. It does not read files or emulate
 // native grants, permissions, menus, dialogs or source-byte preservation.
-mockWindows('reader');
+let incoming: DocumentRequest | null = new URL(location.href).searchParams.has(
+  'cold-document',
+)
+  ? { kind: 'open', token: 1 }
+  : null;
+let received: { snapshot: Snapshot; fragment: string | null } | null = incoming
+  ? {
+      snapshot: {
+        documentId: 1,
+        revision: 1,
+        name: 'cold.md',
+        location: 'fixture/cold.md',
+        format: 'markdown',
+        source:
+          '# Cold document\n\n## Section\n\n```mermaid\nflowchart LR\n A --> B\n```',
+      },
+      fragment: 'section',
+    }
+  : null;
+let menuSequence = 0;
+mockWindows(new URL(location.href).searchParams.get('reader') ?? 'reader-1');
+const eventBroker = new FixtureEvents();
+const eventOwner = {};
+const eventCalls: EventIPC[] = [];
+const eventMetadata = () => ({
+  currentWindow: { label: getCurrentWindow().label },
+  currentWebview: { label: getCurrentWebview().label },
+});
+function deliverEvent(callback: number, event: Event<unknown>) {
+  const internals: unknown = Reflect.get(window, '__TAURI_INTERNALS__');
+  if (typeof internals !== 'object' || internals === null)
+    throw new Error('Missing installed event bridge');
+  const deliver: unknown = Reflect.get(internals, 'runCallback');
+  if (typeof deliver !== 'function')
+    throw new Error('Installed event callback bridge unavailable');
+  (deliver as (id: number, value: Event<unknown>) => void)(callback, event);
+}
+function nativeEvent(event: ReaderEvent, payload: unknown) {
+  if (window.readerEventIPC)
+    return window.readerEventIPC({
+      command: 'fixture:native_emit',
+      payload: { event, payload },
+      metadata: eventMetadata(),
+    });
+  return emitTo(
+    { kind: 'WebviewWindow', label: eventMetadata().currentWindow.label },
+    event,
+    payload,
+  );
+}
 // Browser-only HTTP transport double. Production uses the same convertFileSrc
 // adapter with the native runtime's platform mapping, not this mock setting.
 mockConvertFileSrc('windows');
-mockIPC(
-  async (command, payload) => {
-    if (
-      ![
-        'get_index',
-        'query_index',
-        'complete_path',
-        'select_root',
-        'refresh_index',
-        'get_siblings',
-        'read_preview',
-        'cancel_preview',
-        'open_index_entry',
-        'reveal_document',
-        'select_document',
-        'reload_document',
-        'commit_document',
-        'cancel_operation',
-        'get_settings',
-        'update_settings',
-        'resolve_media',
-        'activate_link',
-        'present_reader',
-        'begin_export',
-        'append_export_image',
-        'finish_export',
-        'cancel_export',
-      ].includes(command)
-    )
-      throw new Error(`Unexpected fixture command: ${command}`);
-    const name = command as Command;
-    if (name === 'open_index_entry' || name === 'select_document')
-      openings.push({
-        command: name,
-        dialog: !!document.querySelector('dialog[open]'),
-        focused:
-          document.activeElement?.getAttribute('aria-label') ??
-          document.activeElement?.tagName ??
-          null,
-      });
-    calls.push({ command: name, payload: structuredClone(payload) });
-    try {
-      const reply = replies.get(name)?.shift();
-      const applyPresentation = () => {
-        const next = (
-          payload as { presentation: MenuPresentation & { sequence: number } }
-        ).presentation;
-        if (!presentation || next.sequence > presentation.sequence)
-          presentation = structuredClone(next);
-      };
-      if (!reply && name === 'get_index') return structuredClone(cachedIndex);
-      if (!reply && (name === 'query_index' || name === 'complete_path'))
-        return queryReply((payload as { request: QueryRequest }).request);
-      if (!reply && name === 'get_siblings')
-        return structuredClone(siblingReply);
-      if (!reply && (name === 'cancel_preview' || name === 'reveal_document'))
-        return null;
-      if (!reply && name === 'begin_export') return ++exportId;
-      if (
-        !reply &&
-        (name === 'append_export_image' || name === 'cancel_export')
-      )
-        return null;
-      if (!reply && name === 'finish_export') return { status: 'cancelled' };
-      if (!reply && name === 'present_reader') {
-        applyPresentation();
-        return null;
-      }
-      if (!reply && (name === 'commit_document' || name === 'cancel_operation'))
-        return null;
-      if (!reply && name === 'get_settings') return structuredClone(settings);
-      if (!reply && name === 'update_settings') {
-        const args = payload as {
-          expectedRevision: number;
-          patch: SettingsPatch;
-        };
-        if (args.expectedRevision !== settings.revision)
-          return { status: 'conflict', record: structuredClone(settings) };
-        retain({
-          version: 1,
-          revision: settings.revision + 1,
-          settings: { ...settings.settings, ...args.patch },
-          notice: null,
-        });
-        await emit('settings_changed', structuredClone(settings));
-        return { status: 'committed', record: structuredClone(settings) };
-      }
-      if (!reply) throw new Error(`Queue a backend response for ${name}`);
-      const outcome =
-        'hold' in reply
-          ? await new Promise<Outcome>((resolve) => {
-              pending.set(reply.hold, resolve);
-            })
-          : reply;
-      if ('error' in outcome) {
-        // Tauri rejects commands with the serialized AppError DTO, not a JS Error.
-        // eslint-disable-next-line @typescript-eslint/only-throw-error
-        throw outcome.error;
-      }
-      if (name === 'select_root') {
-        const selection = outcome.value as {
-          status: string;
-          snapshot?: IndexSnapshot;
-        };
-        if (selection.snapshot)
-          cachedIndex = structuredClone(selection.snapshot);
-      }
-      if (name === 'refresh_index')
-        cachedIndex = structuredClone(outcome.value as IndexSnapshot);
-      if (name === 'present_reader') applyPresentation();
-      return structuredClone(outcome.value);
-    } finally {
-      settled.push(name);
+mockIPC(async (command, payload) => {
+  if (command.startsWith('plugin:event|')) {
+    const request = { command, payload, metadata: eventMetadata() };
+    eventCalls.push(structuredClone(request));
+    return window.readerEventIPC
+      ? window.readerEventIPC(request)
+      : eventBroker.invoke(eventOwner, request, deliverEvent);
+  }
+  if (
+    ![
+      'pending_document',
+      'receive_document',
+      'dismiss_document',
+      'get_index',
+      'query_index',
+      'complete_path',
+      'select_root',
+      'refresh_index',
+      'get_siblings',
+      'read_preview',
+      'cancel_preview',
+      'open_index_entry',
+      'reveal_document',
+      'select_document',
+      'reload_document',
+      'commit_document',
+      'cancel_operation',
+      'get_settings',
+      'update_settings',
+      'resolve_media',
+      'activate_link',
+      'present_reader',
+      'begin_export',
+      'append_export_image',
+      'finish_export',
+      'cancel_export',
+    ].includes(command)
+  )
+    throw new Error(`Unexpected fixture command: ${command}`);
+  const name = command as Command;
+  if (name === 'open_index_entry' || name === 'select_document')
+    openings.push({
+      command: name,
+      dialog: !!document.querySelector('dialog[open]'),
+      focused:
+        document.activeElement?.getAttribute('aria-label') ??
+        document.activeElement?.tagName ??
+        null,
+    });
+  calls.push({ command: name, payload: structuredClone(payload) });
+  try {
+    const reply = replies.get(name)?.shift();
+    const applyPresentation = () => {
+      const next = (
+        payload as { presentation: MenuPresentation & { sequence: number } }
+      ).presentation;
+      if (!presentation || next.sequence > presentation.sequence)
+        presentation = structuredClone(next);
+    };
+    if (!reply && name === 'pending_document') return structuredClone(incoming);
+    if (!reply && name === 'dismiss_document') {
+      incoming = null;
+      return null;
     }
-  },
-  { shouldMockEvents: true },
-);
+    if (name === 'receive_document') {
+      if (
+        !incoming ||
+        incoming.kind !== 'open' ||
+        (payload as { token: number }).token !== incoming.token
+      )
+        throw new Error('Stale incoming request');
+      incoming = null;
+      if (!reply && received) return structuredClone(received);
+    }
+    if (!reply && name === 'get_index') return structuredClone(cachedIndex);
+    if (!reply && (name === 'query_index' || name === 'complete_path'))
+      return queryReply((payload as { request: QueryRequest }).request);
+    if (!reply && name === 'get_siblings') return structuredClone(siblingReply);
+    if (!reply && (name === 'cancel_preview' || name === 'reveal_document'))
+      return null;
+    if (!reply && name === 'begin_export') return ++exportId;
+    if (!reply && (name === 'append_export_image' || name === 'cancel_export'))
+      return null;
+    if (!reply && name === 'finish_export') return { status: 'cancelled' };
+    if (!reply && name === 'present_reader') {
+      applyPresentation();
+      return null;
+    }
+    if (!reply && (name === 'commit_document' || name === 'cancel_operation'))
+      return null;
+    if (!reply && name === 'get_settings') return structuredClone(settings);
+    if (!reply && name === 'update_settings') {
+      const args = payload as {
+        expectedRevision: number;
+        patch: SettingsPatch;
+      };
+      if (args.expectedRevision !== settings.revision)
+        return { status: 'conflict', record: structuredClone(settings) };
+      retain({
+        version: 1,
+        revision: settings.revision + 1,
+        settings: { ...settings.settings, ...args.patch },
+        notice: null,
+      });
+      await emit('settings_changed', structuredClone(settings));
+      return { status: 'committed', record: structuredClone(settings) };
+    }
+    if (!reply) throw new Error(`Queue a backend response for ${name}`);
+    const outcome =
+      'hold' in reply
+        ? await new Promise<Outcome>((resolve) => {
+            pending.set(reply.hold, resolve);
+          })
+        : reply;
+    if ('error' in outcome) {
+      // Tauri rejects commands with the serialized AppError DTO, not a JS Error.
+      // eslint-disable-next-line @typescript-eslint/only-throw-error
+      throw outcome.error;
+    }
+    if (name === 'select_root') {
+      const selection = outcome.value as {
+        status: string;
+        snapshot?: IndexSnapshot;
+      };
+      if (selection.snapshot) cachedIndex = structuredClone(selection.snapshot);
+    }
+    if (name === 'refresh_index')
+      cachedIndex = structuredClone(outcome.value as IndexSnapshot);
+    if (name === 'present_reader') applyPresentation();
+    if (
+      name === 'open_index_entry' &&
+      typeof outcome.value === 'object' &&
+      outcome.value !== null &&
+      'documentId' in outcome.value
+    )
+      return { status: 'ready', snapshot: structuredClone(outcome.value) };
+    return structuredClone(outcome.value);
+  } finally {
+    settled.push(name);
+  }
+});
 
 // Failure injection stays in the browser's transport double; the App still
 // subscribes through the installed event API and renders its real recovery UI.
@@ -412,12 +496,32 @@ function listenerCount() {
   return 0;
 }
 const fixture = {
+  deliverEvent,
+  eventCalls: () => structuredClone(eventCalls),
+  readerNotice: (message: string) => nativeEvent('reader_notice', message),
+  documentRequest: (request: DocumentRequest, document?: Snapshot) => {
+    incoming = structuredClone(request);
+    received = document
+      ? { snapshot: structuredClone(document), fragment: null }
+      : null;
+    return nativeEvent('document_requested', null);
+  },
+  documentCalls: () =>
+    structuredClone(
+      calls.filter((call) =>
+        ['pending_document', 'receive_document', 'dismiss_document'].includes(
+          call.command,
+        ),
+      ),
+    ),
+  menuEnvelope: (actionId: string, sequence: number) =>
+    nativeEvent('menu_action', { actionId, sequence }),
   openings: () => structuredClone(openings),
   indexSnapshot,
   queryReply,
   indexEvent: async (snapshot: IndexSnapshot) => {
     cachedIndex = structuredClone(snapshot);
-    await emit('index_status', snapshot.status);
+    await nativeEvent('index_status', snapshot.status);
   },
   nativeIndex: () => structuredClone(cachedIndex),
   indexGets: () => calls.filter((call) => call.command === 'get_index').length,
@@ -454,6 +558,7 @@ const fixture = {
     structuredClone(
       calls.filter(
         (call) =>
+          call.command !== 'pending_document' &&
           call.command !== 'get_index' &&
           call.command !== 'get_siblings' &&
           call.command !== 'get_settings' &&
@@ -499,6 +604,10 @@ const fixture = {
   listenerCount,
   menu: (
     action:
+      | 'appearance-system'
+      | 'appearance-light'
+      | 'appearance-dark'
+      | 'fit-diagrams'
       | 'find'
       | 'find-next'
       | 'find-previous'
@@ -523,7 +632,8 @@ const fixture = {
       | 'about'
       | 'export-svg'
       | 'export-png',
-  ) => emit('menu_action', action),
+  ) =>
+    nativeEvent('menu_action', { actionId: action, sequence: ++menuSequence }),
   state: () => controller.getState(),
   unmount,
   cleanup() {
@@ -534,11 +644,13 @@ const fixture = {
     pending.clear();
     for (const worker of activeWorkers) worker.terminate();
     clearMocks();
+    eventBroker.removeOwner(eventOwner);
   },
 };
 declare global {
   interface Window {
     readerFixture: typeof fixture;
+    readerEventIPC?: (request: EventIPC) => Promise<unknown>;
   }
 }
 window.readerFixture = fixture;

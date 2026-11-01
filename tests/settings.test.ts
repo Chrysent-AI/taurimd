@@ -251,3 +251,57 @@ it('keeps recovery visible when preferences are changed after failed initial hyd
   });
   expect(bridge.update).toHaveBeenCalledWith(0, { mode: 'dark' });
 });
+it('shares committed revisions between two readers without propagating failed optimistic intent', async () => {
+  let committed = record();
+  const listeners = new Set<(record: SettingsRecord) => void>();
+  let failA = true;
+  const create = (first: boolean): SettingsBridge => ({
+    get: () => Promise.resolve(committed),
+    listen: (receive) => {
+      listeners.add(receive);
+      return Promise.resolve(() => {
+        listeners.delete(receive);
+      });
+    },
+    update: (revision, patch) => {
+      if (first && failA) return Promise.reject(new Error('Save unavailable'));
+      if (revision !== committed.revision)
+        return Promise.resolve({ status: 'conflict', record: committed });
+      committed = record(revision + 1, { ...committed.settings, ...patch });
+      listeners.forEach((receive) => {
+        receive(committed);
+      });
+      return Promise.resolve({ status: 'committed', record: committed });
+    },
+  });
+  const a = new SettingsController(create(true));
+  const b = new SettingsController(create(false));
+  cleanup.push(a.connect(), b.connect());
+  await vi.waitFor(() => {
+    expect(a.getState().status).toBe('saved');
+    expect(b.getState().status).toBe('saved');
+  });
+  a.change({ statusVisible: false });
+  await vi.waitFor(() => {
+    expect(a.getState().status).toBe('error');
+  });
+  expect(b.getState().settings.statusVisible).toBe(true);
+  b.change({ mode: 'dark' });
+  await vi.waitFor(() => {
+    expect(b.getState().status).toBe('saved');
+  });
+  expect(a.getState().settings.mode).toBe('dark');
+  expect(a.getState().settings.statusVisible).toBe(false);
+  expect(b.getState().settings.statusVisible).toBe(true);
+  failA = false;
+  a.retry();
+  await vi.waitFor(() => {
+    expect(a.getState().status).toBe('saved');
+    expect(b.getState().settings.statusVisible).toBe(false);
+  });
+  expect(b.getState().settings.mode).toBe('dark');
+  cleanup.splice(0).forEach((stop) => {
+    stop();
+  });
+  expect(listeners.size).toBe(0);
+});

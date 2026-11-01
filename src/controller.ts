@@ -45,15 +45,35 @@ export class ReaderController {
       ['loading', 'parsing', 'committing'].includes(this.state.phase)
     )
       return;
-    await this.run('link', href);
+    return this.run('link', href);
   }
-  openEntry(intent: EntryIntent) {
-    return this.run('entry', '', intent);
+  openEntry(intent: EntryIntent, newWindow = false) {
+    return this.run(newWindow ? 'handoff' : 'entry', '', intent);
+  }
+  receive(
+    load: (
+      request: number,
+    ) => Promise<{ snapshot: Snapshot; fragment: string | null }>,
+  ) {
+    return this.run('receive', '', undefined, load);
+  }
+  notice(message: string) {
+    this.publish({
+      linkMessage: message,
+      quietLink: false,
+      ...(!this.state.displayed &&
+      !['loading', 'parsing', 'committing'].includes(this.state.phase)
+        ? { phase: 'error' as const, message }
+        : {}),
+    });
   }
   async run(
-    action: 'open' | 'reload' | 'link' | 'entry',
+    action: 'open' | 'reload' | 'link' | 'entry' | 'handoff' | 'receive',
     href = '',
     intent?: EntryIntent,
+    load?: (
+      request: number,
+    ) => Promise<{ snapshot: Snapshot; fragment: string | null }>,
   ) {
     // Do not interleave another action across the native/display commit boundary.
     if (
@@ -66,26 +86,49 @@ export class ReaderController {
     this.job = null;
     const previous = this.state.displayed;
     const before = this.state;
-    let linkedDocument = false;
     this.publish({
       requestId: request,
       phase: 'loading',
       previewEpoch: (before.previewEpoch ?? 0) + (action === 'reload' ? 1 : 0),
       linkMessage: action === 'link' ? 'Opening link…' : '',
+      quietLink: false,
       message:
         action === 'link'
           ? before.message
-          : action === 'entry'
-            ? `Opening ${intent?.name ?? 'file'}…`
-            : action === 'open'
-              ? 'Choosing and opening a document…'
-              : `Reloading ${previous?.snapshot.name ?? 'document'}…`,
+          : action === 'handoff'
+            ? `Opening ${intent?.name ?? 'file'} in another reader…`
+            : action === 'receive'
+              ? 'Opening the requested document…'
+              : action === 'entry'
+                ? `Opening ${intent?.name ?? 'file'}…`
+                : action === 'open'
+                  ? 'Choosing and opening a document…'
+                  : `Reloading ${previous?.snapshot.name ?? 'document'}…`,
     });
     try {
       let snapshot: Snapshot;
       let fragment: string | null = null;
-      if (action === 'entry' && intent) {
-        snapshot = await this.bridge.openEntry(request, intent.binding);
+      if ((action === 'entry' || action === 'handoff') && intent) {
+        const result = await this.bridge.openEntry(
+          request,
+          intent.binding,
+          action === 'handoff',
+        );
+        if (request !== this.sequence) return;
+        if ('status' in result) {
+          this.publish({
+            phase: before.phase,
+            message: before.message,
+            linkMessage: 'Opened in another reader.',
+            quietLink: true,
+          });
+          return 'handedOff' as const;
+        }
+        snapshot = result;
+      } else if (action === 'receive' && load) {
+        const received = await load(request);
+        snapshot = received.snapshot;
+        fragment = received.fragment;
       } else if (action === 'link') {
         if (!previous) return;
         const result = await this.bridge.activate(
@@ -95,20 +138,18 @@ export class ReaderController {
         );
         if (request !== this.sequence || this.state.displayed !== previous)
           return;
-        if (result.status !== 'document') {
-          this.publish({
-            phase: before.phase,
-            message: before.message,
-            linkMessage:
-              result.status === 'externalOpened'
+        this.publish({
+          phase: before.phase,
+          message: before.message,
+          quietLink: result.status === 'handedOff',
+          linkMessage:
+            result.status === 'handedOff'
+              ? 'Opened in another reader.'
+              : result.status === 'externalOpened'
                 ? 'Sent link to the default application.'
                 : 'Use an in-document section link.',
-          });
-          return;
-        }
-        linkedDocument = true;
-        snapshot = result.snapshot;
-        fragment = result.fragment;
+        });
+        return result;
       } else if (action === 'open') {
         const selection = await this.bridge.select(request);
         if (request !== this.sequence) return;
@@ -118,6 +159,15 @@ export class ReaderController {
             message: 'Open cancelled. The displayed document has not changed.',
           });
           return 'cancelled' as const;
+        }
+        if (selection.status === 'handedOff') {
+          this.publish({
+            phase: before.phase,
+            message: before.message,
+            linkMessage: 'Activated the existing reader.',
+            quietLink: true,
+          });
+          return 'handedOff' as const;
         }
         snapshot = selection.snapshot;
       } else {
@@ -190,7 +240,14 @@ export class ReaderController {
         if ('attempted' in error && typeof error.attempted === 'string')
           message = `${error.attempted}: ${message}`;
       }
-      if (action === 'link' && !linkedDocument) {
+      if (
+        action === 'link' ||
+        action === 'handoff' ||
+        (typeof error === 'object' &&
+          error !== null &&
+          'code' in error &&
+          error.code === 'handoff')
+      ) {
         this.publish({
           phase: before.phase,
           message: before.message,

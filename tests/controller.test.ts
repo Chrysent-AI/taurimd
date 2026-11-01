@@ -52,42 +52,43 @@ function setup() {
   return { bridge, parse, controller: new ReaderController(bridge, parse) };
 }
 describe('production reader state and native commit boundary', () => {
-  it('finishes local link progress on matching commit and retains the requested fragment', async () => {
-    const { bridge, controller } = setup();
-    await controller.run('open');
-    const previous = controller.state.displayed;
-    if (!previous) throw new Error('Expected last-good document');
-    bridge.activate.mockResolvedValueOnce({
-      status: 'document',
-      snapshot: snapshot('linked.md', 2),
-      fragment: 'destination',
-    });
-    await controller.activate(previous, 'linked.md#destination');
-    expect(controller.state.displayed?.snapshot.name).toBe('linked.md');
-    expect(controller.state.displayed?.fragment).toBe('destination');
-    expect(controller.state.linkMessage).toBe('');
-    expect(controller.state.message).toBe('Opened linked.md.');
-    expect(bridge.commit).toHaveBeenLastCalledWith(2);
-  });
-  it('clears local link progress after a post-document parse failure without losing last-good content', async () => {
+  it('hands local links off without reading, reparsing, committing or staling the origin', async () => {
     const { bridge, controller, parse } = setup();
     await controller.run('open');
     const previous = controller.state.displayed;
     if (!previous) throw new Error('Expected last-good document');
-    bridge.activate.mockResolvedValueOnce({
-      status: 'document',
-      snapshot: snapshot('linked.md', 2),
-      fragment: null,
-    });
+    bridge.activate.mockResolvedValueOnce({ status: 'handedOff' });
+    await controller.activate(previous, 'linked.md#destination');
+    expect(controller.state.displayed).toBe(previous);
+    expect(controller.state.linkMessage).toBe('Opened in another reader.');
+    expect(controller.state.message).toBe('Opened first.md.');
+    expect(controller.state.stale).toBe(false);
+    expect(parse).toHaveBeenCalledOnce();
+    expect(bridge.commit).toHaveBeenCalledOnce();
+  });
+  it('receives native-owned snapshots through the real parse/commit boundary and handles receiving failure locally', async () => {
+    const { bridge, controller, parse } = setup();
+    await controller.receive(() =>
+      Promise.resolve({
+        snapshot: snapshot('linked.md', 1),
+        fragment: 'destination',
+      }),
+    );
+    expect(controller.state.displayed?.snapshot.name).toBe('linked.md');
+    expect(controller.state.displayed?.fragment).toBe('destination');
+    expect(bridge.commit).toHaveBeenLastCalledWith(1);
+    const previous = controller.state.displayed;
     parse.mockReturnValueOnce({
-      result: Promise.reject(new Error('Linked parse failed')),
+      result: Promise.reject(new Error('Receiving parse failed')),
       cancel: vi.fn(),
     });
-    await controller.activate(previous, 'linked.md');
+    await controller.receive(() =>
+      Promise.resolve({ snapshot: snapshot('next.md', 2), fragment: null }),
+    );
     expect(controller.state.displayed).toBe(previous);
     expect(controller.state.stale).toBe(true);
-    expect(controller.state.message).toContain('Linked parse failed');
-    expect(controller.state.linkMessage).toBe('');
+    expect(controller.state.message).toContain('Receiving parse failed');
+    expect(bridge.cancel).toHaveBeenCalledWith(2);
     expect(bridge.commit).toHaveBeenCalledTimes(1);
   });
   it('clears link progress on cancellation and ignores a late native document result', async () => {
@@ -102,35 +103,28 @@ describe('production reader state and native commit boundary', () => {
     await controller.cancel();
     expect(bridge.cancel).toHaveBeenCalledWith(2);
     expect(controller.state.linkMessage).toBe('');
-    result.resolve({
-      status: 'document',
-      snapshot: snapshot('linked.md', 2),
-      fragment: null,
-    });
+    result.resolve({ status: 'handedOff' });
     await pending;
     expect(controller.state.displayed).toBe(previous);
     expect(controller.state.message).toContain('cancelled');
     expect(controller.state.linkMessage).toBe('');
     expect(parse).toHaveBeenCalledTimes(1);
   });
-  it('cancels linked parsing with clear terminal progress and no native commit', async () => {
+  it('cancels receiving parsing with clear terminal progress and no native commit', async () => {
     const { bridge, controller, parse } = setup();
     await controller.run('open');
     const previous = controller.state.displayed;
     if (!previous) throw new Error('Expected last-good document');
     const result = deferred<Reading>();
-    bridge.activate.mockResolvedValueOnce({
-      status: 'document',
-      snapshot: snapshot('linked.md', 2),
-      fragment: null,
-    });
     parse.mockReturnValueOnce({
       result: result.promise,
       cancel: () => {
         result.reject(new Error('Cancelled linked parse'));
       },
     });
-    const pending = controller.activate(previous, 'linked.md');
+    const pending = controller.receive(() =>
+      Promise.resolve({ snapshot: snapshot('linked.md', 2), fragment: null }),
+    );
     await Promise.resolve();
     expect(controller.state.phase).toBe('parsing');
     await controller.cancel();
@@ -138,6 +132,33 @@ describe('production reader state and native commit boundary', () => {
     expect(controller.state.displayed).toBe(previous);
     expect(controller.state.linkMessage).toBe('');
     expect(bridge.commit).toHaveBeenCalledTimes(1);
+  });
+  it('retains origin for chooser collisions and cached-file handoffs, including rejected activation', async () => {
+    const { bridge, controller, parse } = setup();
+    await controller.run('open');
+    const previous = controller.state.displayed;
+    bridge.select.mockResolvedValueOnce({ status: 'handedOff' });
+    expect(await controller.run('open')).toBe('handedOff');
+    expect(controller.state.displayed).toBe(previous);
+    expect(controller.state.stale).toBe(false);
+    bridge.openEntry.mockResolvedValueOnce({ status: 'handedOff' });
+    const intent = {
+      binding: { scope: 1, revision: 1, entry: 1 },
+      name: 'cached.md',
+      focus: 'start' as const,
+    };
+    expect(await controller.openEntry(intent, true)).toBe('handedOff');
+    expect(bridge.openEntry).toHaveBeenLastCalledWith(3, intent.binding, true);
+    bridge.select.mockRejectedValueOnce({
+      code: 'handoff',
+      message: 'Target closed',
+    });
+    await controller.run('open');
+    expect(controller.state.displayed).toBe(previous);
+    expect(controller.state.stale).toBe(false);
+    expect(controller.state.linkMessage).toContain('Target closed');
+    expect(parse).toHaveBeenCalledOnce();
+    expect(bridge.commit).toHaveBeenCalledOnce();
   });
   it('keeps last-good content and distinguishes failed target, reload and cancellation', async () => {
     const { bridge, controller } = setup();

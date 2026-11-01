@@ -50,7 +50,7 @@ test.beforeEach(async ({ page }) => {
   );
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.listenerCount()))
-    .toBe(3);
+    .toBe(5);
 });
 test.afterEach(async ({ page }) => {
   await page.evaluate(() => {

@@ -317,6 +317,9 @@ pub fn apply(state: &Mutex<Session>, id: u32, work: Work, emit: impl Fn(Status))
     let result = (|| -> Result<(), AppError> {
         let draft = {
             let mut session = state.lock().map_err(|_| Session::stale())?;
+            if session.closed {
+                return Err(Session::stale());
+            }
             let nav = &mut session.navigation;
             let root = nav
                 .root
@@ -368,6 +371,9 @@ pub fn apply(state: &Mutex<Session>, id: u32, work: Work, emit: impl Fn(Status))
                 }),
             };
             let mut session = state.lock().map_err(|_| Session::stale())?;
+            if session.closed {
+                return Err(Session::stale());
+            }
             let nav = &mut session.navigation;
             if nav.root.as_ref().is_none_or(|root| root.id != id) {
                 return Err(Session::stale());
@@ -394,6 +400,9 @@ pub fn apply(state: &Mutex<Session>, id: u32, work: Work, emit: impl Fn(Status))
 fn announce(state: &Mutex<Session>, id: u32, emit: &impl Fn(Status)) -> Result<(), AppError> {
     let (status, lifetime) = {
         let mut session = state.lock().map_err(|_| Session::stale())?;
+        if session.closed {
+            return Err(Session::stale());
+        }
         let nav = &mut session.navigation;
         let root = nav
             .root

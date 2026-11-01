@@ -3,10 +3,11 @@ use crate::{
     documents::{AppError, Session, Snapshot},
     navigation::{self, Binding, Siblings},
     navigation_cache::{self, RootWorker, Snapshot as CacheSnapshot, Status},
+    windows::reader,
 };
 use serde::Serialize;
 use std::sync::atomic::Ordering;
-use tauri::{Emitter, Manager, WebviewWindow};
+use tauri::{Emitter, EventTarget, Manager, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -21,9 +22,8 @@ pub async fn select_root(
     window: WebviewWindow,
     request_id: u32,
 ) -> Result<RootSelection, AppError> {
-    session(&window, &window.state::<ReaderState>())?
-        .navigation
-        .choose(request_id)?;
+    let state = reader(&window)?;
+    session(&window, &state)?.navigation.choose(request_id)?;
     let handle = window.clone();
     let selected = tauri::async_runtime::spawn_blocking(move || {
         handle
@@ -35,9 +35,7 @@ pub async fn select_root(
     })
     .await
     .map_err(|_| AppError::new("resourceFailure", "The folder chooser failed."))?;
-    session(&window, &window.state::<ReaderState>())?
-        .navigation
-        .chosen(request_id)?;
+    session(&window, &state)?.navigation.chosen(request_id)?;
     let Some(selected) = selected else {
         return Ok(RootSelection::Cancelled);
     };
@@ -48,7 +46,6 @@ pub async fn select_root(
     let snapshot = tauri::async_runtime::spawn_blocking(move || {
         let path = navigation::root_path(&path)?;
         let (id, lifetime, old) = {
-            let state = handle.state::<ReaderState>();
             let mut session = session(&handle, &state)?;
             session.navigation.chosen(request_id)?;
             let old = session.navigation.worker.take();
@@ -68,16 +65,20 @@ pub async fn select_root(
             old.retire();
         }
         let owner = handle.clone();
+        let worker_state = state.clone();
         let worker = RootWorker::start(path, lifetime, move |work| {
-            navigation_cache::apply(&owner.state::<ReaderState>(), id, work, |status| {
-                let _ = owner.emit("index_status", status);
+            navigation_cache::apply(&worker_state, id, work, |status| {
+                let _ = owner.emit_to(
+                    EventTarget::webview_window(owner.label()),
+                    "index_status",
+                    status,
+                );
             })
         });
         let worker = match worker {
             Ok(worker) => worker,
             Err(error) => {
                 let status = {
-                    let state = handle.state::<ReaderState>();
                     let mut session = session(&handle, &state)?;
                     if session
                         .navigation
@@ -92,13 +93,16 @@ pub async fn select_root(
                     session.navigation.status.sequence += 1;
                     session.navigation.status.clone()
                 };
-                let _ = handle.emit("index_status", status);
+                let _ = handle.emit_to(
+                    EventTarget::webview_window(handle.label()),
+                    "index_status",
+                    status,
+                );
                 return Err(error);
             }
         };
         let mut worker = Some(worker);
         let snapshot = {
-            let state = handle.state::<ReaderState>();
             let mut session = session(&handle, &state)?;
             if session
                 .navigation
@@ -123,14 +127,13 @@ pub async fn select_root(
 }
 #[tauri::command]
 pub fn get_index(window: WebviewWindow) -> Result<CacheSnapshot, AppError> {
-    Ok(CacheSnapshot::get(&*session(
-        &window,
-        &window.state::<ReaderState>(),
-    )?))
+    let state = reader(&window)?;
+    let result = CacheSnapshot::get(&*session(&window, &state)?);
+    Ok(result)
 }
 #[tauri::command]
 pub fn refresh_index(window: WebviewWindow, scope_id: u32) -> Result<CacheSnapshot, AppError> {
-    let state = window.state::<ReaderState>();
+    let state = reader(&window)?;
     let mut session = session(&window, &state)?;
     if session
         .navigation
@@ -155,8 +158,8 @@ async fn search(
     request: navigation::query::Query,
     traverse: bool,
 ) -> Result<navigation::query::Reply, AppError> {
+    let state = reader(&window)?;
     let scope = {
-        let state = window.state::<ReaderState>();
         let session = session(&window, &state)?;
         session
             .navigation
@@ -178,7 +181,6 @@ async fn search(
     })
     .await
     .map_err(|_| AppError::new("resourceFailure", "File filtering was interrupted."))??;
-    let state = window.state::<ReaderState>();
     let session = session(&window, &state)?;
     let current = session
         .navigation
@@ -220,8 +222,8 @@ pub async fn get_siblings(
     document_id: u32,
     revision: u32,
 ) -> Result<Siblings, AppError> {
+    let state = reader(&window)?;
     let (document, scope) = {
-        let state = window.state::<ReaderState>();
         let mut session = session(&window, &state)?;
         let document = session.active(document_id, revision)?;
         if let Some(siblings) = session.navigation.root_siblings(&document.path) {
@@ -238,7 +240,6 @@ pub async fn get_siblings(
     let handle = window.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let scope = navigation::scan(scope, false)?;
-        let state = handle.state::<ReaderState>();
         let mut session = session(&handle, &state)?;
         session.active(document_id, revision)?;
         let index = session.navigation.publish(scope)?;
@@ -267,7 +268,8 @@ pub async fn read_preview(
     binding: Binding,
     request_id: u32,
 ) -> Result<Snapshot, AppError> {
-    let (scope, record, cancel) = session(&window, &window.state::<ReaderState>())?
+    let state = reader(&window)?;
+    let (scope, record, cancel) = session(&window, &state)?
         .navigation
         .preview(binding, request_id)?;
     let handle = window.clone();
@@ -277,13 +279,11 @@ pub async fn read_preview(
             if cancel.load(Ordering::Acquire) {
                 return Err(Session::stale());
             }
-            let current = session(&handle, &handle.state::<ReaderState>())?
-                .navigation
-                .scope(binding.scope)?;
+            let current = session(&handle, &state)?.navigation.scope(binding.scope)?;
             current.entry(binding)?;
             Ok(document.snapshot)
         })();
-        session(&handle, &handle.state::<ReaderState>())?
+        session(&handle, &state)?
             .navigation
             .cancel_preview(request_id);
         result
@@ -293,19 +293,27 @@ pub async fn read_preview(
 }
 #[tauri::command]
 pub fn cancel_preview(window: WebviewWindow, request_id: u32) -> Result<(), AppError> {
-    session(&window, &window.state::<ReaderState>())?
+    let state = reader(&window)?;
+    session(&window, &state)?
         .navigation
         .cancel_preview(request_id);
     Ok(())
+}
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum EntryOpen {
+    Ready { snapshot: Snapshot },
+    HandedOff,
 }
 #[tauri::command]
 pub async fn open_index_entry(
     window: WebviewWindow,
     binding: Binding,
     request_id: u32,
-) -> Result<Snapshot, AppError> {
+    new_window: Option<bool>,
+) -> Result<EntryOpen, AppError> {
+    let state = reader(&window)?;
     let (scope, record, cancel) = {
-        let state = window.state::<ReaderState>();
         let mut session = session(&window, &state)?;
         let scope = session.navigation.scope(binding.scope)?;
         let record = scope.entry(binding)?;
@@ -314,9 +322,21 @@ pub async fn open_index_entry(
     };
     let handle = window.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        if new_window == Some(true) {
+            let path = scope.validate(&record)?;
+            session(&handle, &state)?.current(request_id)?;
+            crate::windows::route(
+                handle.app_handle(),
+                path,
+                None,
+                Some((&state, request_id, Some(&scope))),
+                None,
+            )?;
+            return Ok(EntryOpen::HandedOff);
+        }
         let document = scope.read(&record, request_id, request_id, &cancel)?;
-        session(&handle, &handle.state::<ReaderState>())?
-            .stage_navigation(request_id, document, &scope)
+        let snapshot = session(&handle, &state)?.stage_navigation(request_id, document, &scope)?;
+        Ok(EntryOpen::Ready { snapshot })
     })
     .await
     .map_err(|_| AppError::new("resourceFailure", "The navigation read was interrupted."))?
@@ -344,7 +364,6 @@ pub fn reveal(
         return Err(Session::stale());
     }
     lock()?.active(document_id, revision)?;
-    // Side effect is off-lock; a handoff already started cannot be retracted.
     open(&path)
 }
 #[tauri::command]
@@ -353,19 +372,15 @@ pub async fn reveal_document(
     document_id: u32,
     revision: u32,
 ) -> Result<(), AppError> {
-    session(&window, &window.state::<ReaderState>())?.active(document_id, revision)?;
+    let state = reader(&window)?;
+    session(&window, &state)?.active(document_id, revision)?;
     let handle = window.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        reveal(
-            &handle.state::<ReaderState>(),
-            document_id,
-            revision,
-            |path| {
-                handle.opener().reveal_item_in_dir(path).map_err(|_| {
-                    AppError::new("io", "The file manager could not reveal this document.")
-                })
-            },
-        )
+        reveal(&state, document_id, revision, |path| {
+            handle.opener().reveal_item_in_dir(path).map_err(|_| {
+                AppError::new("io", "The file manager could not reveal this document.")
+            })
+        })
     })
     .await
     .map_err(|_| AppError::new("resourceFailure", "File reveal was interrupted."))?

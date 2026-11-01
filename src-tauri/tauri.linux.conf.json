@@ -1,0 +1,13 @@
+{
+  "bundle": {
+    "targets": ["deb"],
+    "linux": {
+      "deb": {
+        "desktopTemplate": "packaging/mdviewerrsx.desktop",
+        "files": {
+          "/usr/share/mime/packages/mdviewerrsx.xml": "packaging/mdviewerrsx.xml"
+        }
+      }
+    }
+  }
+}

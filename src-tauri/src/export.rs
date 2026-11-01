@@ -327,6 +327,7 @@ pub struct Job {
     phase: AtomicU8,
     io: Mutex<Prepared>,
     accepted: Mutex<usize>,
+    finished: (Mutex<bool>, std::sync::Condvar),
 }
 impl Job {
     pub fn enroll(
@@ -334,9 +335,7 @@ impl Job {
         caller: &str,
         begin: Begin,
     ) -> Result<Arc<Self>, AppError> {
-        if caller != "reader" {
-            return Err(AppError::new("denied", "This window has no export access."));
-        }
+        session.caller(caller)?;
         session.active_ref(begin.document_id, begin.revision)?;
         if begin.ordinals.is_empty()
             || begin.ordinals[0] == 0
@@ -354,6 +353,7 @@ impl Job {
             phase: AtomicU8::new(0),
             io: Mutex::new(Prepared::default()),
             accepted: Mutex::new(0),
+            finished: (Mutex::new(false), std::sync::Condvar::new()),
         });
         session.export = Some(job.clone());
         Ok(job)
@@ -363,9 +363,7 @@ impl Job {
         caller: &str,
         binding: &Binding,
     ) -> Result<Arc<Self>, AppError> {
-        if caller != "reader" {
-            return Err(AppError::new("denied", "This window has no export access."));
-        }
+        session.caller(caller)?;
         session.active_ref(binding.document_id, binding.revision)?;
         session
             .export
@@ -384,9 +382,7 @@ impl Job {
         caller: &str,
         id: u32,
     ) -> Result<Arc<Self>, AppError> {
-        if caller != "reader" {
-            return Err(AppError::new("denied", "This window has no export access."));
-        }
+        session.caller(caller)?;
         session
             .export
             .as_ref()
@@ -412,6 +408,14 @@ impl Job {
         } else {
             Err(Session::stale())
         }
+    }
+    pub fn wait_finished(&self) -> Result<(), AppError> {
+        let (lock, wake) = &self.finished;
+        let mut finished = lock.lock().map_err(|_| invalid())?;
+        while !*finished {
+            finished = wake.wait(finished).map_err(|_| invalid())?;
+        }
+        Ok(())
     }
     pub fn committing(&self) -> bool {
         self.phase.load(Ordering::Acquire) == 2
@@ -565,7 +569,12 @@ impl Job {
         } else {
             result
         };
-        combined(result, self.reap())
+        let result = combined(result, self.reap());
+        if let Ok(mut finished) = self.finished.0.lock() {
+            *finished = true;
+            self.finished.1.notify_all();
+        }
+        result
     }
     fn stage(&self, parent: &Path) -> Result<(), AppError> {
         let mut io = self.io.lock().map_err(|_| invalid())?;

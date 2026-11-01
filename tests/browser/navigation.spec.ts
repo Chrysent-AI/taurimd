@@ -159,7 +159,7 @@ test.beforeEach(async ({ page }) => {
   );
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.listenerCount()))
-    .toBe(3);
+    .toBe(5);
 });
 test.afterEach(async ({ page }) => {
   await page.evaluate(() => {
@@ -238,6 +238,7 @@ test('recursive folder disclosure and lazy shared-worker headings open the exact
   expect(call?.payload).toEqual({
     requestId: 1,
     binding: { scope: 7, revision: 1, entry: 20 },
+    newWindow: false,
   });
   expect(
     (await page.evaluate(() => window.readerFixture.navigationCalls())).filter(
@@ -1146,6 +1147,18 @@ test('repair reload consumes its own reading origin instead of prior filename or
     },
     { ...first, revision: 2 },
   );
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const { phase, displayed } = window.readerFixture.state();
+        return {
+          phase,
+          documentId: displayed?.snapshot.documentId,
+          revision: displayed?.snapshot.revision,
+        };
+      }),
+    )
+    .toEqual({ phase: 'ready', documentId: 10, revision: 2 });
   await expect(page.getByRole('article')).toBeFocused();
   await expect(
     page.getByRole('button', { name: 'Open alpha.md', exact: true }),
@@ -1167,6 +1180,18 @@ test('repair reload consumes its own reading origin instead of prior filename or
     },
     { ...second, revision: 4 },
   );
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const { phase, displayed } = window.readerFixture.state();
+        return {
+          phase,
+          documentId: displayed?.snapshot.documentId,
+          revision: displayed?.snapshot.revision,
+        };
+      }),
+    )
+    .toEqual({ phase: 'ready', documentId: 20, revision: 4 });
   await expect(page.getByRole('article')).toBeFocused();
   await expect(next).not.toBeFocused();
   expect(

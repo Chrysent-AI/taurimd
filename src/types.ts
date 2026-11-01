@@ -16,17 +16,22 @@ export interface AppError {
 }
 export type Selection =
   | { status: 'cancelled' }
+  | { status: 'handedOff' }
   | { status: 'ready'; snapshot: Snapshot };
 export type Activation =
   | { status: 'externalOpened' }
   | { status: 'anchor'; fragment: string }
-  | { status: 'document'; snapshot: Snapshot; fragment: string | null };
+  | { status: 'handedOff' };
 export interface ResolvedMedia {
   id: string;
   mime: string;
 }
 export interface NativeReader {
-  openEntry(requestId: number, binding: EntryBinding): Promise<Snapshot>;
+  openEntry(
+    requestId: number,
+    binding: EntryBinding,
+    newWindow?: boolean,
+  ): Promise<Snapshot | { status: 'handedOff' }>;
   select(requestId: number): Promise<Selection>;
   reload(requestId: number, document: Snapshot): Promise<Snapshot>;
   commit(requestId: number): Promise<void>;
@@ -54,5 +59,6 @@ export interface ReaderState {
   message: string;
   stale: boolean;
   linkMessage?: string;
+  quietLink?: boolean;
   previewEpoch?: number;
 }

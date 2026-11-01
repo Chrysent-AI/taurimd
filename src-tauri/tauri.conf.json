@@ -26,7 +26,21 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
+    "publisher": "Chrysent",
+    "license": "MIT",
+    "licenseFile": "../LICENSE",
+    "category": "Utility",
+    "icon": ["icons/icon.png", "icons/icon.ico"],
+    "fileAssociations": [
+      {
+        "ext": ["md", "markdown", "mdown", "mkd", "mkdown"],
+        "name": "MDViewerRSX.Markdown",
+        "description": "Markdown document",
+        "role": "Viewer",
+        "mimeType": "text/markdown"
+      }
+    ],
     "copyright": "Copyright (c) 2026 Chrysent",
     "shortDescription": "Read-only local document reader",
     "macOS": { "minimumSystemVersion": "14.0" }

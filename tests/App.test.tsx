@@ -14,20 +14,32 @@ import { parseMarkdown } from '../src/reader/parse';
 import { sanitizeReading } from '../src/reader/sanitize';
 import { defaults } from '../src/settings/model';
 const events = vi.hoisted(() => ({
-  receive: (_event: { payload: string }) => {
+  receive: (_event: { payload: { actionId: string; sequence: number } }) => {
     void _event;
   },
   fail: false,
 }));
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: (_: string, receive: (event: { payload: string }) => void) => {
-    events.receive = receive;
-    return events.fail
-      ? Promise.reject(new Error('unavailable'))
-      : Promise.resolve(() => {});
-  },
+vi.mock('@tauri-apps/api/webviewWindow', () => ({
+  getCurrentWebviewWindow: () => ({
+    listen: (
+      name: string,
+      receive: (event: {
+        payload: { actionId: string; sequence: number };
+      }) => void,
+    ) => {
+      if (name === 'menu_action') events.receive = receive;
+      return events.fail && name === 'menu_action'
+        ? Promise.reject(new Error('unavailable'))
+        : Promise.resolve(() => {});
+    },
+  }),
 }));
 vi.mock('../src/native', () => ({
+  documentRequests: {
+    pending: () => Promise.resolve(null),
+    receive: vi.fn(),
+    dismiss: vi.fn(),
+  },
   navigation: {
     get: () =>
       Promise.resolve({
@@ -100,9 +112,12 @@ vi.stubGlobal('matchMedia', () => ({
   addEventListener: vi.fn(),
   removeEventListener: vi.fn(),
 }));
+let menuSequence = 0;
 async function menu(payload: string) {
   await act(async () => {
-    events.receive({ payload });
+    events.receive({
+      payload: { actionId: payload, sequence: ++menuSequence },
+    });
     await Promise.resolve();
   });
 }

@@ -34,6 +34,18 @@ pub struct Presentation {
     pub modal: Modal,
     pub composing: bool,
     pub page_zoom: u16,
+    #[serde(default)]
+    pub appearance: Appearance,
+    #[serde(default = "sidebar_default")]
+    pub fit_diagrams: bool,
+}
+#[derive(Clone, Copy, Default, Deserialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum Appearance {
+    #[default]
+    System,
+    Light,
+    Dark,
 }
 fn sidebar_default() -> bool {
     true
@@ -54,17 +66,13 @@ impl Default for Presentation {
             modal: Modal::None,
             composing: false,
             page_zoom: 100,
+            appearance: Appearance::System,
+            fit_diagrams: true,
         }
     }
 }
 impl Presentation {
-    pub fn accept(&mut self, caller: &str, next: Self) -> Result<(), AppError> {
-        if caller != "reader" {
-            return Err(AppError::new(
-                "denied",
-                "This window has no reader presentation access.",
-            ));
-        }
+    pub fn accept(&mut self, next: Self) -> Result<(), AppError> {
         if !(50..=300).contains(&next.page_zoom) || !next.page_zoom.is_multiple_of(10) {
             return Err(AppError::new(
                 "unsupported",
@@ -100,7 +108,8 @@ impl Presentation {
                 free && self.modal == Modal::None && has_document
             }
             "open" | "open-folder" | "sidebar" | "sort-alpha" | "sort-date" | "settings"
-            | "guide" | "about" | "status-bar" => free && self.modal == Modal::None,
+            | "guide" | "about" | "status-bar" | "appearance-system" | "appearance-light"
+            | "appearance-dark" | "fit-diagrams" => free && self.modal == Modal::None,
             _ => false,
         }
     }
@@ -109,7 +118,6 @@ pub struct ReaderMenu {
     pub actions: Vec<(&'static str, MenuItem<tauri::Wry>)>,
     pub navigation_checks: Vec<(&'static str, CheckMenuItem<tauri::Wry>)>,
     pub status: CheckMenuItem<tauri::Wry>,
-    pub applied: std::sync::Mutex<Presentation>,
 }
 impl ReaderMenu {
     pub fn restore_checks(&self, presentation: &Presentation) -> tauri::Result<()> {
@@ -118,7 +126,12 @@ impl ReaderMenu {
             item.set_checked(match *id {
                 "sidebar" => presentation.sidebar_visible,
                 "sort-date" => presentation.newest,
-                _ => !presentation.newest,
+                "sort-alpha" => !presentation.newest,
+                "fit-diagrams" => presentation.fit_diagrams,
+                "appearance-system" => presentation.appearance == Appearance::System,
+                "appearance-light" => presentation.appearance == Appearance::Light,
+                "appearance-dark" => presentation.appearance == Appearance::Dark,
+                _ => false,
             })?;
         }
         Ok(())
@@ -184,13 +197,12 @@ mod tests {
         let mut next: Presentation = serde_json::from_value(serde_json::json!({
             "sequence":2,"statusVisible":false,"busy":false,"modal":"none","composing":false,"pageZoom":300
         })).unwrap();
-        assert!(applied.accept("other", next).is_err());
         assert!(applied.status_visible);
-        applied.accept("reader", next).unwrap();
+        applied.accept(next).unwrap();
         assert!(!applied.status_visible);
         next.sequence = 1;
         next.status_visible = true;
-        applied.accept("reader", next).unwrap();
+        applied.accept(next).unwrap();
         assert!(!applied.status_visible);
         assert!(!applied.enabled("zoom-in", true));
         assert!(applied.enabled("zoom-out", true));
@@ -234,7 +246,7 @@ mod tests {
         }
         next.sequence = 3;
         next.page_zoom = 55;
-        assert!(applied.accept("reader", next).is_err());
+        assert!(applied.accept(next).is_err());
         for extra in [
             serde_json::json!({"path":"source.md"}),
             serde_json::json!({"statusVisible":"yes"}),

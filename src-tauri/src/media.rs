@@ -41,7 +41,7 @@ pub struct Resolved {
     pub mime: &'static str,
 }
 pub fn scope(session: &Session, label: &str, id: u32, revision: u32) -> Result<Scope, AppError> {
-    links::caller(label)?;
+    session.caller(label)?;
     let parent = session.active_ref(id, revision)?.parent.clone();
     let scope = Scope {
         parent,
@@ -259,7 +259,10 @@ pub fn serve<T>(
     request: Request<Vec<u8>>,
     respond: impl FnOnce(Response<Vec<u8>>) -> T,
 ) -> T {
-    if links::caller(caller).is_err() {
+    if state
+        .lock()
+        .map_or(true, |session| session.caller(caller).is_err())
+    {
         return respond(error(StatusCode::FORBIDDEN));
     }
     if request.method() != "GET" && request.method() != "HEAD" {
