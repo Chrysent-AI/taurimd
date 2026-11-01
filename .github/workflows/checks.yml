@@ -55,6 +55,8 @@ jobs:
       - run: npm install --global npm@11.6.2 && npm ci
       - run: npm run browsers:install -- --with-deps
       - run: npm run test:browser
+        env:
+          DEBUG: pw:browser
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: failure()
         with:
