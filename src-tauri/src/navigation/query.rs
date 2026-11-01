@@ -626,27 +626,47 @@ mod tests {
         let selected = &cached.reply.results[0].entry;
         let siblings = nav.root_siblings(&root.join("sub/a.md")).unwrap();
         assert_eq!(siblings.active, Some(selected.id));
-        for text in [
-            "sub/../a",
-            "~/root/sub/a",
-            &format!("{}/sub/a", root.display()),
+        let absolute = root.join("sub").join("a").to_string_lossy().into_owned();
+        for (role, text) in [
+            ("relative parent traversal", "sub/../a"),
+            ("home-relative lookup", "~/root/sub/a"),
+            ("native absolute lookup", absolute.as_str()),
         ] {
-            assert!(query(&scope, request(text), Some(&home))
-                .unwrap()
-                .reply
-                .results
-                .iter()
-                .any(|row| row.entry.relative.ends_with("a.md")));
+            let answer = query(&scope, request(text), Some(&home))
+                .unwrap_or_else(|error| panic!("{role}: query error {}", error.code));
+            assert!(
+                answer
+                    .reply
+                    .results
+                    .iter()
+                    .any(|row| row.entry.relative.ends_with("a.md")),
+                "{role}: expected a.md result; status={}, total={}, missing={}",
+                answer.reply.status,
+                answer.reply.total,
+                answer.missing.is_some()
+            );
         }
-        for text in [
-            "../",
-            "~/outside/",
-            &format!("{}-lookalike/", root.display()),
+        let lookalike = format!(
+            "{}{}",
+            home.join("root-lookalike").display(),
+            std::path::MAIN_SEPARATOR
+        );
+        for (role, text) in [
+            ("relative parent escape", "../"),
+            ("home-relative escape", "~/outside/"),
+            ("native absolute lookalike", lookalike.as_str()),
         ] {
-            let denied = query(&scope, request(text), Some(&home)).unwrap();
-            assert_eq!(denied.reply.status, "authorizationRequired");
-            assert!(denied.reply.results.is_empty());
-            assert!(denied.missing.is_none());
+            let denied = query(&scope, request(text), Some(&home))
+                .unwrap_or_else(|error| panic!("{role}: query error {}", error.code));
+            assert_eq!(denied.reply.status, "authorizationRequired", "{role}");
+            assert!(
+                denied.reply.results.is_empty(),
+                "{role}: unexpected results"
+            );
+            assert!(
+                denied.missing.is_none(),
+                "{role}: unexpected missing target"
+            );
         }
         assert!(scope.filters.load(Ordering::Relaxed) >= 8);
         fs::create_dir(root.join("new")).unwrap();
