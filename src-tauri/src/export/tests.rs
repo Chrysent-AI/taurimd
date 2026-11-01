@@ -1,120 +1,6 @@
 use super::*;
 use crate::documents::read_document;
-use std::{cell::RefCell, sync::atomic::AtomicBool};
-
-// Only the hardlink save case enables these observations, on its own test thread.
-thread_local! {
-    static OBSERVATION: RefCell<Option<(PathBuf, bool)>> = const { RefCell::new(None) };
-}
-pub(super) fn observe_operation(operation: &str, failed: bool) {
-    OBSERVATION.with_borrow_mut(|observation| {
-        if let Some((root, captured)) = observation {
-            eprintln!("Export observation: operation={operation} failed={failed}");
-            if failed && !*captured {
-                *captured = true;
-                observe_snapshot(root, "first-error-before-cleanup");
-            }
-        }
-    });
-}
-pub(super) fn observe_io<T>(operation: &str, result: &std::io::Result<T>) {
-    if OBSERVATION.with_borrow(|state| state.is_some()) {
-        if let Err(error) = result {
-            eprintln!(
-                "Export observation: operation={operation} kind={:?} os={:?}",
-                error.kind(),
-                error.raw_os_error()
-            );
-        }
-        observe_operation(operation, result.is_err());
-    }
-}
-fn observe_snapshot(root: &Path, checkpoint: &str) {
-    eprintln!("Export observation: checkpoint={checkpoint}");
-    for (role, name) in [("source", "source.md"), ("destination", "diagrams.ZIP")] {
-        match fs::read(root.join(name)) {
-            Ok(bytes) => eprintln!("Export observation: role={role} bytes={bytes:?}"),
-            Err(error) => eprintln!(
-                "Export observation: role={role} read_kind={:?} os={:?}",
-                error.kind(),
-                error.raw_os_error()
-            ),
-        }
-    }
-    observe_artifacts(root, 0);
-}
-fn observe_artifacts(directory: &Path, depth: u8) {
-    let entries =
-        match fs::read_dir(directory).and_then(|entries| entries.collect::<Result<Vec<_>, _>>()) {
-            Ok(entries) => entries,
-            Err(error) => {
-                eprintln!(
-                    "Export observation: directory_depth={depth} read_kind={:?} os={:?}",
-                    error.kind(),
-                    error.raw_os_error()
-                );
-                return;
-            }
-        };
-    for entry in entries {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        let role = match name.as_ref() {
-            "source.md" => "source",
-            "diagrams.ZIP" => "destination",
-            "cache" => "cache",
-            "coordination.lock" => "coordination",
-            "owner.lock" => "owner",
-            "archive.zip.part" => "archive",
-            name if name.starts_with("run-") => "run",
-            name if name.starts_with(".mdviewerrsx-export-") => "stage",
-            _ => "unexpected",
-        };
-        match fs::symlink_metadata(entry.path()) {
-            Ok(meta) => {
-                eprintln!(
-                    "Export observation: role={role} directory={} length={} readonly={}",
-                    meta.is_dir(),
-                    meta.len(),
-                    meta.permissions().readonly()
-                );
-                #[cfg(windows)]
-                {
-                    use std::os::windows::fs::MetadataExt;
-                    eprintln!(
-                        "Export observation: role={role} attributes={:#x}",
-                        meta.file_attributes()
-                    );
-                }
-                if depth < 2
-                    && meta.is_dir()
-                    && !meta.file_type().is_symlink()
-                    && ["cache", "run"].contains(&role)
-                {
-                    observe_artifacts(&entry.path(), depth + 1);
-                }
-            }
-            Err(error) => eprintln!(
-                "Export observation: role={role} metadata_kind={:?} os={:?}",
-                error.kind(),
-                error.raw_os_error()
-            ),
-        }
-    }
-}
-pub(super) fn observe_before_reap(job: &Job, result: &Result<Outcome, AppError>) {
-    OBSERVATION.with_borrow(|observation| {
-        if let Some((root, _)) = observation {
-            eprintln!("Export observation: finish_code={:?} phase={}", result.as_ref().err().map(|error| error.code), job.phase.load(Ordering::Acquire));
-            if let Ok(io) = job.io.lock() {
-                eprintln!("Export observation: archive(writer,file,identity,lock,owner,run)={:?} stage(identity,temporary)={:?}",
-                    io.archive.as_ref().map(|archive| (archive.writer.is_some(), archive.file.is_some(), archive.archive.identity.is_some(), archive.lock.is_some(), archive.owner.identity.is_some(), archive.run.identity.is_some())),
-                    io.stage.as_ref().map(|stage| (stage.owned.identity.is_some(), stage.temporary.is_some())));
-            }
-            observe_snapshot(root, "finish-before-reap");
-        }
-    });
-}
+use std::sync::atomic::AtomicBool;
 
 pub(super) const SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="-3 -4 120 60"><style>text{fill:#123}</style><text x="8" y="20">Whole diagram</text></svg>"#;
 pub(super) fn fixture(mode: Mode, ordinals: Vec<u32>) -> (tempfile::TempDir, Session, Arc<Job>) {
@@ -228,14 +114,12 @@ fn manifest_binding_shape_and_append_abort_are_native_authority() {
 fn stored_zip_full_svg_ordinal_gaps_atomic_hardlink_replacement() {
     let (root, mut session, job) = fixture(Mode::Svg, vec![1, 3]);
     let root_path = root.path().to_owned();
-    OBSERVATION.with_borrow_mut(|state| *state = Some((root_path.clone(), false)));
     let verification = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let source = fs::read(root.path().join("source.md")).unwrap();
         let output = root.path().join("diagrams.ZIP");
         fs::hard_link(root.path().join("source.md"), &output).unwrap();
         job.append(1, SVG).unwrap();
         job.append(3, SVG).unwrap();
-        observe_snapshot(root.path(), "before-finish");
         let result = job
             .finish(
                 || Ok(Some(output.clone())),
@@ -256,6 +140,11 @@ fn stored_zip_full_svg_ordinal_gaps_atomic_hardlink_replacement() {
         }
         drop(zip);
         assert_eq!(fs::read(root.path().join("source.md")).unwrap(), source);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            assert_eq!(fs::metadata(&output).unwrap().file_attributes() & 0x100, 0);
+        }
         cache_empty(root.path());
         assert!(!fs::read_dir(root.path()).unwrap().any(|e| e
             .unwrap()
@@ -265,7 +154,6 @@ fn stored_zip_full_svg_ordinal_gaps_atomic_hardlink_replacement() {
     }));
     // Always finish fixture teardown before resuming the original assertion failure.
     let reaped = job.reap();
-    observe_snapshot(root.path(), "after-explicit-reap");
     let source_unchanged =
         fs::read(root.path().join("source.md")).is_ok_and(|bytes| bytes == b"# Original source");
     let resources_empty = job
@@ -294,14 +182,13 @@ fn stored_zip_full_svg_ordinal_gaps_atomic_hardlink_replacement() {
     drop(session);
     let removed = root.close();
     let root_absent = root_path.try_exists().is_ok_and(|exists| !exists);
-    OBSERVATION.with_borrow_mut(|state| *state = None);
-    eprintln!("Export observation: cleanup reap_ok={} source_unchanged={source_unchanged} resources_empty={resources_empty} cache_empty={cache_empty} stages_empty={stages_empty} root_close_ok={} root_absent={root_absent}", reaped.is_ok(), removed.is_ok());
+    eprintln!("Export verification: cleanup reap_ok={} source_unchanged={source_unchanged} resources_empty={resources_empty} cache_empty={cache_empty} stages_empty={stages_empty} root_close_ok={} root_absent={root_absent}", reaped.is_ok(), removed.is_ok());
     if let Err(error) = &reaped {
-        eprintln!("Export observation: cleanup_code={}", error.code);
+        eprintln!("Export verification: cleanup_code={}", error.code);
     }
     if let Err(error) = &removed {
         eprintln!(
-            "Export observation: root_close_kind={:?} os={:?}",
+            "Export verification: root_close_kind={:?} os={:?}",
             error.kind(),
             error.raw_os_error()
         );
@@ -318,6 +205,60 @@ fn stored_zip_full_svg_ordinal_gaps_atomic_hardlink_replacement() {
             && removed.is_ok()
             && root_absent
     );
+}
+#[test]
+fn stored_zip_new_and_ordinary_existing_destinations_commit_atomically() {
+    for existing in [false, true] {
+        let (root, session, job) = fixture(Mode::Svg, vec![1, 3]);
+        let output = root.path().join("diagrams.zip");
+        if existing {
+            fs::write(&output, b"previous archive").unwrap();
+        }
+        job.append(1, SVG).unwrap();
+        job.append(3, SVG).unwrap();
+        let mut approved = false;
+        let outcome = job
+            .finish(
+                || Ok(Some(output.clone())),
+                |selected| {
+                    assert!(existing);
+                    assert_eq!(selected, fs::canonicalize(&output).unwrap().as_path());
+                    approved = true;
+                    true
+                },
+                || job.commit_start(&session),
+            )
+            .unwrap();
+        assert_eq!(approved, existing);
+        assert!(matches!(outcome, Outcome::Committed { count: 2, .. }));
+        let mut archive = zip::ZipArchive::new(File::open(&output).unwrap()).unwrap();
+        assert_eq!(archive.len(), 2);
+        for (index, ordinal) in [1, 3].iter().enumerate() {
+            let mut entry = archive.by_index(index).unwrap();
+            assert_eq!(entry.name().unwrap(), format!("diagram-{ordinal:03}.svg"));
+            assert_eq!(entry.compression(), CompressionMethod::Stored);
+            let mut content = Vec::new();
+            entry.read_to_end(&mut content).unwrap();
+            assert_eq!(content, SVG);
+        }
+        drop(archive);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            assert_eq!(fs::metadata(&output).unwrap().file_attributes() & 0x100, 0);
+        }
+        assert!(job
+            .io
+            .lock()
+            .is_ok_and(|io| io.archive.is_none() && io.stage.is_none()));
+        cache_empty(root.path());
+        assert!(!fs::read_dir(root.path()).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".mdviewerrsx-export-")));
+        close(root, session, job);
+    }
 }
 #[test]
 fn cancel_decline_bad_destination_and_target_changes_preserve_previous_bytes() {
@@ -420,15 +361,34 @@ fn identity_mismatch_and_persist_error_recover_owned_stage() {
     fs::rename(moved, &stage.owned.path).unwrap();
     stage.owned.remove().unwrap();
     drop(stage);
-    let mut stage = Stage::create(root.path()).unwrap();
-    let target = root.path().join("directory.zip");
-    fs::create_dir(&target).unwrap();
-    assert!(stage.persist(&target).is_err());
-    assert!(stage.temporary.is_some());
-    let path = stage.owned.path.clone();
-    stage.owned.remove().unwrap();
-    assert!(!path.exists());
-    drop(stage);
+    for retry in [false, true] {
+        let mut stage = Stage::create(root.path()).unwrap();
+        fs::write(&stage.owned.path, b"prepared archive").unwrap();
+        let target = root.path().join("directory.zip");
+        fs::create_dir(&target).unwrap();
+        let child = target.join("foreign-child");
+        fs::write(&child, b"preserve destination").unwrap();
+        assert!(stage.persist(&target).is_err());
+        assert!(stage.temporary.is_some());
+        assert!(stage.owned.identity.is_some());
+        stage.owned.check().unwrap();
+        assert_eq!(fs::read(&stage.owned.path).unwrap(), b"prepared archive");
+        assert_eq!(fs::read(&child).unwrap(), b"preserve destination");
+        fs::remove_file(child).unwrap();
+        fs::remove_dir(&target).unwrap();
+        let path = stage.owned.path.clone();
+        if retry {
+            stage.persist(&target).unwrap();
+            assert!(stage.temporary.is_none());
+            assert!(stage.owned.identity.is_none());
+            assert_eq!(fs::read(&target).unwrap(), b"prepared archive");
+            fs::remove_file(target).unwrap();
+        } else {
+            stage.owned.remove().unwrap();
+        }
+        assert!(!path.exists());
+        drop(stage);
+    }
     let path = root.path().to_owned();
     root.close().unwrap();
     assert!(!path.exists());
