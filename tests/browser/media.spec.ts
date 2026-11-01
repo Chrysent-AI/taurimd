@@ -78,136 +78,6 @@ async function queueMedia(page: Page) {
     { imageId, audioId, videoId, brokenId, damagedAudioId },
   );
 }
-// Observe the existing startup sequence; trace already captures response bytes and console.
-const playbackObservations = new WeakSet<Page>();
-declare global {
-  interface Window {
-    readerPlaybackProbe?: {
-      record: (
-        label: string,
-        node?: HTMLAudioElement,
-        detail?: unknown,
-      ) => void;
-      finish: () => unknown[];
-    };
-  }
-}
-async function observePlayback(page: Page) {
-  playbackObservations.add(page);
-  await page.evaluate(() => {
-    const entries: unknown[] = [];
-    const identities = new WeakMap<Node, number>();
-    let sequence = 0;
-    let selected: HTMLAudioElement | null = null;
-    const identity = (node: Node | null) => {
-      if (!node) return null;
-      let id = identities.get(node);
-      if (id === undefined) identities.set(node, (id = ++sequence));
-      return id;
-    };
-    const ranges = (value: TimeRanges) =>
-      Array.from({ length: value.length }, (_, index) => [
-        value.start(index),
-        value.end(index),
-      ]);
-    const record = (
-      label: string,
-      node?: HTMLAudioElement,
-      detail?: unknown,
-    ) => {
-      const current = document.querySelector<HTMLAudioElement>('article audio');
-      selected ??= node ?? current;
-      const audio = node ?? selected;
-      if (!audio) return;
-      entries.push({
-        label,
-        at: performance.now(),
-        detail,
-        node: identity(audio),
-        selected: identity(selected),
-        current: identity(current),
-        connected: audio.isConnected,
-        currentSrc: audio.currentSrc,
-        src: audio.getAttribute('src'),
-        preload: audio.preload,
-        muted: audio.muted,
-        volume: audio.volume,
-        playbackRate: audio.playbackRate,
-        sources: [...audio.querySelectorAll('source')].map((source) => ({
-          node: identity(source),
-          src: source.src,
-          type: source.type,
-        })),
-        readyState: audio.readyState,
-        networkState: audio.networkState,
-        error: audio.error && {
-          code: audio.error.code,
-          message: audio.error.message,
-        },
-        seeking: audio.seeking,
-        paused: audio.paused,
-        time: audio.currentTime,
-        duration: Number.isFinite(audio.duration)
-          ? audio.duration
-          : String(audio.duration),
-        ended: audio.ended,
-        loop: audio.loop,
-        buffered: ranges(audio.buffered),
-        seekable: ranges(audio.seekable),
-        played: ranges(audio.played),
-      });
-    };
-    const events = [
-      'loadstart',
-      'loadedmetadata',
-      'loadeddata',
-      'canplay',
-      'play',
-      'playing',
-      'seeking',
-      'seeked',
-      'timeupdate',
-      'waiting',
-      'stalled',
-      'pause',
-      'ended',
-      'abort',
-      'emptied',
-      'error',
-      'suspend',
-    ];
-    const receive = (event: Event) => {
-      const target = event.target;
-      if (
-        !(
-          target instanceof HTMLAudioElement ||
-          target instanceof HTMLSourceElement
-        )
-      )
-        return;
-      const audio =
-        target instanceof HTMLAudioElement ? target : target.closest('audio');
-      if (audio)
-        record(event.type, audio, {
-          target: identity(target),
-          source: target instanceof HTMLSourceElement ? target.src : null,
-        });
-    };
-    for (const event of events) document.addEventListener(event, receive, true);
-    window.readerPlaybackProbe = {
-      record,
-      finish: () => {
-        try {
-          record('before-cleanup');
-          return entries;
-        } finally {
-          for (const event of events)
-            document.removeEventListener(event, receive, true);
-        }
-      },
-    };
-  });
-}
 async function capture(
   page: Page,
   info: TestInfo,
@@ -290,27 +160,10 @@ test.beforeEach(async ({ page }) => {
     .poll(() => page.evaluate(() => window.readerFixture.listenerCount()))
     .toBe(5);
 });
-test.afterEach(async ({ page }, info) => {
-  try {
-    if (playbackObservations.delete(page)) {
-      const entries = await page.evaluate(() => {
-        const probe = window.readerPlaybackProbe;
-        try {
-          return probe?.finish() ?? [];
-        } finally {
-          delete window.readerPlaybackProbe;
-        }
-      });
-      await info.attach('playback-startup-state', {
-        body: JSON.stringify({ engine: info.project.name, entries }, null, 2),
-        contentType: 'application/json',
-      });
-    }
-  } finally {
-    await page.evaluate(() => {
-      window.readerFixture.cleanup();
-    });
-  }
+test.afterEach(async ({ page }) => {
+  await page.evaluate(() => {
+    window.readerFixture.cleanup();
+  });
 });
 
 test('real decode/controls/seek and visible failures retain nodes, focus and players across both slots/all palettes/zoom', async ({
@@ -768,7 +621,6 @@ test('last-good media survives pending/fail/cancel; same text/new context replac
 test('scrolled playing media, article, selection and disclosures survive status/Guide round trips without file authority or reparse', async ({
   page,
 }, info) => {
-  await observePlayback(page);
   await queueMedia(page);
   await open(
     page,
@@ -777,12 +629,7 @@ test('scrolled playing media, article, selection and disclosures survive status/
   const article = page.getByRole('article');
   const audio = page.locator('article audio');
   await expect
-    .poll(() =>
-      audio.evaluate((node: HTMLAudioElement) => {
-        window.readerPlaybackProbe?.record('metadata-poll', node);
-        return node.readyState;
-      }),
-    )
+    .poll(() => audio.evaluate((node: HTMLAudioElement) => node.readyState))
     .toBeGreaterThan(0);
   await page.getByText('Reading disclosure', { exact: true }).click();
   await article.focus();
@@ -818,28 +665,15 @@ test('scrolled playing media, article, selection and disclosures survive status/
       return { entries, observer };
     });
   await audio.evaluate(async (node: HTMLAudioElement) => {
-    window.readerPlaybackProbe?.record('before-loop', node);
     node.loop = true;
-    window.readerPlaybackProbe?.record('after-loop', node);
     node.currentTime = 0.1;
-    window.readerPlaybackProbe?.record('seek-set/play-call', node);
-    try {
-      await node.play();
-      window.readerPlaybackProbe?.record('play-resolved', node);
-    } catch (error) {
-      window.readerPlaybackProbe?.record('play-rejected', node, {
-        name: error instanceof Error ? error.name : 'unknown',
-        message: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
-    }
+    await node.play();
   });
   await expect
     .poll(() =>
-      audio.evaluate((node: HTMLAudioElement) => {
-        window.readerPlaybackProbe?.record('progress-poll', node);
-        return !node.paused && node.currentTime > 0.1;
-      }),
+      audio.evaluate(
+        (node: HTMLAudioElement) => !node.paused && node.currentTime > 0.1,
+      ),
     )
     .toBe(true);
   const playing = await audio.evaluate(
@@ -929,7 +763,6 @@ test('scrolled playing media, article, selection and disclosures survive status/
 test('diagram recoloring and temporary dialogs preserve scrolled playing media selection nodes and local interaction', async ({
   page,
 }, info) => {
-  await observePlayback(page);
   await queueMedia(page);
   const text = `${'Reading before diagrams. '.repeat(100)}\n\n${source}\n\n\`\`\`mermaid\nsequenceDiagram\n Alice->>Bob: Keep reading\n\`\`\`\n\n${'Reading continues. '.repeat(100)}`;
   await open(page, text);
@@ -937,12 +770,7 @@ test('diagram recoloring and temporary dialogs preserve scrolled playing media s
   await expect(diagram.locator('svg')).toHaveCount(1);
   const audio = page.locator('article audio');
   await expect
-    .poll(() =>
-      audio.evaluate((node: HTMLAudioElement) => {
-        window.readerPlaybackProbe?.record('metadata-poll', node);
-        return node.readyState;
-      }),
-    )
+    .poll(() => audio.evaluate((node: HTMLAudioElement) => node.readyState))
     .toBeGreaterThan(0);
   await diagram.getByText('Original definition', { exact: true }).click();
   await page.getByText('Reading disclosure', { exact: true }).click();
@@ -977,28 +805,15 @@ test('diagram recoloring and temporary dialogs preserve scrolled playing media s
     };
   });
   await audio.evaluate(async (node: HTMLAudioElement) => {
-    window.readerPlaybackProbe?.record('before-loop', node);
     node.loop = true;
-    window.readerPlaybackProbe?.record('after-loop', node);
     node.currentTime = 0.1;
-    window.readerPlaybackProbe?.record('seek-set/play-call', node);
-    try {
-      await node.play();
-      window.readerPlaybackProbe?.record('play-resolved', node);
-    } catch (error) {
-      window.readerPlaybackProbe?.record('play-rejected', node, {
-        name: error instanceof Error ? error.name : 'unknown',
-        message: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
-    }
+    await node.play();
   });
   await expect
     .poll(() =>
-      audio.evaluate((node: HTMLAudioElement) => {
-        window.readerPlaybackProbe?.record('progress-poll', node);
-        return !node.paused && node.currentTime > 0.1;
-      }),
+      audio.evaluate(
+        (node: HTMLAudioElement) => !node.paused && node.currentTime > 0.1,
+      ),
     )
     .toBe(true);
   const previousTime = await audio.evaluate(

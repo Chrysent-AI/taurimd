@@ -54,7 +54,18 @@ jobs:
           cache: npm
       - run: npm install --global npm@11.6.2 && npm ci
       - run: npm run browsers:install -- --with-deps
-      - run: npm run test:browser
+      - name: Install private browser audio prerequisite
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          node scripts/ci-browser-audio.mjs --check-packages
+          sudo apt-get install -y --no-install-recommends --no-remove pulseaudio pulseaudio-utils
+          dpkg-query --show --showformat='${Package} ${Version}\n' pulseaudio pulseaudio-utils libpulse0
+          for package in pulseaudio pulseaudio-utils libpulse0; do
+            version=$(dpkg-query --show --showformat='${Version}' "$package")
+            [[ "$version" =~ ^1:16\.1\+dfsg1-2ubuntu10(\.[0-9]+)?$ ]] || exit 1
+          done
+      - run: node scripts/ci-browser-audio.mjs
         env:
           DEBUG: pw:browser
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
