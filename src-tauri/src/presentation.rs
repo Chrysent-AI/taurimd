@@ -15,6 +15,10 @@ pub enum Modal {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Presentation {
     pub sequence: u32,
+    #[serde(default)]
+    pub find_available: bool,
+    #[serde(default)]
+    pub find_matches: bool,
     pub status_visible: bool,
     #[serde(default = "sidebar_default")]
     pub sidebar_visible: bool,
@@ -38,6 +42,8 @@ impl Default for Presentation {
     fn default() -> Self {
         Self {
             sequence: 0,
+            find_available: false,
+            find_matches: false,
             status_visible: true,
             sidebar_visible: true,
             has_root: false,
@@ -73,6 +79,10 @@ impl Presentation {
     pub fn enabled(&self, action: &str, has_document: bool) -> bool {
         let free = !self.busy && !self.composing;
         match action {
+            "find" => free && has_document && self.find_available,
+            "find-next" | "find-previous" => {
+                free && self.modal == Modal::None && has_document && self.find_matches
+            }
             "quick-open" => free && matches!(self.modal, Modal::None | Modal::QuickOpen),
             "zoom-in" => {
                 free && matches!(self.modal, Modal::None | Modal::Settings) && self.page_zoom < 300
@@ -132,6 +142,42 @@ impl ReaderMenu {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn find_availability_tracks_display_composition_and_higher_owners() {
+        let mut applied = Presentation::default();
+        assert!(!applied.enabled("find", true));
+        applied.find_available = true;
+        for modal in [Modal::None, Modal::Settings, Modal::QuickOpen, Modal::Other] {
+            applied.modal = modal;
+            assert!(applied.enabled("find", true));
+            assert!(!applied.enabled("find", false));
+            assert!(!applied.enabled("find-next", true));
+            applied.find_matches = true;
+            for action in ["find-next", "find-previous"] {
+                assert_eq!(applied.enabled(action, true), modal == Modal::None);
+                assert!(!applied.enabled(action, false));
+            }
+            applied.find_matches = false;
+        }
+        applied.find_available = false;
+        assert!(!applied.enabled("find", true));
+        applied.modal = Modal::None;
+        applied.find_available = true;
+        applied.find_matches = true;
+        for (busy, composing) in [(true, false), (false, true)] {
+            applied.busy = busy;
+            applied.composing = composing;
+            for action in ["find", "find-next", "find-previous"] {
+                assert!(!applied.enabled(action, true));
+            }
+        }
+        let wire: Presentation = serde_json::from_value(serde_json::json!({
+            "sequence":1,"statusVisible":true,"findAvailable":true,"findMatches":true,
+            "busy":false,"modal":"none","composing":false,"pageZoom":100
+        }))
+        .unwrap();
+        assert!(wire.enabled("find-next", true));
+    }
     #[test]
     fn presentation_wire_caller_ordering_and_menu_policy() {
         let mut applied = Presentation::default();

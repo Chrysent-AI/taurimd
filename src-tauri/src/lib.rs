@@ -618,12 +618,39 @@ pub fn run() {
                 MenuItem::with_id(app, "refresh-folder", "Refresh Folder", false, None::<&str>)?;
             let quick_open =
                 MenuItem::with_id(app, "quick-open", "Quick Open…", true, Some("CmdOrCtrl+K"))?;
+            let find =
+                MenuItem::with_id(app, "find", "Find in Document…", false, Some("CmdOrCtrl+F"))?;
+            let find_next = MenuItem::with_id(
+                app,
+                "find-next",
+                "Find Next",
+                false,
+                Some(if cfg!(target_os = "macos") {
+                    "Cmd+G"
+                } else {
+                    "F3"
+                }),
+            )?;
+            let find_previous = MenuItem::with_id(
+                app,
+                "find-previous",
+                "Find Previous",
+                false,
+                Some(if cfg!(target_os = "macos") {
+                    "Cmd+Shift+G"
+                } else {
+                    "Shift+F3"
+                }),
+            )?;
             let navigate = Submenu::with_items(
                 app,
                 "Navigate",
                 true,
                 &[
                     &quick_open,
+                    &find,
+                    &find_next,
+                    &find_previous,
                     &previous,
                     &next,
                     &Submenu::with_items(app, "Sibling order", true, &[&alphabetical, &newest])?,
@@ -725,6 +752,9 @@ pub fn run() {
             app.set_menu(menu)?;
             app.manage(ReaderMenu {
                 actions: vec![
+                    ("find", find),
+                    ("find-next", find_next),
+                    ("find-previous", find_previous),
                     ("quick-open", quick_open),
                     ("open-folder", folder),
                     ("reveal", reveal),

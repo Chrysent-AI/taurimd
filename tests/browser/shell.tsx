@@ -499,6 +499,9 @@ const fixture = {
   listenerCount,
   menu: (
     action:
+      | 'find'
+      | 'find-next'
+      | 'find-previous'
       | 'quick-open'
       | 'open-folder'
       | 'refresh-folder'

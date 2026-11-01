@@ -683,3 +683,52 @@ article[data-zoom='290'] {
 article[data-zoom='300'] {
   font-size: 3rem;
 }
+.reading-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.find-bar {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  max-height: 45vh;
+  overflow: auto;
+}
+.find-bar > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.find-bar input[type='text'] {
+  flex: 1 1 10rem;
+  width: 10rem;
+  padding: 0.5rem;
+  font: inherit;
+  color: var(--text);
+  background: var(--page);
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+}
+.find-bar button {
+  padding: 0.35rem 0.5rem;
+}
+.find-bar p {
+  margin: 0;
+}
+article mark.find-match {
+  color: #171717;
+  background: #ffe08a;
+  text-decoration: underline;
+}
+article mark.find-current {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+  text-decoration-style: double;
+}
