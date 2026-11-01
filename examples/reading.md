@@ -23,7 +23,9 @@ A small idea, clearly written.
 [An inactive example link](https://example.com)
 
 Rich text, Mermaid diagrams, scoped local media and supported links are available.
-Remote images remain blocked; folder browsing/directory navigation and export
-are not yet implemented. See the [example index](README.md),
+Folder browsing and directory navigation are available within the scope authorized
+by explicit file or folder selection. Successfully rendered Mermaid diagrams can
+be exported as SVG or PNG files in a ZIP archive. Remote images remain blocked.
+See the [example index](README.md),
 [Mermaid gallery](mermaid.md) and
 [intentional failure and recovery](mermaid-errors.md).

@@ -38,7 +38,9 @@ assets, fonts or services.
   original definition on the failed block and the valid block that follows it.
 - Relative links to these documents are supported local-document links within
   the active document's directory scope. Remote images remain blocked. Folder
-  browsing/directory navigation and export are not implemented.
+  browsing and directory navigation are available within the scope authorized by
+  explicit file or folder selection. Successfully rendered Mermaid diagrams can
+  be exported as SVG or PNG files in a ZIP archive.
 
 The browser regression reads the two Mermaid files directly from disk and passes
 those bytes through the actual App, parser worker, sanitizer and bundled Mermaid
