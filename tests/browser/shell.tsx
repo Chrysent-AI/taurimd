@@ -13,7 +13,13 @@ import { ReaderController } from '../../src/controller';
 import { native } from '../../src/native';
 import { parseInWorker } from '../../src/reader/worker';
 import type { MenuPresentation } from '../../src/presentation';
-import type { Siblings } from '../../src/navigation/types';
+import type {
+  Siblings,
+  FileIndex,
+  IndexSnapshot,
+  QueryRequest,
+  QueryReply,
+} from '../../src/navigation/types';
 import type { AppError } from '../../src/types';
 import {
   defaults,
@@ -22,6 +28,9 @@ import {
 } from '../../src/settings/model';
 
 type Command =
+  | 'get_index'
+  | 'query_index'
+  | 'complete_path'
   | 'select_root'
   | 'refresh_index'
   | 'get_siblings'
@@ -48,10 +57,75 @@ interface Call {
   command: Command;
   payload: unknown;
 }
+const openings: { command: string; dialog: boolean; focused: string | null }[] =
+  [];
 const calls: Call[] = [];
 const settled: Command[] = [];
 const replies = new Map<Command, Reply[]>();
 const pending = new Map<string, (outcome: Outcome) => void>();
+let indexSequence = 0;
+function indexSnapshot(
+  index: FileIndex | null,
+  phase: IndexSnapshot['status']['phase'] = index
+    ? index.issues.length
+      ? 'partial'
+      : 'ready'
+    : '',
+  message = '',
+): IndexSnapshot {
+  return {
+    index,
+    status: {
+      sequence: ++indexSequence,
+      scope: index?.scope ?? 0,
+      revision: index?.revision ?? 0,
+      phase,
+      degraded: false,
+      message,
+      scans: index?.revision ?? 0,
+      traversals: 0,
+      entries: index?.entries.length ?? 0,
+    },
+  };
+}
+let cachedIndex = indexSnapshot(null);
+function queryReply(request: QueryRequest): QueryReply {
+  // Matching here is only a transport double; native policy is tested in Rust.
+  const outside =
+    request.text.startsWith('/') ||
+    request.text.startsWith('~') ||
+    request.text.startsWith('..');
+  const results = (cachedIndex.index?.entries ?? [])
+    .flatMap((entry) => {
+      const characters = Array.from(entry.relative);
+      const positions: number[] = [];
+      let offset = 0;
+      for (const char of request.text.toLowerCase()) {
+        const found = characters.findIndex(
+          (candidate, index) =>
+            index >= offset && candidate.toLowerCase() === char,
+        );
+        if (found < 0) return [];
+        positions.push(found);
+        offset = found + 1;
+      }
+      return [{ entry, positions }];
+    })
+    .sort(
+      (a, b) =>
+        Number(a.entry.kind !== 'directory') -
+          Number(b.entry.kind !== 'directory') ||
+        a.entry.alphaRank - b.entry.alphaRank,
+    );
+  return {
+    ...request,
+    status: outside ? 'authorizationRequired' : 'ready',
+    location: '.',
+    total: outside ? 0 : results.length,
+    results: outside ? [] : results.slice(0, 100),
+    message: '',
+  };
+}
 let parses = 0;
 let workerParses = 0;
 let siblingReply: Siblings = {
@@ -156,6 +230,9 @@ mockIPC(
   async (command, payload) => {
     if (
       ![
+        'get_index',
+        'query_index',
+        'complete_path',
         'select_root',
         'refresh_index',
         'get_siblings',
@@ -180,6 +257,15 @@ mockIPC(
     )
       throw new Error(`Unexpected fixture command: ${command}`);
     const name = command as Command;
+    if (name === 'open_index_entry' || name === 'select_document')
+      openings.push({
+        command: name,
+        dialog: !!document.querySelector('dialog[open]'),
+        focused:
+          document.activeElement?.getAttribute('aria-label') ??
+          document.activeElement?.tagName ??
+          null,
+      });
     calls.push({ command: name, payload: structuredClone(payload) });
     try {
       const reply = replies.get(name)?.shift();
@@ -190,6 +276,9 @@ mockIPC(
         if (!presentation || next.sequence > presentation.sequence)
           presentation = structuredClone(next);
       };
+      if (!reply && name === 'get_index') return structuredClone(cachedIndex);
+      if (!reply && (name === 'query_index' || name === 'complete_path'))
+        return queryReply((payload as { request: QueryRequest }).request);
       if (!reply && name === 'get_siblings')
         return structuredClone(siblingReply);
       if (!reply && (name === 'cancel_preview' || name === 'reveal_document'))
@@ -236,6 +325,16 @@ mockIPC(
         // eslint-disable-next-line @typescript-eslint/only-throw-error
         throw outcome.error;
       }
+      if (name === 'select_root') {
+        const selection = outcome.value as {
+          status: string;
+          snapshot?: IndexSnapshot;
+        };
+        if (selection.snapshot)
+          cachedIndex = structuredClone(selection.snapshot);
+      }
+      if (name === 'refresh_index')
+        cachedIndex = structuredClone(outcome.value as IndexSnapshot);
       if (name === 'present_reader') applyPresentation();
       return structuredClone(outcome.value);
     } finally {
@@ -247,9 +346,11 @@ mockIPC(
 
 // Failure injection stays in the browser's transport double; the App still
 // subscribes through the installed event API and renders its real recovery UI.
+const subscriptionFailures = new URL(location.href).searchParams;
 if (
   '__TAURI_INTERNALS__' in window &&
-  new URL(location.href).searchParams.has('menu-failure')
+  (subscriptionFailures.has('menu-failure') ||
+    subscriptionFailures.has('index-failure'))
 ) {
   const internals = window.__TAURI_INTERNALS__ as {
     invoke: typeof invoke;
@@ -261,12 +362,19 @@ if (
       command === 'plugin:event|listen' &&
       args &&
       'event' in args &&
-      args.event === 'menu_action'
+      ((args.event === 'menu_action' &&
+        subscriptionFailures.has('menu-failure')) ||
+        (args.event === 'index_status' &&
+          subscriptionFailures.has('index-failure')))
     ) {
       if ('handler' in args && typeof args.handler === 'number')
         internals.unregisterCallback(args.handler);
       return Promise.reject(
-        new Error('Browser-only menu subscription failure'),
+        new Error(
+          args.event === 'index_status'
+            ? 'Browser-only index subscription failure'
+            : 'Browser-only menu subscription failure',
+        ),
       );
     }
     return original(command, args, options);
@@ -304,6 +412,15 @@ function listenerCount() {
   return 0;
 }
 const fixture = {
+  openings: () => structuredClone(openings),
+  indexSnapshot,
+  queryReply,
+  indexEvent: async (snapshot: IndexSnapshot) => {
+    cachedIndex = structuredClone(snapshot);
+    await emit('index_status', snapshot.status);
+  },
+  nativeIndex: () => structuredClone(cachedIndex),
+  indexGets: () => calls.filter((call) => call.command === 'get_index').length,
   setSiblings: (value: Siblings) => {
     siblingReply = structuredClone(value);
   },
@@ -337,6 +454,7 @@ const fixture = {
     structuredClone(
       calls.filter(
         (call) =>
+          call.command !== 'get_index' &&
           call.command !== 'get_siblings' &&
           call.command !== 'get_settings' &&
           call.command !== 'update_settings' &&
@@ -381,6 +499,7 @@ const fixture = {
   listenerCount,
   menu: (
     action:
+      | 'quick-open'
       | 'open-folder'
       | 'refresh-folder'
       | 'reveal'

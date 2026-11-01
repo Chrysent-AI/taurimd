@@ -131,8 +131,8 @@ fn deterministic_native_alpha_date_ties_missing_times_and_no_source_writes() {
         .records
         .iter()
         .all(|r| r.entry.alpha_rank == r.entry.date_rank));
-    scope.records[0].modified = None;
-    scope.records[2].modified = Some(time + Duration::from_secs(1));
+    Arc::make_mut(&mut scope.records)[0].modified = None;
+    Arc::make_mut(&mut scope.records)[2].modified = Some(time + Duration::from_secs(1));
     rank(&mut scope);
     assert_eq!(
         scope
@@ -354,6 +354,41 @@ fn epochs_old_ids_preview_cancellation_context_and_commit_lifetime_are_native_ow
     let lifetime = session.navigation.root.as_ref().unwrap().cancel.clone();
     drop(session);
     assert!(lifetime.load(Ordering::Acquire));
+    reap(dir);
+    reap(other);
+}
+#[test]
+fn unrelated_root_publication_reuses_parent_scope_and_preserves_staged_parent_open() {
+    let dir = root();
+    let other = root();
+    fs::write(dir.path().join("active.md"), "# Active").unwrap();
+    fs::write(dir.path().join("next.md"), "# Next").unwrap();
+    let mut session = Session::default();
+    let cancel = session.begin(1).unwrap();
+    session
+        .stage(
+            1,
+            read_document(&dir.path().join("active.md"), None, 1, 1, &cancel).unwrap(),
+        )
+        .unwrap();
+    session.commit(1).unwrap();
+    let parent = published(&mut session.navigation, dir.path(), false);
+    let scope = session.navigation.scope(parent.scope).unwrap();
+    let record = scope.entry(binding(&parent, "next.md")).unwrap();
+    let cancel = session.begin(2).unwrap();
+    let document = scope.read(&record, 2, 2, &cancel).unwrap();
+    session.stage_navigation(2, document, &scope).unwrap();
+    let foreign = published(&mut session.navigation, other.path(), true);
+    let projection = session
+        .navigation
+        .parent_siblings(&dir.path().join("active.md").canonicalize().unwrap())
+        .unwrap();
+    assert_eq!(projection.index.scope, parent.scope);
+    assert_eq!(projection.index.revision, parent.revision);
+    assert_ne!(foreign.scope, parent.scope);
+    session.commit(2).unwrap();
+    assert_eq!(session.active(2, 2).unwrap().snapshot.name, "next.md");
+    drop(session);
     reap(dir);
     reap(other);
 }

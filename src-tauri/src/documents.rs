@@ -216,6 +216,10 @@ pub struct Session {
     pub(crate) media: std::collections::HashMap<String, crate::media::Grant>,
 }
 impl Session {
+    pub fn close_reads(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+        self.media_lifetime.store(true, Ordering::Release);
+    }
     pub fn begin(&mut self, request: u32) -> Result<Arc<AtomicBool>, AppError> {
         if request <= self.latest {
             return Err(Self::stale());
@@ -317,8 +321,7 @@ impl Drop for Session {
         if let Some(job) = self.export.take() {
             job.retire_detached();
         }
-        self.cancel.store(true, Ordering::Relaxed);
-        self.media_lifetime.store(true, Ordering::Release);
+        self.close_reads();
     }
 }
 

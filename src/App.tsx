@@ -13,6 +13,8 @@ import type { ReaderController } from './controller';
 import { preferences, navigation as navigationBridge } from './native';
 import { NavigationController } from './navigation/model';
 import { Navigation } from './navigation/Navigation';
+import { QuickOpen } from './navigation/QuickOpen';
+import { QuickOpenController } from './navigation/quick-open';
 import { binding, neighbors, type EntryIntent } from './navigation/types';
 import { useDiagramExport } from './diagrams/useExport';
 import { mountDiagram, type DiagramView } from './diagrams/view';
@@ -44,6 +46,31 @@ export function App({ controller }: { controller: ReaderController }) {
     navigation.subscribe,
     navigation.getState,
   );
+  const [picker] = useState(
+    () =>
+      new QuickOpenController(navigationBridge, () => {
+        void navigation.recover();
+      }),
+  );
+  const readerMounted = useRef(true);
+  const pickerInput = useRef<HTMLInputElement | null>(null);
+  const pickerHandoff = useRef(false);
+  const [pickerNative, setPickerNative] = useState(false);
+  useEffect(() => navigation.connect(), [navigation]);
+  useLayoutEffect(() => {
+    picker.update(
+      navigationState.root,
+      navigationState.rootBusy ||
+        navigationState.choosing ||
+        navigationState.rootStatus === 'unavailable',
+    );
+  }, [
+    picker,
+    navigationState.root,
+    navigationState.rootBusy,
+    navigationState.rootStatus,
+    navigationState.choosing,
+  ]);
   const sidebar = useRef<HTMLElement | null>(null);
   const siblingGroup = useRef<HTMLDivElement>(null);
   const siblingGroupRef = useCallback((node: HTMLDivElement | null) => {
@@ -64,9 +91,11 @@ export function App({ controller }: { controller: ReaderController }) {
   const [section, setSection] = useState<number | null>(null);
   useEffect(
     () => () => {
+      readerMounted.current = false;
       navigation.dispose();
+      picker.close();
     },
-    [navigation],
+    [navigation, picker],
   );
   useEffect(() => {
     if (
@@ -103,7 +132,13 @@ export function App({ controller }: { controller: ReaderController }) {
     settingsController.getState,
   );
   const settings = preferenceState.settings;
-  type Surface = 'settings' | 'guide' | 'information' | 'about' | 'export';
+  type Surface =
+    | 'settings'
+    | 'guide'
+    | 'information'
+    | 'about'
+    | 'export'
+    | 'quick-open';
   const [surface, setSurface] = useState<Surface | null>(null);
   const modalOpen = useRef<Surface | null>(null);
   const [origin, setOrigin] = useState<HTMLElement | null>(null);
@@ -154,7 +189,8 @@ export function App({ controller }: { controller: ReaderController }) {
   const busy = ['loading', 'parsing', 'committing'].includes(state.phase);
   const rootProblem =
     navigationState.rootStatus === 'unavailable' ||
-    navigationState.rootStatus === 'partial';
+    navigationState.rootStatus === 'partial' ||
+    !!navigationState.watcherMessage;
   const focusReading = useCallback(() => {
     (article.current ?? main.current)?.focus({ preventScroll: true });
   }, []);
@@ -211,6 +247,8 @@ export function App({ controller }: { controller: ReaderController }) {
   );
   const startExport = exporting.start;
   const closeSurface = () => {
+    if (composing.current || pickerHandoff.current) return;
+    if (modalOpen.current === 'quick-open') picker.close();
     modalOpen.current = null;
     setSurface(null);
     setActionFeedback(null);
@@ -301,6 +339,76 @@ export function App({ controller }: { controller: ReaderController }) {
     },
     [allowNavigation, controller, jump, navigation],
   );
+  const acceptPickerFile = useCallback(
+    (intent: EntryIntent) => {
+      const reply = picker.currentReply();
+      const root = navigation.state.root;
+      if (
+        modalOpen.current !== 'quick-open' ||
+        pickerHandoff.current ||
+        composing.current ||
+        navigation.state.choosing ||
+        navigation.state.rootBusy ||
+        ['loading', 'parsing', 'committing'].includes(controller.state.phase) ||
+        !reply ||
+        !root ||
+        reply.scope !== root.scope ||
+        reply.revision !== root.revision ||
+        intent.binding.scope !== root.scope ||
+        intent.binding.revision !== root.revision ||
+        !reply.results.some(
+          ({ entry }) =>
+            entry.id === intent.binding.entry && entry.kind !== 'directory',
+        )
+      )
+        return;
+      pickerHandoff.current = true;
+      picker.close();
+      // Dismiss and restore the origin before the already-authorized transaction.
+      flushSync(() => {
+        setSurface(null);
+      });
+      void controller.openEntry(intent);
+      modalOpen.current = null;
+      pickerHandoff.current = false;
+    },
+    [controller, navigation, picker],
+  );
+  const chooseFromPicker = useCallback(
+    async (kind: 'file' | 'folder') => {
+      if (
+        modalOpen.current !== 'quick-open' ||
+        pickerHandoff.current ||
+        composing.current ||
+        navigation.state.choosing ||
+        ['loading', 'parsing', 'committing'].includes(controller.state.phase)
+      )
+        return;
+      pickerHandoff.current = true;
+      picker.close(true);
+      flushSync(() => {
+        setPickerNative(true);
+        setSurface(null);
+      });
+      const outcome =
+        kind === 'file'
+          ? await controller.run('open')
+          : await navigation.choose();
+      if (!readerMounted.current) return;
+      pickerHandoff.current = false;
+      setPickerNative(false);
+      if (outcome === 'cancelled' || kind === 'folder') {
+        picker.open(
+          navigation.state.root,
+          navigation.state.rootBusy ||
+            navigation.state.rootStatus === 'unavailable',
+        );
+        if (outcome === 'failed') picker.notice(navigation.state.message);
+        setSurface('quick-open');
+      } else modalOpen.current = null;
+    },
+    [controller, navigation, picker],
+  );
   const dispatch = useCallback(
     (payload: string, invoker?: HTMLElement) => {
       const phase = controller.state.phase;
@@ -310,7 +418,19 @@ export function App({ controller }: { controller: ReaderController }) {
         payload === 'zoom-out' ||
         payload === 'zoom-reset';
       if (
+        payload === 'quick-open' &&
+        modalOpen.current === 'quick-open' &&
+        !pending &&
+        !composing.current &&
+        !pickerHandoff.current &&
+        !navigation.state.choosing
+      ) {
+        pickerInput.current?.focus({ preventScroll: true });
+        return;
+      }
+      if (
         composing.current ||
+        pickerHandoff.current ||
         pending ||
         navigation.state.choosing ||
         (modalOpen.current && !(zoom && modalOpen.current === 'settings'))
@@ -323,7 +443,21 @@ export function App({ controller }: { controller: ReaderController }) {
         return;
       }
       setActionFeedback(null);
-      if (payload === 'open-folder') {
+      if (payload === 'quick-open') {
+        const active = invoker ?? window.document.activeElement;
+        setOrigin(
+          active instanceof HTMLElement && active !== window.document.body
+            ? active
+            : null,
+        );
+        modalOpen.current = 'quick-open';
+        picker.open(
+          navigation.state.root,
+          navigation.state.rootBusy ||
+            navigation.state.rootStatus === 'unavailable',
+        );
+        setSurface('quick-open');
+      } else if (payload === 'open-folder') {
         if (!navigation.state.rootBusy) {
           const active = invoker ?? window.document.activeElement;
           rootFocus.current = {
@@ -423,6 +557,7 @@ export function App({ controller }: { controller: ReaderController }) {
       startExport,
       navigation,
       openNavigation,
+      picker,
     ],
   );
   useEffect(() => {
@@ -435,13 +570,22 @@ export function App({ controller }: { controller: ReaderController }) {
         .previous,
       next: !!neighbors(navigationState.siblings, navigationState.newest).next,
       newest: navigationState.newest,
-      busy: busy || exporting.progress !== null || navigationState.choosing,
+      busy:
+        busy ||
+        exporting.progress !== null ||
+        navigationState.choosing ||
+        pickerNative ||
+        pickerHandoff.current,
       modal:
-        surface === null
-          ? 'none'
-          : surface === 'settings'
-            ? 'settings'
-            : 'other',
+        surface === 'quick-open'
+          ? 'quickOpen'
+          : modalOpen.current === 'export' || pickerNative
+            ? 'other'
+            : surface === null
+              ? 'none'
+              : surface === 'settings'
+                ? 'settings'
+                : 'other',
       composing: composition,
       pageZoom: settings.pageZoom,
     })
@@ -463,6 +607,7 @@ export function App({ controller }: { controller: ReaderController }) {
     surface,
     composition,
     exporting.progress,
+    pickerNative,
     syncAttempt,
   ]);
   useEffect(() => {
@@ -739,9 +884,9 @@ export function App({ controller }: { controller: ReaderController }) {
     >
       <section className="sr-only" aria-label="Reader status">
         <p aria-live="polite" aria-label="Folder status">
-          {!settings.sidebarDefault && rootProblem
+          {surface === 'quick-open' || (!settings.sidebarDefault && rootProblem)
             ? ''
-            : navigationState.rootMessage}
+            : `${navigationState.rootMessage}${navigationState.watcherMessage ? ` ${navigationState.watcherMessage}` : ''}`}
         </p>
         <p aria-live="polite" aria-label="Navigation status">
           {(navigationState.error && !settings.sidebarDefault) ||
@@ -768,7 +913,9 @@ export function App({ controller }: { controller: ReaderController }) {
         preferenceState.notice) && (
         <aside className="recovery" aria-label="Reader recovery">
           {rootProblem && !settings.sidebarDefault && (
-            <p role="alert">{navigationState.rootMessage}</p>
+            <p role="alert">
+              {navigationState.rootMessage} {navigationState.watcherMessage}
+            </p>
           )}
           {navigationState.error && !settings.sidebarDefault && (
             <p role="alert">{navigationState.message}</p>
@@ -861,15 +1008,17 @@ export function App({ controller }: { controller: ReaderController }) {
       {surface && (
         <TemporaryDialog
           title={
-            surface === 'settings'
-              ? 'Settings'
-              : surface === 'guide'
-                ? 'User Guide'
-                : surface === 'information'
-                  ? 'Document Information'
-                  : surface === 'export'
-                    ? `Export diagrams — ${exporting.progress?.mode.toUpperCase() ?? ''} ZIP`
-                    : 'About MDViewerRSX'
+            surface === 'quick-open'
+              ? 'Quick Open'
+              : surface === 'settings'
+                ? 'Settings'
+                : surface === 'guide'
+                  ? 'User Guide'
+                  : surface === 'information'
+                    ? 'Document Information'
+                    : surface === 'export'
+                      ? `Export diagrams — ${exporting.progress?.mode.toUpperCase() ?? ''} ZIP`
+                      : 'About MDViewerRSX'
           }
           close={surface === 'export' ? exporting.cancel : closeSurface}
           restoreFocus={surface !== 'export'}
@@ -903,9 +1052,21 @@ export function App({ controller }: { controller: ReaderController }) {
           origin={origin}
           fallback={focusReading}
           initialControl={surface === 'settings'}
+          initialInput={surface === 'quick-open'}
         >
           {commandMessage && <p role="status">{commandMessage}</p>}
-          {surface === 'export' ? (
+          {surface === 'quick-open' ? (
+            <QuickOpen
+              model={picker}
+              navigation={navigation}
+              composing={composing}
+              input={pickerInput}
+              accept={acceptPickerFile}
+              choose={(kind) => {
+                void chooseFromPicker(kind);
+              }}
+            />
+          ) : surface === 'export' ? (
             <>
               <p>{document?.snapshot.name}</p>
               <p

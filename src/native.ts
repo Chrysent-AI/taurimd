@@ -59,9 +59,18 @@ export function mediaURL(value: ResolvedMedia) {
   return convertFileSrc(value.id, 'reader-media');
 }
 export const navigation: NavigationBridge = {
+  get: () => invoke('get_index'),
+  listen: (receive) =>
+    listen<import('./navigation/types').IndexStatus>(
+      'index_status',
+      ({ payload }) => {
+        receive(payload);
+      },
+    ),
+  query: (request) => invoke('query_index', { request }),
+  complete: (request) => invoke('complete_path', { request }),
   choose: (requestId) => invoke('select_root', { requestId }),
-  refresh: (scopeId, requestId) =>
-    invoke('refresh_index', { scopeId, requestId }),
+  refresh: (scopeId) => invoke('refresh_index', { scopeId }),
   siblings: (document) =>
     invoke('get_siblings', {
       documentId: document.documentId,

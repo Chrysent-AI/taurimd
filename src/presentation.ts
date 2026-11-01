@@ -8,7 +8,7 @@ export interface MenuPresentation {
   next: boolean;
   newest: boolean;
   busy: boolean;
-  modal: 'none' | 'settings' | 'other';
+  modal: 'none' | 'settings' | 'quickOpen' | 'other';
   composing: boolean;
   pageZoom: number;
 }

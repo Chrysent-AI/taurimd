@@ -53,7 +53,7 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole('main')).toContainText('File → Open File');
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.listenerCount()))
-    .toBe(2);
+    .toBe(3);
   await expect
     .poll(() =>
       page.evaluate(() => window.readerFixture.presentation()?.statusVisible),

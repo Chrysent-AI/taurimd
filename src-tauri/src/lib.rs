@@ -3,10 +3,11 @@ mod export;
 mod links;
 mod media;
 mod navigation;
+mod navigation_cache;
 mod navigation_commands;
 use navigation_commands::{
-    cancel_preview, get_siblings, open_index_entry, read_preview, refresh_index, reveal_document,
-    select_root,
+    cancel_preview, complete_path, get_index, get_siblings, open_index_entry, query_index,
+    read_preview, refresh_index, reveal_document, select_root,
 };
 mod presentation;
 mod settings;
@@ -104,6 +105,7 @@ async fn select_document(
         handle
             .dialog()
             .file()
+            .set_parent(&handle)
             .set_title("Open document")
             .add_filter(
                 "Documents",
@@ -139,6 +141,17 @@ async fn reload_document(
     let (granted, cancel) = {
         let mut session = session(&window, &state)?;
         let granted = session.active(document_id, revision)?;
+        session.navigation.retire_siblings();
+        if session
+            .navigation
+            .root
+            .as_ref()
+            .is_some_and(|root| granted.path.starts_with(&root.path))
+        {
+            if let Some(worker) = &session.navigation.worker {
+                worker.refresh();
+            }
+        }
         let cancel = session.begin(request_id)?;
         (granted, cancel)
     };
@@ -521,6 +534,9 @@ pub fn run() {
             finish_export,
             cancel_export,
             select_root,
+            get_index,
+            query_index,
+            complete_path,
             refresh_index,
             get_siblings,
             read_preview,
@@ -600,11 +616,14 @@ pub fn run() {
             let next = MenuItem::with_id(app, "next", "Next File", false, None::<&str>)?;
             let refresh =
                 MenuItem::with_id(app, "refresh-folder", "Refresh Folder", false, None::<&str>)?;
+            let quick_open =
+                MenuItem::with_id(app, "quick-open", "Quick Open…", true, Some("CmdOrCtrl+K"))?;
             let navigate = Submenu::with_items(
                 app,
                 "Navigate",
                 true,
                 &[
+                    &quick_open,
                     &previous,
                     &next,
                     &Submenu::with_items(app, "Sibling order", true, &[&alphabetical, &newest])?,
@@ -706,6 +725,7 @@ pub fn run() {
             app.set_menu(menu)?;
             app.manage(ReaderMenu {
                 actions: vec![
+                    ("quick-open", quick_open),
                     ("open-folder", folder),
                     ("reveal", reveal),
                     ("previous", previous),
@@ -766,9 +786,33 @@ pub fn run() {
             }
         })
         .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Focused(true)) {
+                if let Ok(session) = window.state::<ReaderState>().lock() {
+                    if let Some(worker) = &session.navigation.worker {
+                        worker.focus();
+                    }
+                }
+            }
             if matches!(event, tauri::WindowEvent::Destroyed) {
-                if let Ok(mut session) = window.state::<ReaderState>().lock() {
-                    *session = Session::default();
+                let retired = window
+                    .state::<ReaderState>()
+                    .lock()
+                    .ok()
+                    .map(|mut session| {
+                        session.close_reads();
+                        if let Some(worker) = &session.navigation.worker {
+                            worker.stop();
+                        }
+                        std::mem::take(&mut *session)
+                    });
+                if let Some(mut retired) = retired {
+                    tauri::async_runtime::spawn_blocking(move || {
+                        let worker = retired.navigation.worker.take();
+                        drop(retired);
+                        if let Some(worker) = worker {
+                            worker.retire();
+                        }
+                    });
                 }
             }
         })

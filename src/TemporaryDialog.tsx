@@ -8,6 +8,7 @@ export function TemporaryDialog({
   fallback,
   children,
   initialControl = false,
+  initialInput = false,
   restoreFocus = true,
   footer,
   dismissDisabled = false,
@@ -19,6 +20,7 @@ export function TemporaryDialog({
   fallback: () => void;
   children: ReactNode;
   initialControl?: boolean;
+  initialInput?: boolean;
   restoreFocus?: boolean;
   footer?: ReactNode;
   dismissDisabled?: boolean;
@@ -37,7 +39,11 @@ export function TemporaryDialog({
         ranges.push(range.cloneRange());
     }
     element?.showModal();
-    if (initialControl)
+    if (initialInput)
+      element
+        ?.querySelector<HTMLInputElement>('input[type="text"]')
+        ?.focus({ preventScroll: true });
+    else if (initialControl)
       element
         ?.querySelector<HTMLElement>('select, button')
         ?.focus({ preventScroll: true });
@@ -61,7 +67,7 @@ export function TemporaryDialog({
         }
       }
     };
-  }, [origin, fallback, initialControl, restoreFocus]);
+  }, [origin, fallback, initialControl, initialInput, restoreFocus]);
   useEffect(() => {
     if (
       dialog.current?.open &&
@@ -81,11 +87,22 @@ export function TemporaryDialog({
         if (!composing.current && !dismissDisabled) close();
       }}
       onKeyDown={(event) => {
-        if (composing.current || event.nativeEvent.isComposing) {
-          if (event.key === 'Escape') event.preventDefault();
+        if (
+          composing.current ||
+          event.nativeEvent.isComposing ||
+          // eslint-disable-next-line @typescript-eslint/no-deprecated -- Legacy IME engines can report 229 without isComposing.
+          event.keyCode === 229
+        ) {
+          if (
+            event.key === 'Escape' ||
+            ((event.key === 'Enter' || event.key === ' ') &&
+              event.target instanceof Element &&
+              !!event.target.closest('button'))
+          )
+            event.preventDefault();
           return;
         }
-        if (event.key !== 'Tab') return;
+        if (event.key !== 'Tab' || event.defaultPrevented) return;
         const controls = [
           ...(dialog.current?.querySelectorAll<HTMLElement>(
             'a[href], button:not(:disabled), select:not(:disabled), input:not(:disabled), textarea:not(:disabled), summary, [tabindex="0"]',
@@ -109,7 +126,17 @@ export function TemporaryDialog({
         {title}
       </h2>
       {children}
-      {footer === undefined ? <button onClick={close}>Close</button> : footer}
+      {footer === undefined ? (
+        <button
+          onClick={() => {
+            if (!composing.current && !dismissDisabled) close();
+          }}
+        >
+          Close
+        </button>
+      ) : (
+        footer
+      )}
     </dialog>
   );
 }

@@ -1,11 +1,12 @@
 use super::{session, ReaderState};
 use crate::{
     documents::{AppError, Session, Snapshot},
-    navigation::{self, Binding, Index, Siblings},
+    navigation::{self, Binding, Siblings},
+    navigation_cache::{self, RootWorker, Snapshot as CacheSnapshot, Status},
 };
 use serde::Serialize;
 use std::sync::atomic::Ordering;
-use tauri::{Manager, WebviewWindow};
+use tauri::{Emitter, Manager, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -13,7 +14,7 @@ use tauri_plugin_opener::OpenerExt;
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum RootSelection {
     Cancelled,
-    Ready { index: Index },
+    Ready { snapshot: CacheSnapshot },
 }
 #[tauri::command]
 pub async fn select_root(
@@ -44,48 +45,174 @@ pub async fn select_root(
         .into_path()
         .map_err(|_| AppError::new("unsupported", "Choose a local folder."))?;
     let handle = window.clone();
-    let index = tauri::async_runtime::spawn_blocking(move || {
+    let snapshot = tauri::async_runtime::spawn_blocking(move || {
         let path = navigation::root_path(&path)?;
-        let scope = {
+        let (id, lifetime, old) = {
             let state = handle.state::<ReaderState>();
             let mut session = session(&handle, &state)?;
             session.navigation.chosen(request_id)?;
-            session.navigation.start(path, true, false)?
+            let old = session.navigation.worker.take();
+            if let Some(old) = &old {
+                old.stop();
+            }
+            let scope = session.navigation.start(path.clone(), true, false)?;
+            session.navigation.status = Status {
+                scope: scope.id,
+                revision: scope.revision,
+                phase: "loading",
+                ..Status::default()
+            };
+            (scope.id, scope.lifetime.clone(), old)
         };
-        Ok::<Index, AppError>(scope.index())
+        if let Some(old) = old {
+            old.retire();
+        }
+        let owner = handle.clone();
+        let worker = RootWorker::start(path, lifetime, move |work| {
+            navigation_cache::apply(&owner.state::<ReaderState>(), id, work, |status| {
+                let _ = owner.emit("index_status", status);
+            })
+        });
+        let worker = match worker {
+            Ok(worker) => worker,
+            Err(error) => {
+                let status = {
+                    let state = handle.state::<ReaderState>();
+                    let mut session = session(&handle, &state)?;
+                    if session
+                        .navigation
+                        .root
+                        .as_ref()
+                        .is_none_or(|root| root.id != id)
+                    {
+                        return Err(Session::stale());
+                    }
+                    session.navigation.status.phase = "unavailable";
+                    session.navigation.status.message = error.message.clone();
+                    session.navigation.status.sequence += 1;
+                    session.navigation.status.clone()
+                };
+                let _ = handle.emit("index_status", status);
+                return Err(error);
+            }
+        };
+        let mut worker = Some(worker);
+        let snapshot = {
+            let state = handle.state::<ReaderState>();
+            let mut session = session(&handle, &state)?;
+            if session
+                .navigation
+                .root
+                .as_ref()
+                .is_some_and(|root| root.id == id)
+            {
+                session.navigation.worker = worker.take();
+                Some(CacheSnapshot::get(&session))
+            } else {
+                None
+            }
+        };
+        if let Some(worker) = worker {
+            worker.retire();
+        }
+        snapshot.ok_or_else(Session::stale)
     })
     .await
     .map_err(|_| AppError::new("resourceFailure", "Folder enumeration was interrupted."))??;
-    Ok(RootSelection::Ready { index })
+    Ok(RootSelection::Ready { snapshot })
 }
 #[tauri::command]
-pub async fn refresh_index(
+pub fn get_index(window: WebviewWindow) -> Result<CacheSnapshot, AppError> {
+    Ok(CacheSnapshot::get(&*session(
+        &window,
+        &window.state::<ReaderState>(),
+    )?))
+}
+#[tauri::command]
+pub fn refresh_index(window: WebviewWindow, scope_id: u32) -> Result<CacheSnapshot, AppError> {
+    let state = window.state::<ReaderState>();
+    let mut session = session(&window, &state)?;
+    if session
+        .navigation
+        .root
+        .as_ref()
+        .is_none_or(|root| root.id != scope_id)
+    {
+        return Err(Session::stale());
+    }
+    session
+        .navigation
+        .worker
+        .as_ref()
+        .ok_or_else(Session::stale)?
+        .refresh();
+    session.navigation.status.phase = "loading";
+    session.navigation.status.sequence += 1;
+    Ok(CacheSnapshot::get(&session))
+}
+async fn search(
     window: WebviewWindow,
-    scope_id: u32,
-    request_id: u32,
-) -> Result<Index, AppError> {
+    request: navigation::query::Query,
+    traverse: bool,
+) -> Result<navigation::query::Reply, AppError> {
     let scope = {
         let state = window.state::<ReaderState>();
-        let mut session = session(&window, &state)?;
-        session.navigation.choose(request_id)?;
-        let root = session
+        let session = session(&window, &state)?;
+        session
             .navigation
             .root
             .as_ref()
-            .filter(|r| r.id == scope_id)
-            .ok_or_else(Session::stale)?;
-        let path = root.path.clone();
-        session.navigation.start(path, true, true)?
+            .filter(|root| root.id == request.scope)
+            .cloned()
+            .ok_or_else(Session::stale)?
     };
-    let handle = window.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let scope = navigation::scan(scope, true)?;
-        session(&handle, &handle.state::<ReaderState>())?
-            .navigation
-            .publish(scope)
+    let home = window.path().home_dir().ok();
+    let answer = tauri::async_runtime::spawn_blocking(move || {
+        let answer = navigation::query::query(&scope, request, home.as_deref())?;
+        if traverse {
+            if let Some(path) = &answer.missing {
+                navigation::query::validate_directory(&scope, path)?;
+            }
+        }
+        Ok::<_, AppError>(answer)
     })
     .await
-    .map_err(|_| AppError::new("resourceFailure", "Folder refresh was interrupted."))?
+    .map_err(|_| AppError::new("resourceFailure", "File filtering was interrupted."))??;
+    let state = window.state::<ReaderState>();
+    let session = session(&window, &state)?;
+    let current = session
+        .navigation
+        .root
+        .as_ref()
+        .ok_or_else(Session::stale)?;
+    if current.id != answer.reply.scope || current.revision != answer.reply.revision {
+        return Err(Session::stale());
+    }
+    if traverse {
+        if let Some(path) = answer.missing {
+            session
+                .navigation
+                .worker
+                .as_ref()
+                .ok_or_else(Session::stale)?
+                .directory(path);
+        }
+    }
+    Ok(answer.reply)
+}
+#[tauri::command]
+pub async fn query_index(
+    window: WebviewWindow,
+    request: navigation::query::Query,
+) -> Result<navigation::query::Reply, AppError> {
+    search(window, request, false).await
+}
+#[tauri::command]
+pub async fn complete_path(
+    window: WebviewWindow,
+    request: navigation::query::Query,
+) -> Result<navigation::query::Reply, AppError> {
+    search(window, request, true).await
 }
 #[tauri::command]
 pub async fn get_siblings(
@@ -98,6 +225,9 @@ pub async fn get_siblings(
         let mut session = session(&window, &state)?;
         let document = session.active(document_id, revision)?;
         if let Some(siblings) = session.navigation.root_siblings(&document.path) {
+            return Ok(siblings);
+        }
+        if let Some(siblings) = session.navigation.parent_siblings(&document.path) {
             return Ok(siblings);
         }
         let scope = session

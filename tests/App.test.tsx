@@ -29,6 +29,24 @@ vi.mock('@tauri-apps/api/event', () => ({
 }));
 vi.mock('../src/native', () => ({
   navigation: {
+    get: () =>
+      Promise.resolve({
+        index: null,
+        status: {
+          scope: 0,
+          revision: 0,
+          sequence: 0,
+          phase: '',
+          degraded: false,
+          message: '',
+          scans: 0,
+          traversals: 0,
+          entries: 0,
+        },
+      }),
+    listen: () => Promise.resolve(() => {}),
+    query: vi.fn(),
+    complete: vi.fn(),
     siblings: () =>
       Promise.resolve({
         index: {

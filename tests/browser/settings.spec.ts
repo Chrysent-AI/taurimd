@@ -211,7 +211,7 @@ test.beforeEach(async ({ page }) => {
   );
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.listenerCount()))
-    .toBe(2);
+    .toBe(3);
   await saved(page);
   await page.evaluate((source) => {
     window.readerFixture.enqueue('select_document', {

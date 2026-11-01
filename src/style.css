@@ -574,6 +574,55 @@ article[data-zoom='90'] {
 article[data-zoom='100'] {
   font-size: 1rem;
 }
+.quick-open {
+  min-inline-size: 0;
+}
+.quick-open input[type='text'] {
+  box-sizing: border-box;
+  inline-size: 100%;
+  block-size: auto;
+  min-inline-size: 0;
+  padding: 0.6rem;
+  font: inherit;
+  color: var(--text);
+  background: var(--page);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+}
+.quick-scope,
+.quick-path {
+  overflow-wrap: anywhere;
+}
+.quick-open [role='listbox'] {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0.2rem;
+  max-block-size: min(35vh, 22rem);
+  overflow: auto;
+  border: 1px solid var(--border);
+}
+.quick-open [role='option'] {
+  padding: 0.5rem;
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+.quick-open [role='option'][aria-selected='true'] {
+  border-color: var(--link);
+  background: var(--panel);
+}
+.quick-open [role='option'] small {
+  display: block;
+  color: var(--muted);
+}
+.quick-match {
+  color: var(--link);
+  text-decoration: underline;
+  font-weight: 750;
+}
+.quick-open .commands {
+  flex-wrap: wrap;
+}
+
 article[data-zoom='110'] {
   font-size: 1.1rem;
 }

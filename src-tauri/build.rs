@@ -4,6 +4,9 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "select_root",
+            "get_index",
+            "query_index",
+            "complete_path",
             "refresh_index",
             "get_siblings",
             "read_preview",

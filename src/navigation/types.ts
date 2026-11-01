@@ -42,11 +42,51 @@ export interface Preview {
   snapshot?: Snapshot;
   message?: string;
 }
+export interface IndexStatus {
+  sequence: number;
+  scope: number;
+  revision: number;
+  phase: '' | 'loading' | 'ready' | 'partial' | 'unavailable';
+  degraded: boolean;
+  message: string;
+  scans: number;
+  traversals: number;
+  entries: number;
+}
+export interface IndexSnapshot {
+  index: FileIndex | null;
+  status: IndexStatus;
+}
+export interface QueryRequest {
+  scope: number;
+  revision: number;
+  queryId: number;
+  text: string;
+  directory?: number;
+}
+export interface QueryReply extends QueryRequest {
+  status:
+    | 'ready'
+    | 'indexing'
+    | 'authorizationRequired'
+    | 'missing'
+    | 'unavailable';
+  location: string;
+  results: { entry: FileEntry; positions: number[] }[];
+  total: number;
+  message: string;
+}
 export interface NavigationBridge {
+  get(): Promise<IndexSnapshot>;
+  listen(receive: (status: IndexStatus) => void): Promise<() => void>;
+  query(request: QueryRequest): Promise<QueryReply>;
+  complete(request: QueryRequest): Promise<QueryReply>;
   choose(
     requestId: number,
-  ): Promise<{ status: 'cancelled' } | { status: 'ready'; index: FileIndex }>;
-  refresh(scopeId: number, requestId: number): Promise<FileIndex>;
+  ): Promise<
+    { status: 'cancelled' } | { status: 'ready'; snapshot: IndexSnapshot }
+  >;
+  refresh(scopeId: number): Promise<IndexSnapshot>;
   siblings(document: Snapshot): Promise<Siblings>;
   preview(binding: EntryBinding, requestId: number): Promise<Snapshot>;
   cancelPreview(requestId: number): Promise<unknown>;

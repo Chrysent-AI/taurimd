@@ -104,9 +104,11 @@ async function siblings(page: Page, active = 10, root = index()) {
 async function choose(page: Page, root = index()) {
   await page.evaluate((root) => {
     window.readerFixture.enqueue('select_root', {
-      value: { status: 'ready', index: { ...root, entries: [], issues: [] } },
+      value: {
+        status: 'ready',
+        snapshot: window.readerFixture.indexSnapshot(root),
+      },
     });
-    window.readerFixture.enqueue('refresh_index', { value: root });
     return window.readerFixture.menu('open-folder');
   }, root);
   await expect(
@@ -157,7 +159,7 @@ test.beforeEach(async ({ page }) => {
   );
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.listenerCount()))
-    .toBe(2);
+    .toBe(3);
 });
 test.afterEach(async ({ page }) => {
   await page.evaluate(() => {
@@ -422,7 +424,9 @@ test('retains established disclosure nodes, cancels only hidden preview work, an
     }));
   await siblings(page, 110, refreshed);
   await page.evaluate((root) => {
-    window.readerFixture.enqueue('refresh_index', { value: root });
+    window.readerFixture.enqueue('refresh_index', {
+      value: window.readerFixture.indexSnapshot(root),
+    });
     return window.readerFixture.menu('refresh-folder');
   }, refreshed);
   await expect(
@@ -824,10 +828,14 @@ for (const code of ['denied', 'notFound'] as const) {
     await page.evaluate(
       ({ root, code }) => {
         window.readerFixture.enqueue('select_root', {
-          value: { status: 'ready', index: root },
-        });
-        window.readerFixture.enqueue('refresh_index', {
-          error: { code, message: `${code} root access` },
+          value: {
+            status: 'ready',
+            snapshot: window.readerFixture.indexSnapshot(
+              root,
+              'unavailable',
+              `${code} root access`,
+            ),
+          },
         });
         return window.readerFixture.menu('open-folder');
       },
@@ -901,7 +909,9 @@ for (const code of ['denied', 'notFound'] as const) {
     await page.evaluate(() => window.readerFixture.menu('sidebar'));
     await page.evaluate(
       (root) => {
-        window.readerFixture.enqueue('refresh_index', { value: root });
+        window.readerFixture.enqueue('refresh_index', {
+          value: window.readerFixture.indexSnapshot(root),
+        });
         return window.readerFixture.menu('refresh-folder');
       },
       { ...root, revision: 2 },
@@ -919,7 +929,9 @@ for (const code of ['denied', 'notFound'] as const) {
       ],
     };
     await page.evaluate((root) => {
-      window.readerFixture.enqueue('refresh_index', { value: root });
+      window.readerFixture.enqueue('refresh_index', {
+        value: window.readerFixture.indexSnapshot(root),
+      });
       return window.readerFixture.menu('refresh-folder');
     }, partial);
     await expect(files).toContainText('incomplete results');
@@ -998,7 +1010,9 @@ for (const terminal of ['success', 'error', 'cancel'] as const) {
       .poll(() => page.evaluate(() => window.readerFixture.pending()))
       .toContain('overlap-entry');
     await page.evaluate((root) => {
-      window.readerFixture.release('overlap-root', { value: root });
+      window.readerFixture.release('overlap-root', {
+        value: window.readerFixture.indexSnapshot(root),
+      });
     }, index(2));
     await expect
       .poll(() => page.evaluate(() => window.readerFixture.presentation()))

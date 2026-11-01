@@ -102,7 +102,7 @@ test.beforeEach(async ({ page }) => {
   );
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.listenerCount()))
-    .toBe(2);
+    .toBe(3);
 });
 test.afterEach(async ({ page }, info) => {
   if (info.status !== info.expectedStatus) {

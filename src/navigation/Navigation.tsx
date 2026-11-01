@@ -79,6 +79,9 @@ export function Navigation(props: Props) {
         ) : (
           <div aria-busy={state.rootBusy}>
             <p>{state.rootMessage}</p>
+            {state.watcherMessage && (
+              <p className="warning">{state.watcherMessage}</p>
+            )}
             <p className="folder-identity">{state.root.name}</p>
             {document &&
               state.siblings &&

@@ -8,8 +8,12 @@ import {
   type NavigationBridge,
   type Preview,
   type Siblings,
+  type IndexSnapshot,
+  type IndexStatus,
 } from './types';
 interface NavigationState {
+  cache: IndexStatus | null;
+  watcherMessage: string;
   root: FileIndex | null;
   choosing: boolean;
   rootBusy: boolean;
@@ -25,6 +29,8 @@ interface NavigationState {
 }
 export class NavigationController {
   state: NavigationState = {
+    cache: null,
+    watcherMessage: '',
     root: null,
     choosing: false,
     rootBusy: false,
@@ -43,10 +49,18 @@ export class NavigationController {
   private siblingSequence = 0;
   private jobs = new Map<number, { request: number; job?: ParseJob }>();
   private disposed = false;
+  private expected: IndexStatus | null = null;
+  private recovering: Promise<void> | null = null;
+  private recoverAgain = false;
+  private recoveryGeneration = 0;
+  private notifications: 'closed' | 'pending' | 'healthy' | 'unavailable' =
+    'closed';
+  private completionTimer: ReturnType<typeof setTimeout> | undefined;
   private revealing = false;
   constructor(
     private bridge: NavigationBridge,
     private parse = parseInWorker,
+    private completionDelay = 500,
   ) {}
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
@@ -62,6 +76,186 @@ export class NavigationController {
       listener();
     });
   }
+  connect() {
+    this.retireRecovery();
+    this.notifications = 'pending';
+    let retired = false;
+    let stop: (() => void) | undefined;
+    void this.bridge
+      .listen((status) => {
+        if (retired || this.disposed) return;
+        const newer = (current: IndexStatus | null) =>
+          !current ||
+          status.scope > current.scope ||
+          (status.scope === current.scope &&
+            status.sequence > current.sequence);
+        if (!newer(this.state.cache) || !newer(this.expected)) return;
+        this.expected = status;
+        if (
+          status.scope !== this.state.root?.scope ||
+          status.revision !== this.state.root.revision ||
+          status.phase === 'loading' ||
+          status.phase === 'unavailable'
+        ) {
+          this.invalidate();
+          this.publish({
+            rootBusy: true,
+            rootStatus: 'loading',
+            rootMessage: 'Updating folder; retained entries are last known.',
+          });
+        }
+        void this.recover();
+      })
+      .then((unlisten) => {
+        if (retired || this.disposed) unlisten();
+        else {
+          stop = unlisten;
+          this.notifications = 'healthy';
+          this.clearCompletion();
+          void this.recover();
+        }
+      })
+      .catch(() => {
+        if (!retired && !this.disposed) {
+          this.notifications = 'unavailable';
+          this.notice(
+            'Live folder notifications unavailable; focus or refresh to recover.',
+            true,
+          );
+          void this.recover();
+        }
+      });
+    const focus = () => {
+      if (!retired && !this.disposed) void this.recover();
+    };
+    window.addEventListener('focus', focus);
+    return () => {
+      retired = true;
+      this.notifications = 'closed';
+      this.retireRecovery();
+      stop?.();
+      window.removeEventListener('focus', focus);
+    };
+  }
+  private clearCompletion() {
+    clearTimeout(this.completionTimer);
+    this.completionTimer = undefined;
+  }
+  private retireRecovery() {
+    this.clearCompletion();
+    this.recoveryGeneration++;
+    this.recoverAgain = false;
+  }
+  private scheduleCompletion() {
+    this.clearCompletion();
+    if (
+      this.disposed ||
+      this.notifications !== 'unavailable' ||
+      !this.state.root ||
+      !this.state.rootBusy ||
+      this.state.choosing ||
+      this.state.cache?.phase !== 'loading'
+    )
+      return;
+    const generation = this.recoveryGeneration;
+    const scope = this.state.root.scope;
+    this.completionTimer = setTimeout(() => {
+      this.completionTimer = undefined;
+      if (
+        generation === this.recoveryGeneration &&
+        scope === this.state.root?.scope &&
+        this.notifications === 'unavailable' &&
+        !this.disposed &&
+        this.state.rootBusy &&
+        !this.state.choosing &&
+        this.state.cache?.phase === 'loading'
+      )
+        void this.recover();
+    }, this.completionDelay);
+  }
+  recover(): Promise<void> {
+    if (this.disposed) return Promise.resolve();
+    this.clearCompletion();
+    this.recoverAgain = true;
+    if (this.recovering) return this.recovering;
+    this.recovering = (async () => {
+      while (this.recoverAgain && !this.disposed) {
+        this.recoverAgain = false;
+        const generation = this.recoveryGeneration;
+        try {
+          const snapshot = await this.bridge.get();
+          if (generation === this.recoveryGeneration) this.accept(snapshot);
+        } catch {
+          if (generation !== this.recoveryGeneration) continue;
+          this.clearCompletion();
+          this.recoverAgain = false;
+          if (
+            this.notifications === 'unavailable' &&
+            this.state.rootBusy &&
+            this.state.cache?.phase === 'loading'
+          )
+            this.publish({
+              rootBusy: false,
+              rootStatus: 'unavailable',
+              rootMessage:
+                'Folder status unavailable. Retained entries are last known. Use Navigate → Refresh Folder.',
+            });
+          this.notice(
+            'Could not retrieve folder status. Use Refresh or choose a folder again.',
+            true,
+          );
+        }
+      }
+    })().finally(() => {
+      this.recovering = null;
+      if (this.recoverAgain && !this.disposed) void this.recover();
+    });
+    return this.recovering;
+  }
+  private accept(snapshot: IndexSnapshot) {
+    if (this.disposed) return;
+    const { index, status } = snapshot;
+    const current = this.state.cache;
+    const expected = this.expected;
+    if (
+      expected &&
+      (status.scope < expected.scope ||
+        (status.scope === expected.scope &&
+          status.sequence < expected.sequence))
+    )
+      return;
+    if (
+      current &&
+      (status.scope < current.scope ||
+        (status.scope === current.scope && status.sequence < current.sequence))
+    )
+      return;
+    const changed =
+      this.state.root?.scope !== index?.scope ||
+      this.state.root?.revision !== index?.revision ||
+      (status.phase !== 'loading' && current?.phase === 'loading');
+    if (changed || status.phase === 'loading') this.invalidate();
+    const loading = status.phase === 'loading';
+    this.publish({
+      root: changed ? index : this.state.root,
+      cache: status,
+      rootBusy: loading,
+      rootStatus: !index ? 'none' : status.phase || 'loading',
+      rootMessage: !index
+        ? ''
+        : loading
+          ? `Indexing folder… ${String(status.entries)} known entries; retained entries are last known.`
+          : status.phase === 'unavailable'
+            ? `Folder unavailable (${status.message}). Retained entries are last known. Use Navigate → Refresh Folder.`
+            : status.phase === 'partial'
+              ? 'Folder loaded with incomplete results; see folder issues.'
+              : 'Folder loaded.',
+      watcherMessage: status.degraded
+        ? 'Live updates unavailable; periodic refresh continues. Refresh is still available.'
+        : '',
+    });
+    this.scheduleCompletion();
+  }
   notice(message: string, error = false) {
     this.publish({ message, error });
   }
@@ -69,7 +263,8 @@ export class NavigationController {
     this.publish({ newest });
   }
   async choose() {
-    if (this.state.rootBusy) return;
+    if (this.state.choosing) return 'failed' as const;
+    this.retireRecovery();
     this.publish({
       choosing: true,
       rootBusy: true,
@@ -78,37 +273,37 @@ export class NavigationController {
     });
     try {
       const result = await this.bridge.choose(++this.sequence);
-      if (this.disposed) return;
+      if (this.disposed) return 'failed' as const;
       if (result.status === 'cancelled') {
         this.publish({
           choosing: false,
-          rootBusy: false,
+          rootBusy: this.state.cache?.phase === 'loading',
           message: 'Folder selection cancelled; folder unchanged.',
         });
-        return;
+        this.scheduleCompletion();
+        return 'cancelled' as const;
       }
       this.invalidate();
-      this.publish({
-        root: result.index,
-        rootStatus: 'loading',
-        rootMessage: 'Loading folder…',
-        siblings: null,
-        choosing: false,
-        rootBusy: false,
-      });
-      await this.refresh();
+      this.accept(result.snapshot);
+      this.publish({ choosing: false });
+      this.scheduleCompletion();
+      return 'opened' as const;
     } catch (error) {
       this.publish({
         choosing: false,
-        rootBusy: false,
+        rootBusy: this.state.cache?.phase === 'loading',
         message: `Could not choose folder: ${message(error)}`,
         error: true,
       });
+      this.scheduleCompletion();
+      return 'failed' as const;
     }
   }
   async refresh() {
     const root = this.state.root;
     if (!root || this.state.rootBusy) return;
+    this.retireRecovery();
+    const generation = this.recoveryGeneration;
     this.invalidate();
     this.publish({
       rootBusy: true,
@@ -119,18 +314,21 @@ export class NavigationController {
       error: false,
     });
     try {
-      const index = await this.bridge.refresh(root.scope, ++this.sequence);
-      if (this.disposed || this.state.root !== root) return;
-      this.publish({
-        root: index,
-        rootBusy: false,
-        rootStatus: index.issues.length ? 'partial' : 'ready',
-        rootMessage: index.issues.length
-          ? 'Folder loaded with incomplete results; see folder issues.'
-          : 'Folder loaded.',
-      });
+      const snapshot = await this.bridge.refresh(root.scope);
+      if (
+        this.disposed ||
+        generation !== this.recoveryGeneration ||
+        this.state.root !== root
+      )
+        return;
+      this.accept(snapshot);
     } catch (error) {
-      if (this.state.root !== root) return;
+      if (
+        this.disposed ||
+        generation !== this.recoveryGeneration ||
+        this.state.root !== root
+      )
+        return;
       this.publish({
         rootBusy: false,
         rootStatus: 'unavailable',
@@ -238,6 +436,8 @@ export class NavigationController {
     }
   }
   dispose() {
+    this.notifications = 'closed';
+    this.retireRecovery();
     this.invalidate();
     this.disposed = true;
     this.siblingSequence++;

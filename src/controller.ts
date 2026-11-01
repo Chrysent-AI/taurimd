@@ -117,7 +117,7 @@ export class ReaderController {
             phase: previous ? 'ready' : 'empty',
             message: 'Open cancelled. The displayed document has not changed.',
           });
-          return;
+          return 'cancelled' as const;
         }
         snapshot = selection.snapshot;
       } else {
@@ -165,6 +165,7 @@ export class ReaderController {
           ? 'File changed; choose a heading again.'
           : `${action === 'reload' ? 'Reloaded' : 'Opened'} ${snapshot.name}${snapshot.source.length === 0 ? ' — empty file' : ''}.`,
       });
+      return 'opened' as const;
     } catch (error) {
       if (request !== this.sequence) return;
       this.job?.cancel();
@@ -203,6 +204,7 @@ export class ReaderController {
         linkMessage: '',
         message: `${action === 'reload' ? 'Reload failed' : 'Open failed'}: ${message}${previous ? ` Still showing last loaded ${previous.snapshot.name} (stale).` : ''}`,
       });
+      return 'failed' as const;
     }
   }
   async cancel() {

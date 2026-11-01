@@ -8,6 +8,7 @@ pub enum Modal {
     #[default]
     None,
     Settings,
+    QuickOpen,
     Other,
 }
 #[derive(Clone, Copy, Deserialize, Debug)]
@@ -72,9 +73,16 @@ impl Presentation {
     pub fn enabled(&self, action: &str, has_document: bool) -> bool {
         let free = !self.busy && !self.composing;
         match action {
-            "zoom-in" => free && self.modal != Modal::Other && self.page_zoom < 300,
-            "zoom-out" => free && self.modal != Modal::Other && self.page_zoom > 50,
-            "zoom-reset" => free && self.modal != Modal::Other && self.page_zoom != 100,
+            "quick-open" => free && matches!(self.modal, Modal::None | Modal::QuickOpen),
+            "zoom-in" => {
+                free && matches!(self.modal, Modal::None | Modal::Settings) && self.page_zoom < 300
+            }
+            "zoom-out" => {
+                free && matches!(self.modal, Modal::None | Modal::Settings) && self.page_zoom > 50
+            }
+            "zoom-reset" => {
+                free && matches!(self.modal, Modal::None | Modal::Settings) && self.page_zoom != 100
+            }
             "previous" => free && self.modal == Modal::None && self.previous,
             "next" => free && self.modal == Modal::None && self.next,
             "refresh-folder" => free && self.modal == Modal::None && self.has_root,
@@ -143,7 +151,7 @@ mod tests {
         assert!(!applied.enabled("reload", false));
         assert!(!applied.enabled("information", false));
         assert!(applied.enabled("information", true));
-        for modal in [Modal::Settings, Modal::Other] {
+        for modal in [Modal::Settings, Modal::QuickOpen, Modal::Other] {
             applied.modal = modal;
             for action in [
                 "open",
@@ -156,6 +164,10 @@ mod tests {
             ] {
                 assert!(!applied.enabled(action, true));
             }
+            assert_eq!(
+                applied.enabled("quick-open", true),
+                modal == Modal::QuickOpen
+            );
             assert_eq!(applied.enabled("zoom-out", true), modal == Modal::Settings);
         }
         for (busy, composing) in [(true, false), (false, true)] {
@@ -169,6 +181,7 @@ mod tests {
                 "settings",
                 "status-bar",
                 "zoom-out",
+                "quick-open",
             ] {
                 assert!(!applied.enabled(action, true));
             }

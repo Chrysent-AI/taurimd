@@ -1,3 +1,4 @@
+pub mod query;
 use crate::documents::{classify, contained_file, AppError, Format, Session};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -5,7 +6,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
     time::SystemTime,
@@ -67,13 +68,15 @@ pub struct Scope {
     pub revision: u32,
     pub path: PathBuf,
     pub cancel: Arc<AtomicBool>,
+    pub lifetime: Arc<AtomicBool>,
+    pub filters: Arc<AtomicU64>,
     published: bool,
-    pub records: Vec<Record>,
+    pub records: Arc<Vec<Record>>,
     issues: Vec<Issue>,
 }
 impl Scope {
     pub fn live(&self) -> Result<(), AppError> {
-        if self.cancel.load(Ordering::Acquire) {
+        if self.cancel.load(Ordering::Acquire) || self.lifetime.load(Ordering::Acquire) {
             Err(Session::stale())
         } else {
             Ok(())
@@ -136,6 +139,8 @@ impl Scope {
 pub struct Navigation {
     pub root: Option<Scope>,
     pub siblings: Option<Scope>,
+    pub worker: Option<crate::navigation_cache::RootWorker>,
+    pub status: crate::navigation_cache::Status,
     next: u32,
     contexts: HashMap<PathBuf, u32>,
     previews: HashMap<u32, (u32, Arc<AtomicBool>)>,
@@ -179,6 +184,18 @@ impl Navigation {
             in_root: true,
         })
     }
+    pub fn parent_siblings(&self, path: &Path) -> Option<Siblings> {
+        let scope = self.siblings.as_ref()?;
+        if scope.path != path.parent()? || !scope.published || scope.live().is_err() {
+            return None;
+        }
+        Some(Siblings {
+            index: scope.index(),
+            active: scope.member(path),
+            in_root: false,
+            root_active: None,
+        })
+    }
     pub fn context(&mut self, path: &Path) -> Result<u32, AppError> {
         if let Some(id) = self.contexts.get(path) {
             return Ok(*id);
@@ -210,6 +227,9 @@ impl Navigation {
         let retained = old.filter(|s| s.path == path).cloned();
         if let Some(old) = old {
             old.cancel.store(true, Ordering::Release);
+            if !refresh {
+                old.lifetime.store(true, Ordering::Release);
+            }
             for (scope, cancel) in self.previews.values() {
                 if *scope == old.id {
                     cancel.store(true, Ordering::Release);
@@ -227,6 +247,22 @@ impl Navigation {
             id,
             revision,
             path,
+            filters: if refresh {
+                retained
+                    .as_ref()
+                    .map(|scope| scope.filters.clone())
+                    .unwrap_or_default()
+            } else {
+                Arc::default()
+            },
+            lifetime: if refresh {
+                retained
+                    .as_ref()
+                    .map(|scope| scope.lifetime.clone())
+                    .unwrap_or_default()
+            } else {
+                Arc::default()
+            },
             cancel: Arc::new(AtomicBool::new(false)),
             published: false,
             records: retained.map(|s| s.records).unwrap_or_default(),
@@ -253,7 +289,7 @@ impl Navigation {
         if current.revision != scope.revision {
             return Err(Session::stale());
         }
-        for record in &mut scope.records {
+        for record in Arc::make_mut(&mut scope.records) {
             record.entry.id = self.number()?;
             record.entry.ui_id = current
                 .records
@@ -270,7 +306,7 @@ impl Navigation {
             .filter(|r| r.entry.kind == "directory")
             .map(|r| (r.lexical.clone(), r.entry.id))
             .collect();
-        for record in &mut scope.records {
+        for record in Arc::make_mut(&mut scope.records) {
             record.entry.parent = record
                 .lexical
                 .parent()
@@ -310,6 +346,7 @@ impl Drop for Navigation {
     fn drop(&mut self) {
         for scope in self.root.iter().chain(self.siblings.iter()) {
             scope.cancel.store(true, Ordering::Release);
+            scope.lifetime.store(true, Ordering::Release);
         }
         for (_, cancel) in self.previews.values() {
             cancel.store(true, Ordering::Release);
@@ -405,19 +442,75 @@ fn candidate(root: &Path, path: &Path, directory: bool) -> Result<PathBuf, AppEr
     }
     Ok(canonical)
 }
-pub fn scan(mut scope: Scope, recursive: bool) -> Result<Scope, AppError> {
-    scan_with(&mut scope, recursive, |path| {
-        fs::read_dir(path).map(|entries| entries.map(|entry| entry.map(|entry| entry.path())))
-    })?;
+pub fn scan(scope: Scope, recursive: bool) -> Result<Scope, AppError> {
+    scan_progress(scope, recursive, |_| {})
+}
+pub fn scan_progress(
+    mut scope: Scope,
+    recursive: bool,
+    progress: impl FnMut(usize),
+) -> Result<Scope, AppError> {
+    let directory = scope.path.clone();
+    scan_listing(
+        &mut scope,
+        recursive,
+        directory,
+        true,
+        |path| {
+            fs::read_dir(path).map(|entries| entries.map(|entry| entry.map(|entry| entry.path())))
+        },
+        progress,
+    )?;
     Ok(scope)
 }
+pub fn scan_directory(mut scope: Scope, directory: PathBuf) -> Result<Scope, AppError> {
+    candidate(&scope.path, &directory, true)?;
+    let missing: Vec<_> = directory
+        .ancestors()
+        .take_while(|path| *path != scope.path)
+        .filter(|path| !scope.records.iter().any(|record| record.lexical == *path))
+        .map(Path::to_owned)
+        .collect();
+    for path in missing.into_iter().rev() {
+        let canonical = candidate(&scope.path, &path, true)?;
+        add_record(&mut scope, path, canonical, true)?;
+    }
+    scan_listing(
+        &mut scope,
+        false,
+        directory,
+        false,
+        |path| {
+            fs::read_dir(path).map(|entries| entries.map(|entry| entry.map(|entry| entry.path())))
+        },
+        |_| {},
+    )?;
+    Ok(scope)
+}
+#[cfg(test)]
 fn scan_with<I: IntoIterator<Item = std::io::Result<PathBuf>>>(
     scope: &mut Scope,
     recursive: bool,
     read_dir: impl Fn(&Path) -> std::io::Result<I>,
 ) -> Result<(), AppError> {
-    scope.records.clear();
-    let mut stack = vec![scope.path.clone()];
+    scan_listing(scope, recursive, scope.path.clone(), true, read_dir, |_| {})
+}
+fn scan_listing<I: IntoIterator<Item = std::io::Result<PathBuf>>>(
+    scope: &mut Scope,
+    recursive: bool,
+    directory: PathBuf,
+    reset: bool,
+    read_dir: impl Fn(&Path) -> std::io::Result<I>,
+    mut progress: impl FnMut(usize),
+) -> Result<(), AppError> {
+    if reset {
+        Arc::make_mut(&mut scope.records).clear();
+        scope.issues.clear();
+    } else {
+        Arc::make_mut(&mut scope.records)
+            .retain(|record| record.lexical.parent() != Some(&directory));
+    }
+    let mut stack = vec![directory];
     while let Some(directory) = stack.pop() {
         scope.live()?;
         let listing = candidate(&scope.path, &directory, true)
@@ -465,54 +558,70 @@ fn scan_with<I: IntoIterator<Item = std::io::Result<PathBuf>>>(
                     continue;
                 }
             };
-            let kind = if directory {
-                "directory"
-            } else if classify(&canonical)? == Format::Markdown {
-                "markdown"
-            } else {
-                "text"
-            };
             if directory && recursive {
                 stack.push(path.clone());
             }
-            let modified = fs::metadata(&canonical).and_then(|m| m.modified()).ok();
-            scope.records.push(Record {
-                lexical: path.clone(),
-                canonical,
-                modified,
-                entry: Entry {
-                    id: 0,
-                    ui_id: 0,
-                    parent: None,
-                    name: path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned(),
-                    relative: path
-                        .strip_prefix(&scope.path)
-                        .unwrap_or(&path)
-                        .to_string_lossy()
-                        .into_owned(),
-                    kind,
-                    context: 0,
-                    alpha_rank: 0,
-                    date_rank: 0,
-                },
-            });
+            add_record(scope, path, canonical, directory)?;
+            if scope.records.len().is_multiple_of(128) {
+                progress(scope.records.len());
+            }
         }
+        progress(scope.records.len());
     }
     rank(scope);
     scope.live()
 }
+fn add_record(
+    scope: &mut Scope,
+    path: PathBuf,
+    canonical: PathBuf,
+    directory: bool,
+) -> Result<(), AppError> {
+    let kind = if directory {
+        "directory"
+    } else if classify(&canonical)? == Format::Markdown {
+        "markdown"
+    } else {
+        "text"
+    };
+    let modified = fs::metadata(&canonical)
+        .and_then(|metadata| metadata.modified())
+        .ok();
+    let entry = Entry {
+        id: 0,
+        ui_id: 0,
+        parent: None,
+        name: path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+        relative: path
+            .strip_prefix(&scope.path)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .into_owned(),
+        kind,
+        context: 0,
+        alpha_rank: 0,
+        date_rank: 0,
+    };
+    Arc::make_mut(&mut scope.records).push(Record {
+        lexical: path,
+        canonical,
+        modified,
+        entry,
+    });
+    Ok(())
+}
 fn rank(scope: &mut Scope) {
-    scope.records.sort_by(|a, b| {
+    Arc::make_mut(&mut scope.records).sort_by(|a, b| {
         a.lexical
             .file_name()
             .cmp(&b.lexical.file_name())
             .then_with(|| a.lexical.cmp(&b.lexical))
     });
-    for (rank, record) in scope.records.iter_mut().enumerate() {
+    for (rank, record) in Arc::make_mut(&mut scope.records).iter_mut().enumerate() {
         record.entry.alpha_rank = rank;
     }
     let mut dates: Vec<_> = (0..scope.records.len()).collect();
@@ -523,7 +632,7 @@ fn rank(scope: &mut Scope) {
             .then_with(|| a.cmp(b))
     });
     for (rank, index) in dates.into_iter().enumerate() {
-        scope.records[index].entry.date_rank = rank;
+        Arc::make_mut(&mut scope.records)[index].entry.date_rank = rank;
     }
 }
 fn issue(scope: &mut Scope, path: &Path, error: AppError) {

@@ -6,6 +6,7 @@ import {
   type FileEntry,
   type FileIndex,
   type NavigationBridge,
+  type IndexSnapshot,
 } from '../src/navigation/types';
 import type { Snapshot } from '../src/types';
 import { parseMarkdown } from '../src/reader/parse';
@@ -44,12 +45,40 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+function cache(
+  root: FileIndex,
+  phase: IndexSnapshot['status']['phase'] = root.issues.length
+    ? 'partial'
+    : 'ready',
+  message = '',
+): IndexSnapshot {
+  return {
+    index: root,
+    status: {
+      scope: root.scope,
+      revision: root.revision,
+      sequence: root.revision,
+      phase,
+      message,
+      degraded: false,
+      scans: root.revision,
+      traversals: 0,
+      entries: root.entries.length,
+    },
+  };
+}
 function setup() {
   const bridge = {
+    get: vi.fn<NavigationBridge['get']>(),
+    listen: vi.fn<NavigationBridge['listen']>().mockResolvedValue(() => {}),
+    query: vi.fn<NavigationBridge['query']>(),
+    complete: vi.fn<NavigationBridge['complete']>(),
     choose: vi
       .fn<NavigationBridge['choose']>()
-      .mockResolvedValue({ status: 'ready', index: index() }),
-    refresh: vi.fn<NavigationBridge['refresh']>().mockResolvedValue(index(2)),
+      .mockResolvedValue({ status: 'ready', snapshot: cache(index(2)) }),
+    refresh: vi
+      .fn<NavigationBridge['refresh']>()
+      .mockResolvedValue(cache(index(3))),
     siblings: vi.fn<NavigationBridge['siblings']>(),
     preview: vi.fn<NavigationBridge['preview']>().mockResolvedValue(snapshot()),
     cancelPreview: vi
@@ -91,9 +120,12 @@ describe('production navigation state and shared native adapter DTO projection',
       const { controller, bridge } = setup();
       bridge.choose.mockResolvedValueOnce({
         status: 'ready',
-        index: { ...index(), entries: [] },
+        snapshot: cache(
+          { ...index(), entries: [] },
+          'unavailable',
+          `${code} folder`,
+        ),
       });
-      bridge.refresh.mockRejectedValueOnce({ code, message: `${code} folder` });
       await controller.choose();
       const root = controller.state.root;
       const explanation = controller.state.rootMessage;
@@ -119,7 +151,7 @@ describe('production navigation state and shared native adapter DTO projection',
       unavailable();
       controller.notice('This section is no longer present.', true);
       unavailable();
-      bridge.refresh.mockResolvedValueOnce({ ...index(3), entries: [] });
+      bridge.refresh.mockResolvedValueOnce(cache({ ...index(3), entries: [] }));
       await controller.refresh();
       expect(controller.state.rootStatus).toBe('ready');
       expect(controller.state.rootMessage).toBe('Folder loaded.');
@@ -129,7 +161,7 @@ describe('production navigation state and shared native adapter DTO projection',
           { relative: 'sub', code: 'denied', message: 'Subfolder unavailable' },
         ],
       };
-      bridge.refresh.mockResolvedValueOnce(partial);
+      bridge.refresh.mockResolvedValueOnce(cache(partial));
       await controller.refresh();
       await controller.reveal(current);
       controller.notice('Section selected');
@@ -197,9 +229,8 @@ describe('production navigation state and shared native adapter DTO projection',
     expect(controller.state.previews.size).toBe(0);
     bridge.choose.mockResolvedValueOnce({
       status: 'ready',
-      index: { ...index(), scope: 10 },
+      snapshot: cache({ ...index(), scope: 10 }),
     });
-    bridge.refresh.mockResolvedValueOnce({ ...index(), scope: 10 });
     await controller.choose();
     expect(controller.state.root?.scope).toBe(10);
     controller.dispose();
