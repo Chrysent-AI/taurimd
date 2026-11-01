@@ -978,15 +978,96 @@ test('diagram recoloring and temporary dialogs preserve scrolled playing media s
   await retained.dispose();
 });
 
+function recordHostileRequest(
+  engine: string,
+  pageUrl: string,
+  request: { url: string; resourceType: string },
+  evidence: { remote: string[]; engineMediaImages: string[] },
+) {
+  const url = new URL(request.url);
+  // WebKit's native control shadow UI uses same-origin Blob icons. Retain
+  // them separately as browser evidence, not a document-source/CSP exception.
+  if (
+    engine === 'webkit' &&
+    url.protocol === 'blob:' &&
+    url.origin !== 'null' &&
+    url.origin === new URL(pageUrl).origin &&
+    request.resourceType === 'image'
+  )
+    evidence.engineMediaImages.push(request.url);
+  else if (url.protocol === 'blob:' || url.hostname !== '127.0.0.1')
+    evidence.remote.push(request.url);
+}
+
 test('hostile URL/style/action surfaces never connect fetch candidates or invoke native commands automatically', async ({
   page,
+  browserName,
 }, info) => {
   const remote: string[] = [];
+  const engineMediaImages: string[] = [];
   const diagnostics: string[] = [];
+  // Exercise the same evidence accumulator used by the live request listener.
+  const currentUrl = 'http://127.0.0.1:1234/tests/browser/shell.html';
+  const icon = 'blob:http://127.0.0.1:1234/control-icon';
+  const unexpectedBlobs = [
+    'blob:http://127.0.0.1:4321/foreign-port',
+    'blob:https://invalid.example/foreign',
+    'blob:null/opaque',
+  ];
+  for (const engine of ['chromium', 'firefox', 'webkit']) {
+    const evidence: { remote: string[]; engineMediaImages: string[] } = {
+      remote: [],
+      engineMediaImages: [],
+    };
+    for (const url of [icon, ...unexpectedBlobs])
+      recordHostileRequest(
+        engine,
+        currentUrl,
+        { url, resourceType: 'image' },
+        evidence,
+      );
+    recordHostileRequest(
+      engine,
+      currentUrl,
+      { url: icon, resourceType: 'media' },
+      evidence,
+    );
+    recordHostileRequest(
+      engine,
+      'about:blank',
+      { url: 'blob:null/opaque', resourceType: 'image' },
+      evidence,
+    );
+    recordHostileRequest(
+      engine,
+      currentUrl,
+      { url: 'http://127.0.0.1:4321/local', resourceType: 'fetch' },
+      evidence,
+    );
+    recordHostileRequest(
+      engine,
+      currentUrl,
+      { url: 'https://invalid.example/remote', resourceType: 'fetch' },
+      evidence,
+    );
+    expect(evidence).toEqual({
+      remote: [
+        ...(engine === 'webkit' ? [] : [icon]),
+        ...unexpectedBlobs,
+        icon,
+        'blob:null/opaque',
+        'https://invalid.example/remote',
+      ],
+      engineMediaImages: engine === 'webkit' ? [icon] : [],
+    });
+  }
   page.on('request', (request) => {
-    const url = new URL(request.url());
-    if (url.protocol !== 'blob:' && url.hostname !== '127.0.0.1')
-      remote.push(request.url());
+    recordHostileRequest(
+      browserName,
+      page.url(),
+      { url: request.url(), resourceType: request.resourceType() },
+      { remote, engineMediaImages },
+    );
   });
   page.on('console', (message) => {
     if (message.text().includes('Content Security Policy'))
@@ -1018,19 +1099,13 @@ test('hostile URL/style/action surfaces never connect fetch candidates or invoke
     });
   await expect(article).toContainText('Blocked img');
   await expect(article).toContainText('Blocked video poster');
-  expect(remote).toEqual([]);
-  expect(await page.evaluate(() => 'compromised' in window)).toBe(false);
-  expect(
-    (await page.evaluate(() => window.readerFixture.calls())).map(
-      (call) => call.command,
-    ),
-  ).toEqual(['select_document', 'commit_document']);
   await info.attach('hostile-resource-diagnostics', {
     body: JSON.stringify(
       {
         boundary:
           'Browser-only inert-boundary evidence; native transport and CSP not certified',
         remote,
+        engineMediaImages,
         diagnostics,
       },
       null,
@@ -1038,4 +1113,11 @@ test('hostile URL/style/action surfaces never connect fetch candidates or invoke
     ),
     contentType: 'application/json',
   });
+  expect(remote).toEqual([]);
+  expect(await page.evaluate(() => 'compromised' in window)).toBe(false);
+  expect(
+    (await page.evaluate(() => window.readerFixture.calls())).map(
+      (call) => call.command,
+    ),
+  ).toEqual(['select_document', 'commit_document']);
 });
