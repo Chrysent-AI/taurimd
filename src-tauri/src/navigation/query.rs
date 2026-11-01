@@ -618,7 +618,11 @@ mod tests {
         assert_eq!(empty.total, 114);
         assert_eq!(empty.results[0].entry.kind, "directory");
         let cached = query(&scope, request("sub/a"), Some(&home)).unwrap();
-        assert_eq!(cached.reply.results[0].entry.relative, "sub/a.md");
+        let sub_a = Path::new("sub").join("a.md");
+        assert_eq!(
+            cached.reply.results[0].entry.relative,
+            sub_a.to_string_lossy()
+        );
         let selected = &cached.reply.results[0].entry;
         let siblings = nav.root_siblings(&root.join("sub/a.md")).unwrap();
         assert_eq!(siblings.active, Some(selected.id));
@@ -655,14 +659,15 @@ mod tests {
         nav.publish(super::super::scan_directory(draft, target).unwrap())
             .unwrap();
         let next = nav.root.as_ref().unwrap();
+        let new_file = Path::new("new").join("new.md");
         assert!(next
             .records
             .iter()
-            .any(|row| row.entry.relative == "new/new.md"));
+            .any(|row| row.entry.relative == new_file.to_string_lossy()));
         assert!(next
             .records
             .iter()
-            .any(|row| row.entry.relative == "sub/a.md"));
+            .any(|row| row.entry.relative == sub_a.to_string_lossy()));
         assert!(query(next, request("a"), Some(&home)).is_err());
         assert!(scope.live().is_err());
         assert_eq!(fs::read(root.join("a.md")).unwrap(), [0xff]);

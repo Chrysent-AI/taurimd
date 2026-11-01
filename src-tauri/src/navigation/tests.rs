@@ -72,7 +72,10 @@ fn metadata_only_recursive_formats_and_shared_root_siblings() {
         .any(|e| e.name.starts_with('.') || e.name == "bad.mdx"));
     assert!(index.issues.is_empty());
     let scope = nav.scope(index.scope).unwrap();
-    let record = scope.entry(binding(&index, "nested/a.md")).unwrap();
+    let nested = Path::new("nested").join("a.md");
+    let record = scope
+        .entry(binding(&index, &nested.to_string_lossy()))
+        .unwrap();
     assert_eq!(
         scope
             .read(&record, 1, 1, &AtomicBool::new(false))
@@ -92,7 +95,11 @@ fn metadata_only_recursive_formats_and_shared_root_siblings() {
         .root_siblings(&dir.path().join("a.MD").canonicalize().unwrap())
         .unwrap();
     assert_eq!(top.index.entries.len(), 7);
-    assert!(top.index.entries.iter().all(|e| !e.relative.contains('/')));
+    assert!(top
+        .index
+        .entries
+        .iter()
+        .all(|e| Path::new(&e.relative).components().count() == 1));
     assert!(nav
         .root_siblings(&dir.path().join(".hidden.md").canonicalize().unwrap())
         .is_none());
