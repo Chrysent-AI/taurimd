@@ -45,6 +45,12 @@ A filename opens the file; its separate **Show headings** button lazily reads H1
 
 Previous/Next File and Sibling order in **Navigate** or the sidebar browse only the displayed file's immediate folder, alphabetically or newest modified with stable ties. They stop at endpoints, never wrap, and do not invent a neighbor if the displayed file is excluded. **File → Reveal** sends the active file to the platform file manager without changing the reader; failures are reported.
 
+## Finding in the document
+
+Use **Navigate → Find in Document…** (⌘F / Ctrl+F). The nonmodal bar searches visible reading text, including metadata and code, literally and without case sensitivity. Punctuation such as `.`, `[` and `*` is not a pattern. Expand a reading or raw-metadata disclosure to include its text; navigation, help, controls and diagram-image internals are not searched.
+
+Current/total counts, marks and wrapped navigation use the same matches. Enter advances; Shift+Enter goes back. Find Next/Previous also use ⌘G / ⌘Shift+G on macOS or F3 / Shift+F3 elsewhere. Empty input clears marks; unmatched text reports No matches. Tab leaves normally, and Escape within the bar closes it and restores reading focus. The query stays in this window for reopening, never in preferences or history. Other temporary surfaces close Find, and an actual displayed-file replacement/reload retires its old marks without changing source content.
+
 ## Exporting diagrams
 
 Use **Diagram → Export diagrams as SVG ZIP…** or **Export diagrams as PNG ZIP…** after the current palette finishes rendering. Export uses whole diagrams, not the panned or zoomed viewport. A partial export names failed diagram ordinals before confirmation and keeps numbering gaps. With no successful diagrams there is no Save action. A new conversion failure stops the whole export rather than silently omitting another diagram.
@@ -59,7 +65,7 @@ Mermaid fences render offline using the bundled engine and the current palette. 
 
 Quick Open (Navigate → Quick Open…, Cmd+K on macOS or Ctrl+K elsewhere) searches the explicitly selected folder's cached index. Type a fuzzy name or a relative, absolute, home-relative (`~/`) or parent-segment path. Paths outside that folder need an explicit Choose File… or Choose Folder… action; typing never grants access. Folder results come first. Arrows select, Enter opens a file or enters a folder, and Tab completes a folder or focuses the selected file. Escape restores prior focus. Results are capped at 100 with a count notice.
 
-Live folder updates refresh metadata and invalidate heading previews, not the displayed document. A periodic refresh and Navigate → Refresh Folder recover missed updates; unavailable live updates and incomplete folders are disclosed. Use Reload to reread the displayed file. Quick Open currently opens a selected file in the current reader; separate/focus-existing document windows, document Find and OS file associations are not implemented yet.
+Live folder updates refresh metadata and invalidate heading previews, not the displayed document. A periodic refresh and Navigate → Refresh Folder recover missed updates; unavailable live updates and incomplete folders are disclosed. Use Reload to reread the displayed file. Quick Open currently opens a selected file in the current reader; separate/focus-existing document windows and OS file associations are not implemented yet.
 
 The intended targets are macOS 14+ Apple Silicon, Windows 11 x64 and Ubuntu 24.04 x86_64 with X11/Wayland. Native menus, IME, assistive technology, restart persistence, real media/CSP transport and platform packaging still require recorded testing on those targets. Browser fixtures and compilation are not native qualification. No signing, public release or complete dependency-notice clearance is claimed.
 

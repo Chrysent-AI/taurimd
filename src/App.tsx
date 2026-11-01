@@ -26,15 +26,40 @@ import { SettingsDialog, SettingsFeedback } from './settings/SettingsDialog';
 import { TemporaryDialog } from './TemporaryDialog';
 import { Guide } from './Guide';
 import { syncMenu } from './presentation';
+import { DocumentFind, type FindState } from './reader/find';
+import { FindBar } from './FindBar';
 import { version } from '../package.json';
 function usableFocus(
   node: HTMLElement | null | undefined,
 ): node is HTMLElement {
+  if (
+    !node?.isConnected ||
+    node === window.document.body ||
+    node.closest('[hidden],[inert]') ||
+    node.matches(':disabled')
+  )
+    return false;
+  for (
+    let element: HTMLElement | null = node;
+    element;
+    element = element.parentElement
+  ) {
+    const style = getComputedStyle(element);
+    if (
+      style.display === 'none' ||
+      (Number(style.opacity) === 0 && style.opacity !== '')
+    )
+      return false;
+    if (
+      element instanceof HTMLDetailsElement &&
+      !element.open &&
+      !element.querySelector('summary')?.contains(node)
+    )
+      return false;
+  }
   return (
-    !!node?.isConnected &&
-    node !== window.document.body &&
-    !node.closest('[hidden]') &&
-    !node.matches(':disabled')
+    getComputedStyle(node).visibility !== 'hidden' &&
+    getComputedStyle(node).visibility !== 'collapse'
   );
 }
 export function App({ controller }: { controller: ReaderController }) {
@@ -142,6 +167,7 @@ export function App({ controller }: { controller: ReaderController }) {
   const [surface, setSurface] = useState<Surface | null>(null);
   const modalOpen = useRef<Surface | null>(null);
   const [origin, setOrigin] = useState<HTMLElement | null>(null);
+  const surfaceOrigin = useRef<HTMLElement | null>(null);
   const main = useRef<HTMLElement>(null);
   const statusBar = useRef<HTMLElement>(null);
   const [composition, setComposition] = useState(false);
@@ -180,6 +206,54 @@ export function App({ controller }: { controller: ReaderController }) {
   }, [palette]);
   const article = useRef<HTMLElement>(null);
   const composing = useRef(false);
+  const focusReading = useCallback(() => {
+    (article.current ?? main.current)?.focus({ preventScroll: true });
+  }, []);
+  const [findOpen, setFindOpen] = useState(false);
+  const findLive = useRef(false);
+  const findInput = useRef<HTMLInputElement>(null);
+  const findOrigin = useRef<HTMLElement | null>(null);
+  const findQuery = useRef('');
+  const [query, setQuery] = useState('');
+  const [findResult, setFindResult] = useState<FindState>({
+    total: 0,
+    current: 0,
+    error: '',
+  });
+  const finder = useRef<DocumentFind | null>(null);
+  const closeFind = useCallback(
+    (restore = true) => {
+      if (!findLive.current) return;
+      const owner = finder.current;
+      owner?.dispose();
+      finder.current = null;
+      findLive.current = false;
+      if (restore) {
+        if (usableFocus(findOrigin.current))
+          findOrigin.current.focus({ preventScroll: true });
+        else focusReading();
+        owner?.restoreSelection();
+      }
+      findOrigin.current = null;
+      setFindOpen(false);
+    },
+    [focusReading],
+  );
+  // Actual displayed revisions retire old maps without overriding request focus.
+  useLayoutEffect(
+    () => () => {
+      closeFind(false);
+    },
+    [state.displayed, closeFind],
+  );
+  useEffect(() => {
+    finder.current?.invalidate();
+  }, [
+    palette,
+    settings.pageZoom,
+    settings.sidebarDefault,
+    settings.statusVisible,
+  ]);
   const lastDocument = useRef<Rendered | null>(null);
   const [menuError, setMenuError] = useState('');
   const [linkFeedback, setLinkFeedback] = useState<{
@@ -191,9 +265,6 @@ export function App({ controller }: { controller: ReaderController }) {
     navigationState.rootStatus === 'unavailable' ||
     navigationState.rootStatus === 'partial' ||
     !!navigationState.watcherMessage;
-  const focusReading = useCallback(() => {
-    (article.current ?? main.current)?.focus({ preventScroll: true });
-  }, []);
   const sidebarRef = useCallback(
     (node: HTMLElement | null) => {
       if (!node && sidebar.current?.contains(window.document.activeElement))
@@ -418,6 +489,71 @@ export function App({ controller }: { controller: ReaderController }) {
         payload === 'zoom-out' ||
         payload === 'zoom-reset';
       if (
+        payload === 'find' ||
+        payload === 'find-next' ||
+        payload === 'find-previous'
+      ) {
+        const eligibleSurface = modalOpen.current !== 'export';
+        if (
+          composing.current ||
+          pending ||
+          pickerHandoff.current ||
+          navigation.state.choosing ||
+          !eligibleSurface ||
+          !controller.state.displayed
+        ) {
+          setActionFeedback({
+            message:
+              'Find unavailable during composition, pending reading or a native dialog. Try again after finishing it.',
+            state: controller.state,
+          });
+          return;
+        }
+        if (payload !== 'find') {
+          if (!modalOpen.current && findLive.current)
+            finder.current?.move(payload === 'find-next' ? 1 : -1);
+          else
+            setActionFeedback({
+              message: 'Open Find in Document to navigate matches.',
+              state: controller.state,
+            });
+          return;
+        }
+        if (!findLive.current) {
+          const active = modalOpen.current
+            ? surfaceOrigin.current
+            : (invoker ?? window.document.activeElement);
+          findOrigin.current = active instanceof HTMLElement ? active : null;
+          if (modalOpen.current) {
+            if (modalOpen.current === 'quick-open') picker.close();
+            modalOpen.current = null;
+            flushSync(() => {
+              setSurface(null);
+            });
+          }
+          findLive.current = true;
+          flushSync(() => {
+            setFindOpen(true);
+          });
+          if (article.current) {
+            finder.current = new DocumentFind(article.current, (result) => {
+              setFindResult((previous) =>
+                previous.total === result.total &&
+                previous.current === result.current &&
+                previous.error === result.error
+                  ? previous
+                  : result,
+              );
+            });
+            finder.current.search(findQuery.current);
+          }
+        }
+        setActionFeedback(null);
+        findInput.current?.focus({ preventScroll: true });
+        findInput.current?.select();
+        return;
+      }
+      if (
         payload === 'quick-open' &&
         modalOpen.current === 'quick-open' &&
         !pending &&
@@ -443,13 +579,28 @@ export function App({ controller }: { controller: ReaderController }) {
         return;
       }
       setActionFeedback(null);
+      if (
+        [
+          'quick-open',
+          'settings',
+          'guide',
+          'information',
+          'about',
+          'export-svg',
+          'export-png',
+          'open',
+          'reload',
+          'open-folder',
+        ].includes(payload)
+      )
+        closeFind();
       if (payload === 'quick-open') {
         const active = invoker ?? window.document.activeElement;
-        setOrigin(
+        surfaceOrigin.current =
           active instanceof HTMLElement && active !== window.document.body
             ? active
-            : null,
-        );
+            : null;
+        setOrigin(surfaceOrigin.current);
         modalOpen.current = 'quick-open';
         picker.open(
           navigation.state.root,
@@ -515,11 +666,11 @@ export function App({ controller }: { controller: ReaderController }) {
           return;
         }
         const active = invoker ?? window.document.activeElement;
-        setOrigin(
+        surfaceOrigin.current =
           active instanceof HTMLElement && active !== window.document.body
             ? active
-            : null,
-        );
+            : null;
+        setOrigin(surfaceOrigin.current);
         modalOpen.current = payload;
         setSurface(payload);
       } else if (payload === 'open' || payload === 'reload') {
@@ -558,11 +709,14 @@ export function App({ controller }: { controller: ReaderController }) {
       navigation,
       openNavigation,
       picker,
+      closeFind,
     ],
   );
   useEffect(() => {
     let disposed = false;
     void syncMenu({
+      findAvailable: !!state.displayed && modalOpen.current !== 'export',
+      findMatches: findOpen && findResult.total > 0 && !findResult.error,
       statusVisible: settings.statusVisible,
       sidebarVisible: settings.sidebarDefault,
       hasRoot: !!navigationState.root && !navigationState.rootBusy,
@@ -609,6 +763,9 @@ export function App({ controller }: { controller: ReaderController }) {
     exporting.progress,
     pickerNative,
     syncAttempt,
+    state.displayed,
+    findOpen,
+    findResult,
   ]);
   useEffect(() => {
     let disposed = false;
@@ -1154,44 +1311,69 @@ export function App({ controller }: { controller: ReaderController }) {
             section={section}
           />
         </aside>
-        <main ref={main} tabIndex={-1} aria-busy={busy}>
-          {!document ? (
-            <p className="empty hint">
-              Open a document with File → Open File… (
-              {/Mac/.test(navigator.platform) ? '⌘O' : 'Ctrl+O'}).
-            </p>
-          ) : (
-            <>
-              <p
-                className="link-feedback"
-                aria-live="polite"
-                aria-label="Reading link status"
-              >
-                {linkFeedback?.document === document
-                  ? linkFeedback.message
-                  : (state.linkMessage ?? '')}
-              </p>
-              <article
-                ref={article}
-                data-zoom={settings.pageZoom}
-                tabIndex={-1}
-                aria-label={document.snapshot.name}
-              >
-                <MetadataCard
-                  key={`${String(document.snapshot.documentId)}-${String(document.snapshot.revision)}`}
-                  metadata={document.metadata}
-                />
-                {document.snapshot.source.length === 0 ? (
-                  <p className="empty">This file is empty.</p>
-                ) : document.html === null ? (
-                  <pre className="literal">{document.snapshot.source}</pre>
-                ) : (
-                  <div dangerouslySetInnerHTML={readingHTML} />
-                )}
-              </article>
-            </>
+        <div className="reading-pane">
+          {findOpen && (
+            <FindBar
+              input={findInput}
+              query={query}
+              result={findResult}
+              composing={composing}
+              change={(value) => {
+                findQuery.current = value;
+                setQuery(value);
+                finder.current?.search(value);
+              }}
+              move={(direction) => {
+                if (!composing.current) finder.current?.move(direction);
+              }}
+              close={() => {
+                if (!composing.current) closeFind();
+              }}
+            />
           )}
-        </main>
+          <main ref={main} tabIndex={-1} aria-busy={busy}>
+            {!document ? (
+              <p className="empty hint">
+                Open a document with File → Open File… (
+                {/Mac/.test(navigator.platform) ? '⌘O' : 'Ctrl+O'}).
+              </p>
+            ) : (
+              <>
+                <p
+                  className="link-feedback"
+                  aria-live="polite"
+                  aria-label="Reading link status"
+                >
+                  {linkFeedback?.document === document
+                    ? linkFeedback.message
+                    : (state.linkMessage ?? '')}
+                </p>
+                <article
+                  ref={article}
+                  data-zoom={settings.pageZoom}
+                  tabIndex={-1}
+                  aria-label={document.snapshot.name}
+                >
+                  <MetadataCard
+                    key={`${String(document.snapshot.documentId)}-${String(document.snapshot.revision)}`}
+                    metadata={document.metadata}
+                  />
+                  {document.snapshot.source.length === 0 ? (
+                    <p className="empty" data-reader-empty>
+                      This file is empty.
+                    </p>
+                  ) : document.html === null ? (
+                    <pre key={document.requestId} className="literal">
+                      {document.snapshot.source}
+                    </pre>
+                  ) : (
+                    <div dangerouslySetInnerHTML={readingHTML} />
+                  )}
+                </article>
+              </>
+            )}
+          </main>
+        </div>
       </div>
       {settings.statusVisible && (
         <footer

@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 
 export interface MenuPresentation {
+  findAvailable: boolean;
+  findMatches: boolean;
   statusVisible: boolean;
   sidebarVisible: boolean;
   hasRoot: boolean;
