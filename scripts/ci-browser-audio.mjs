@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -15,9 +16,36 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const packages = ['pulseaudio', 'pulseaudio-utils', 'libpulse0'];
 const pulseVersion = /^1:16\.1\+dfsg1-2ubuntu10(?:\.\d+)?$/;
+const officialArchive =
+  /^https?:\/\/(?:azure\.archive|archive|security)\.ubuntu\.com\/ubuntu\/?$/;
+const runnerMirrorList = '/etc/apt/apt-mirrors.txt';
+
+function checkRunnerMirrors(read) {
+  // Only the fixed runner list is supported, not arbitrary mirror/file transports.
+  // Runner recipe: actions/runner-images, images/ubuntu/scripts/build/configure-apt-sources.sh.
+  // Noble apt-transport-mirror(1): one URI per line, optional tab-separated metadata.
+  const entries = read(runnerMirrorList, 'utf8')
+    .split(/\r?\n/)
+    .filter((line) => line.trim() && !line.startsWith('#'));
+  if (
+    !entries.length ||
+    entries.some((line) => {
+      const [uri, priority, extra] = line.split('\t');
+      return (
+        !officialArchive.test(uri) ||
+        (priority !== undefined && !/^priority:\d+$/.test(priority)) ||
+        extra !== undefined
+      );
+    })
+  )
+    throw new Error(
+      'Runner APT mirror list is not exclusively official Ubuntu archives.',
+    );
+  console.log(`Validated runner APT mirror list: ${entries.join(', ')}`);
+}
 
 // Inspect the exact simulated transaction, not just the top-level package names.
-export function checkPackagePolicy(policy, version) {
+export function checkPackagePolicy(policy, version, read = readFileSync) {
   const blocks = policy.split(/\n(?=\s*(?:\*\*\* )?\S+ \d+\s*$)/m);
   const block = blocks.find((part) =>
     new RegExp(
@@ -30,12 +58,16 @@ export function checkPackagePolicy(policy, version) {
     .filter((line) => / Packages\s*$/.test(line));
   if (
     !sources?.length ||
-    sources.some(
-      (line) =>
-        !/^\s*\d+ https?:\/\/(?:azure\.archive|archive|security)\.ubuntu\.com\/ubuntu\/? noble(?:-updates|-security)?\/(?:main|universe|restricted|multiverse) amd64 Packages\s*$/.test(
-          line,
-        ),
-    )
+    sources.some((line) => {
+      const source = line.match(
+        /^\s*\d+ (\S+) noble(?:-updates|-security)?\/(?:main|universe|restricted|multiverse) amd64 Packages\s*$/,
+      );
+      if (!source) return true;
+      if (officialArchive.test(source[1])) return false;
+      if (source[1] !== `mirror+file:${runnerMirrorList}`) return true;
+      checkRunnerMirrors(read);
+      return false;
+    })
   )
     throw new Error(
       'Package version is not exclusively from the official Noble archive.',

@@ -128,6 +128,104 @@ test('private fixture quotes Pulse module arguments, and rejects non-Noble packa
   assert.throws(() => checkPackagePolicy(policy, '99'));
 });
 
+// Policy body captured from the failed Linux preflight, without CI log prefixes.
+const mirrorPolicy = `pulseaudio:
+  Installed: (none)
+  Candidate: 1:16.1+dfsg1-2ubuntu10.1
+  Version table:
+     1:16.1+dfsg1-2ubuntu10.1 500
+        500 mirror+file:/etc/apt/apt-mirrors.txt noble-updates/universe amd64 Packages
+     1:16.1+dfsg1-2ubuntu10 500
+        500 mirror+file:/etc/apt/apt-mirrors.txt noble/universe amd64 Packages
+`;
+// Official runner build recipe, not an observation of the target's file contents.
+const runnerMirrors = [
+  'http://azure.archive.ubuntu.com/ubuntu/\tpriority:1',
+  'https://archive.ubuntu.com/ubuntu/\tpriority:2',
+  'https://security.ubuntu.com/ubuntu/\tpriority:3',
+  '',
+].join('\n');
+
+test('actual Linux mirror-backed candidate validates the fixed official runner list', () => {
+  let reads = 0;
+  const readMirrors = (path, encoding) => {
+    assert.equal(path, '/etc/apt/apt-mirrors.txt');
+    assert.equal(encoding, 'utf8');
+    reads++;
+    return runnerMirrors;
+  };
+  checkPackagePolicy(mirrorPolicy, '1:16.1+dfsg1-2ubuntu10.1', readMirrors);
+  assert.equal(reads, 1, 'mirror-backed policy must validate the actual list');
+  checkPackagePolicy(
+    mirrorPolicy.replace(
+      '     1:16.1+dfsg1-2ubuntu10.1',
+      ' *** 1:16.1+dfsg1-2ubuntu10.1',
+    ),
+    '1:16.1+dfsg1-2ubuntu10.1',
+    () => `# runner mirrors\r\n\r\n${runnerMirrors.replaceAll('\n', '\r\n')}`,
+  );
+});
+
+test('mirror-backed policy rejects foreign, malformed, missing or unrelated sources', () => {
+  const version = '1:16.1+dfsg1-2ubuntu10.1';
+  for (const contents of [
+    '',
+    '# no mirrors\n \n',
+    runnerMirrors.replace(
+      'archive.ubuntu.com/ubuntu/\tpriority:2',
+      'other.invalid/ubuntu/\tpriority:2',
+    ),
+    'file:/tmp/archive\n',
+    'mirror+https://archive.ubuntu.com/ubuntu/\n',
+    'https://archive.ubuntu.com/ubuntu/extra\n',
+    'https://archive.ubuntu.com/ubuntu/ priority:1\n',
+    'https://archive.ubuntu.com/ubuntu/\tpriority:bad\n',
+  ])
+    assert.throws(() =>
+      checkPackagePolicy(mirrorPolicy, version, () => contents),
+    );
+  assert.throws(
+    () =>
+      checkPackagePolicy(mirrorPolicy, version, () => {
+        throw Object.assign(new Error('missing list'), { code: 'ENOENT' });
+      }),
+    { code: 'ENOENT' },
+  );
+  for (const policy of [
+    mirrorPolicy.replaceAll('/etc/apt/apt-mirrors.txt', '/tmp/apt-mirrors.txt'),
+    mirrorPolicy.replaceAll(
+      'mirror+file:/etc/apt/apt-mirrors.txt',
+      'mirror+https://archive.ubuntu.com/mirrors',
+    ),
+    mirrorPolicy.replaceAll('mirror+file:', 'file:'),
+    mirrorPolicy.replaceAll('noble-updates', 'jammy-updates'),
+    mirrorPolicy.replaceAll('amd64', 'arm64'),
+    mirrorPolicy.replace(
+      '        500 mirror+file:',
+      '        500 http://other.invalid noble-updates/universe amd64 Packages\n        500 mirror+file:',
+    ),
+    mirrorPolicy.replace(
+      '        500 mirror+file:/etc/apt/apt-mirrors.txt noble-updates/universe amd64 Packages\n',
+      '',
+    ),
+  ])
+    assert.throws(() =>
+      checkPackagePolicy(policy, version, () => runnerMirrors),
+    );
+  assert.throws(() =>
+    checkPackagePolicy(mirrorPolicy, '99', () => runnerMirrors),
+  );
+  // A direct archive remains independent of the mirror file; no new host dependency.
+  checkPackagePolicy(
+    mirrorPolicy.replaceAll(
+      'mirror+file:/etc/apt/apt-mirrors.txt',
+      'https://security.ubuntu.com/ubuntu',
+    ),
+    version,
+    () => assert.fail('direct archive must not read a mirror list'),
+  );
+});
+
 for (const mode of [
   'success',
   'signal-race',
