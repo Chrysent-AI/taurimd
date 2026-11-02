@@ -655,34 +655,45 @@ test('Guide worker failure has literal fallback; dismissal terminates held work 
 test('Guide Close control keeps one position while parsed content replaces loading', async ({
   page,
 }) => {
+  const guide = page.getByRole('dialog', { name: 'User Guide' });
+  const close = guide.getByRole('button', { name: 'Close' });
   await page.evaluate(() => {
     window.readerFixture.workerMode('hold');
     return window.readerFixture.menu('guide');
   });
-  const guide = page.getByRole('dialog', { name: 'User Guide' });
   await expect(guide).toContainText('Loading guide');
-  const loading = await guide
-    .getByRole('button', { name: 'Close' })
-    .boundingBox();
-  await guide.getByRole('button', { name: 'Close' }).click();
+  const loading = await close.boundingBox();
+  await close.click();
+  await expect(guide).toBeHidden();
+  await page.evaluate(() => {
+    window.readerFixture.workerMode('fail');
+    return window.readerFixture.menu('guide');
+  });
+  await expect(guide).toContainText('Guide formatting unavailable');
+  const fallback = await close.boundingBox();
+  await close.click();
   await expect(guide).toBeHidden();
   await page.evaluate(() => window.readerFixture.menu('guide'));
   await expect(
     guide.getByRole('link', { name: 'Opening and recovery', exact: true }),
   ).toBeVisible();
-  const parsed = await guide
-    .getByRole('button', { name: 'Close' })
-    .boundingBox();
+  const parsed = await close.boundingBox();
   expect(loading).not.toBeNull();
+  expect(fallback).not.toBeNull();
   expect(parsed).not.toBeNull();
-  if (!loading || !parsed) throw new Error('The Close control has no box');
+  if (!loading || !fallback || !parsed)
+    throw new Error('The Close control has no box');
   // A control that moves under the pointer when the guide finishes loading
-  // cannot be activated by the click that was aimed at it.
-  expect(parsed.x).toBeCloseTo(loading.x, 0);
-  expect(parsed.y).toBeCloseTo(loading.y, 0);
-  expect(parsed.width).toBeCloseTo(loading.width, 0);
-  expect(parsed.height).toBeCloseTo(loading.height, 0);
-  // The dismissed control stays reachable without scrolling the dialog.
+  // cannot be activated by the click that was aimed at it. The literal
+  // fallback of a failed parse must keep the same place as the parsed text.
+  for (const other of [fallback, parsed]) {
+    expect(other.x).toBeCloseTo(loading.x, 0);
+    expect(other.y).toBeCloseTo(loading.y, 0);
+    expect(other.width).toBeCloseTo(loading.width, 0);
+    expect(other.height).toBeCloseTo(loading.height, 0);
+  }
+  // The parsed-state Close control stays inside the viewport, so it is
+  // reachable without scrolling the dialog.
   const viewport = page.viewportSize();
   if (!viewport) throw new Error('The page has no viewport');
   expect(parsed.y).toBeGreaterThanOrEqual(0);
