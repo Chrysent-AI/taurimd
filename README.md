@@ -1,5 +1,7 @@
 # taurimd
 
+<img src="src-tauri/icons/icon.png" alt="taurimd logo: a bronze gear around a Markdown mark above an open book" width="160" height="160" />
+
 A local, read-only document reader. Copyright © 2026 Chrysent. MIT licensed.
 
 ## Current reader

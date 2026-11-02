@@ -1,3 +1,6 @@
 {
-  "bundle": { "targets": ["app", "dmg"] }
+  "bundle": {
+    "targets": ["app", "dmg"],
+    "macOS": { "infoPlist": "packaging/document-icons.plist" }
+  }
 }

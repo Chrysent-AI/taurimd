@@ -72,6 +72,26 @@ cargo clean --frozen --manifest-path src-tauri/Cargo.toml --target-dir src-tauri
 
 These commands pin both output locations, overriding inherited Cargo directory configuration. For existing target-specific outputs, repeat both commands with `build.build-dir` set to `src-tauri/target/<triple>` (use a target from `rustc --print target-list`), leaving `--target-dir` unchanged. Cargo 1.97.1 ignores `--target` for whole-profile cleaning; the Make targets instead scope Cargo's build directory for each target. They also disable Cargo's compiler-info cache writes during preview. Nonstandard custom-target directories are left untouched. No worktree, global cache, retained candidate or notice cleanup is performed.
 
+## Application artwork
+
+The taurimd application, Markdown document associations and README reuse the same artwork. The committed 1024 × 1024 RGBA master uses transparent contain fitting, preserving the complete source without stretching or cropping. The 512 PNG is shared by the README and Linux packaging; Windows uses the embedded multi-size ICO, and macOS uses the ICNS for both application and document types.
+
+To regenerate with the pinned Tauri CLI, set `input` to the source PNG outside the checkout, then run from the repository root:
+
+```sh
+scratch=$(mktemp -d)
+npm run tauri -- icon "${input:?Set input to the source PNG}" --fit contain --png 1024 --output "$scratch/master"
+cp "$scratch/master/1024x1024.png" src-tauri/icons/logo-master.png
+npm run tauri -- icon src-tauri/icons/logo-master.png --output "$scratch/native"
+npm run tauri -- icon src-tauri/icons/logo-master.png --png 512 --output "$scratch/png"
+cp "$scratch/native/icon.ico" "$scratch/native/icon.icns" src-tauri/icons/
+cp "$scratch/png/512x512.png" src-tauri/icons/icon.png
+```
+
+Retain only those four assets, not the CLI's mobile/Store output. Inspect PNG metadata and alpha and the actual ICO/ICNS frames before replacing the committed files; exclude unnecessary EXIF, text, XMP and timestamps without changing pixels or needed colour data. Remove the owned scratch directory after inspection. Never commit the large source PNG. The README displays the shared PNG at 160 × 160 with descriptive alt text.
+
+`packaging/document-icons.plist` replaces the generated macOS document-type array, so it must retain the common configuration's complete five-extension Viewer entry and default rank for `taurimd.Markdown` when adding the ICNS reference. Check the emitted `.app` plist and Resources, not just the overlay. Linux installs the `taurimd-markdown` MIME icon through the existing DEB file map; `packaging/taurimd.xml` selects it for the already registered `text/markdown` type, without replacing a generic text icon or selecting a default application. Shared MIME-info 2.4's parser accepts this named icon mapping from package XML even though the specification describes `icon` as a user-override mechanism. The target desktop's theme, MIME caches and user overrides still determine displayed icons; package metadata checks do not certify Finder, Explorer or Linux file-manager rendering.
+
 ## Validation ownership and evidence
 
 Run focused checks while implementing. The finalization owner runs the full gate **once**, normally through the installed pre-commit hook; do not reflexively run `check:local` and then repeat the same full group in a commit. Report failed/unavailable checks honestly, preserve complete output in logs, and never bypass a hook to commit. Native manual smoke has its own checklist in `README.md` and must not be described as covered by browser tests.

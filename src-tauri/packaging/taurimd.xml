@@ -2,6 +2,7 @@
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="text/markdown">
     <comment>Markdown document</comment>
+    <icon name="taurimd-markdown"/>
     <glob pattern="*.md"/>
     <glob pattern="*.markdown"/>
     <glob pattern="*.mdown"/>

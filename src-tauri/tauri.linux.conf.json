@@ -5,7 +5,8 @@
       "deb": {
         "desktopTemplate": "packaging/taurimd.desktop",
         "files": {
-          "/usr/share/mime/packages/taurimd.xml": "packaging/taurimd.xml"
+          "/usr/share/mime/packages/taurimd.xml": "packaging/taurimd.xml",
+          "/usr/share/icons/hicolor/512x512/mimetypes/taurimd-markdown.png": "icons/icon.png"
         }
       }
     }

@@ -32,7 +32,7 @@
     "license": "MIT",
     "licenseFile": "package/LICENSE",
     "category": "Utility",
-    "icon": ["icons/icon.png", "icons/icon.ico"],
+    "icon": ["icons/icon.png", "icons/icon.ico", "icons/icon.icns"],
     "fileAssociations": [
       {
         "ext": ["md", "markdown", "mdown", "mkd", "mkdown"],
