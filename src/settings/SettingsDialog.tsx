@@ -1,5 +1,10 @@
 import type { ReactNode } from 'react';
-import { palettes, type SettingsController, type SettingsV1 } from './model';
+import {
+  defaults,
+  palettes,
+  type SettingsController,
+  type SettingsV1,
+} from './model';
 
 export function SettingsFeedback({
   status,
@@ -101,6 +106,18 @@ export function SettingsDialog({
         {settings.mode === 'system' ? ' (system appearance)' : ''}. The inactive
         palette is saved for that appearance.
       </p>
+      <button
+        onClick={() => {
+          controller.change({
+            mode: defaults.mode,
+            lightPalette: defaults.lightPalette,
+            darkPalette: defaults.darkPalette,
+            pageZoom: defaults.pageZoom,
+          });
+        }}
+      >
+        Reset appearance defaults
+      </button>
       <fieldset>
         <legend>Page zoom</legend>
         <div className="commands">
