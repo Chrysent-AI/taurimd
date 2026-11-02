@@ -12,12 +12,12 @@ jobs:
   release-version:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
-          node-version: 22.22.2
+          node-version: 26.13.0
       - name: Validate exact tag and first-parent version increase
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -26,21 +26,22 @@ jobs:
     needs: release-version
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           ref: ${{ github.sha }}
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
-          node-version: 22.22.2
+          node-version: 26.13.0
           cache: npm
+          package-manager-cache: false
       - name: Install native prerequisites
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev
       - name: Install pinned tools
         run: |
-          npm install --global npm@11.6.2
-          rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
-          rustup default 1.97.1
+          npm install --global npm@12.2.1
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+          rustup default 1.99.1
           curl --fail --silent --show-error --location https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz --output "$RUNNER_TEMP/gitleaks.tar.gz"
           echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum --check
           tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
@@ -68,20 +69,21 @@ jobs:
             target: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
-          node-version: 22.22.2
+          node-version: 26.13.0
           cache: npm
+          package-manager-cache: false
       - name: Enforce Apple Silicon host
         if: runner.os == 'macOS'
         run: test "$(uname -m)" = arm64
       - name: Linux native prerequisites
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev
-      - run: npm install --global npm@11.6.2
-      - run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
-      - run: rustup default 1.97.1
+      - run: npm install --global npm@12.2.1
+      - run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+      - run: rustup default 1.99.1
       - run: npm ci
       - name: Check archive tool availability
         run: tar --version
@@ -92,7 +94,7 @@ jobs:
           ARCHIVE_TARGET: ${{ matrix.target }}
         shell: bash
         run: node scripts/archive.mjs "$ARCHIVE_TARGET"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: unsigned-candidates-${{ matrix.target }}
           path: |

@@ -255,13 +255,13 @@ test('raw metadata, late media feedback and actual Mermaid publication invalidat
     'nord',
   );
   expect(
-    await figure?.evaluate(
+    await figure.evaluate(
       (node) => node === document.querySelector('.diagram'),
     ),
   ).toBe(true);
   await result(page, 'No matches');
   expect(await page.evaluate(() => window.readerFixture.parses())).toBe(1);
-  await figure?.dispose();
+  await figure.dispose();
 });
 
 test('literal text reload and replacement retire old owned data, failed targets retain last good, empty file has no placeholder corpus', async ({

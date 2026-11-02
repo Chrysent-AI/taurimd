@@ -70,7 +70,7 @@ cargo clean --frozen --manifest-path src-tauri/Cargo.toml --target-dir src-tauri
 cargo clean --frozen --manifest-path src-tauri/Cargo.toml --target-dir src-tauri/target --config 'build.build-dir="src-tauri/target"' --profile release
 ```
 
-These commands pin both output locations, overriding inherited Cargo directory configuration. For existing target-specific outputs, repeat both commands with `build.build-dir` set to `src-tauri/target/<triple>` (use a target from `rustc --print target-list`), leaving `--target-dir` unchanged. Cargo 1.97.1 ignores `--target` for whole-profile cleaning; the Make targets instead scope Cargo's build directory for each target. They also disable Cargo's compiler-info cache writes during preview. Nonstandard custom-target directories are left untouched. No worktree, global cache, retained candidate or notice cleanup is performed.
+These commands pin both output locations, overriding inherited Cargo directory configuration. For existing target-specific outputs, repeat both commands with `build.build-dir` set to `src-tauri/target/<triple>` (use a target from `rustc --print target-list`), leaving `--target-dir` unchanged. Cargo 1.99.1 ignores `--target` for whole-profile cleaning; the Make targets instead scope Cargo's build directory for each target. They also disable Cargo's compiler-info cache writes during preview. Nonstandard custom-target directories are left untouched. No worktree, global cache, retained candidate or notice cleanup is performed.
 
 ## Application artwork
 

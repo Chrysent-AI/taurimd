@@ -345,7 +345,7 @@ impl Job {
             return Err(invalid());
         }
         let id = NEXT
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .map_err(|_| invalid())?;
         let job = Arc::new(Self {
             id,

@@ -66,7 +66,7 @@ async function capture(page: Page, info: TestInfo, name: string) {
   const path = destination
     ? join(destination, `${info.project.name}-${name}.png`)
     : info.outputPath(`${name}.png`);
-  // Playwright 1.59.1 screenshotter injects "body {}" to sync WebKit animations.
+  // Playwright 1.64.1 screenshotter injects "body {}" to sync WebKit animations.
   // Keep CSP intact; record only that tool-owned diagnostic during capture.
   const diagnostics: string[] = [];
   const observe = (message: { text: () => string }) => {
@@ -444,8 +444,8 @@ test('System observes both slots, forced modes ignore OS changes, inactive edits
     before.y,
   );
   await dialog.getByRole('button', { name: 'Close', exact: true }).click();
-  expect(await readingNode?.evaluate((node) => node.isConnected)).toBe(true);
-  await readingNode?.dispose();
+  expect(await readingNode.evaluate((node) => node.isConnected)).toBe(true);
+  await readingNode.dispose();
   await page.evaluate(() =>
     window.readerFixture.settingsEvent({
       ...window.readerFixture.settings(),

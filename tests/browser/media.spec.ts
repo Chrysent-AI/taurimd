@@ -372,7 +372,7 @@ test('real decode/controls/seek and visible failures retain nodes, focus and pla
       computed.push({ mode, palette, roles });
     }
   expect(
-    await node?.evaluate(
+    await node.evaluate(
       (node) => node === document.querySelector('article audio'),
     ),
   ).toBe(true);
@@ -584,7 +584,7 @@ test('last-good media survives pending/fail/cancel; same text/new context replac
   });
   await page.evaluate(() => window.readerFixture.menu('open'));
   expect(
-    await old?.evaluate(
+    await old.evaluate(
       (node) => node === document.querySelector('article audio'),
     ),
   ).toBe(true);
@@ -605,14 +605,14 @@ test('last-good media survives pending/fail/cancel; same text/new context replac
   await page.evaluate(() => window.readerFixture.menu('reload'));
   await expect(page.getByRole('alert')).toContainText('Reload failed');
   expect(
-    await old?.evaluate(
+    await old.evaluate(
       (node) => node === document.querySelector('article audio'),
     ),
   ).toBe(true);
   await queueMedia(page);
   await open(page, source, 5);
   expect(
-    await old?.evaluate((node: HTMLAudioElement) => ({
+    await old.evaluate((node: HTMLAudioElement) => ({
       connected: node.isConnected,
       sources: node.querySelectorAll('source').length,
       paused: node.paused,
@@ -644,7 +644,7 @@ test('last-good media survives pending/fail/cancel; same text/new context replac
     },
     { imageId },
   );
-  expect(await late?.evaluate((node) => node.hasAttribute('src'))).toBe(false);
+  expect(await late.evaluate((node) => node.hasAttribute('src'))).toBe(false);
   await expect(page.locator('article img,audio,video')).toHaveCount(0);
 });
 
@@ -753,12 +753,12 @@ test('scrolled playing media, article, selection and disclosures survive status/
   );
   await expect(page.locator('article details')).toHaveAttribute('open', '');
   expect(
-    await originalArticle?.evaluate(
+    await originalArticle.evaluate(
       (node) => node === document.querySelector('article'),
     ),
   ).toBe(true);
   expect(
-    await originalAudio?.evaluate(
+    await originalAudio.evaluate(
       (node) => node === document.querySelector('article audio'),
     ),
   ).toBe(true);
@@ -786,8 +786,8 @@ test('scrolled playing media, article, selection and disclosures survive status/
     noNewFileAuthority: true,
     browserOnly: true,
   });
-  await originalArticle?.dispose();
-  await originalAudio?.dispose();
+  await originalArticle.dispose();
+  await originalAudio.dispose();
 });
 
 test('diagram recoloring and temporary dialogs preserve scrolled playing media selection nodes and local interaction', async ({

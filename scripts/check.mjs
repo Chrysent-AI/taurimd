@@ -43,13 +43,17 @@ async function rust() {
   }
 }
 async function local() {
-  if (process.versions.node !== '22.22.2')
-    throw new Error('Use Node 22.22.2 for the shared checks.');
+  if (process.versions.node !== '26.13.0')
+    throw new Error(
+      'Use Node 26.13.0 for the shared checks. The version is pinned in .node-version; run `fnm use 26.13.0` (or `fnm default 26.13.0`).',
+    );
   const rustVersion = execFileSync('rustc', ['--version'], {
     encoding: 'utf8',
   });
-  if (!rustVersion.startsWith('rustc 1.97.1 '))
-    throw new Error('Use Rust 1.97.1 for the shared checks.');
+  if (!rustVersion.startsWith('rustc 1.99.1 '))
+    throw new Error(
+      'Use Rust 1.99.1 for the shared checks. The version is pinned in rust-toolchain.toml; run `rustup default 1.99.1`.',
+    );
   scannerPreflight();
   await run('git', ['--version']);
   await run('cargo', ['fmt', '--version']);

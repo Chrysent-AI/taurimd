@@ -610,12 +610,12 @@ test('folder cancel, empty, partial and denied refresh remain distinct and do no
     false,
   );
   expect(
-    await article?.evaluate(
+    await article.evaluate(
       (node) => node === document.querySelector('article'),
     ),
   ).toBe(true);
   expect(await page.evaluate(() => window.readerFixture.parses())).toBe(1);
-  await article?.dispose();
+  await article.dispose();
 });
 
 test('manual failed reload invalidates requested previews even when native source bytes are unchanged', async ({
@@ -825,7 +825,7 @@ for (const [palette] of palettes) {
         expect(Number.parseFloat(value.font)).toBeLessThan(20);
         geometry.push({ mode, palette, zoom, ...value });
         expect(
-          await article?.evaluate(
+          await article.evaluate(
             (node) => node === document.querySelector('article'),
           ),
         ).toBe(true);
@@ -844,7 +844,7 @@ for (const [palette] of palettes) {
         2,
       ),
     );
-    await article?.dispose();
+    await article.dispose();
   });
 }
 
@@ -883,7 +883,7 @@ for (const code of ['denied', 'notFound'] as const) {
         await page.evaluate(() => window.readerFixture.state().stale),
       ).toBe(false);
       expect(
-        await article?.evaluate(
+        await article.evaluate(
           (node) => node === document.querySelector('article'),
         ),
       ).toBe(true);
@@ -974,12 +974,12 @@ for (const code of ['denied', 'notFound'] as const) {
       path: info.outputPath('partial-after-feedback.png'),
     });
     expect(
-      await article?.evaluate(
+      await article.evaluate(
         (node) => node === document.querySelector('article'),
       ),
     ).toBe(true);
     expect(await page.evaluate(() => window.readerFixture.parses())).toBe(1);
-    await article?.dispose();
+    await article.dispose();
   });
 }
 
@@ -1554,17 +1554,17 @@ test('a sort-only interaction replaces no reading session', async ({
   expect(after.selection).toBe(before.selection);
   expect(after.playback).toEqual(before.playback);
   expect(
-    await article?.evaluate(
+    await article.evaluate(
       (node) => node === document.querySelector('article'),
     ),
   ).toBe(true);
   expect(
-    await media?.evaluate(
+    await media.evaluate(
       (node) => node === document.querySelector('article audio'),
     ),
   ).toBe(true);
   expect(
-    await figure?.evaluate(
+    await figure.evaluate(
       (node) => node === document.querySelector('article .diagram svg'),
     ),
   ).toBe(true);
@@ -1578,7 +1578,7 @@ test('a sort-only interaction replaces no reading session', async ({
   expect(calls.filter((call) => call.command === 'resolve_media')).toHaveLength(
     1,
   );
-  await article?.dispose();
-  await media?.dispose();
-  await figure?.dispose();
+  await article.dispose();
+  await media.dispose();
+  await figure.dispose();
 });

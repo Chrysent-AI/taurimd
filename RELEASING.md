@@ -124,6 +124,36 @@ so a crate published before its release exists sends `cargo binstall taurimd` to
 a URL that 404s until the release is published. The registry carries the source
 crate; the signed, installable candidates come from the GitHub release.
 
+## Toolchain and workflow currency
+
+The pinned versions are current and supported, not merely working:
+
+- **Actions** are pinned by commit to `actions/checkout` v7.0.1, `actions/setup-node`
+  v7.1.0 and `actions/upload-artifact` v7.0.2. All three run on the Node 24 action
+  runtime. The v4 line targeted Node 20, and GitHub removed Node 20 from the
+  runners on 2026-09-23, so a v4 pin is a removed runtime rather than an
+  old-but-working one. `setup-node` v6 and later enable npm caching automatically
+  when `packageManager` names npm; the workflows set `package-manager-cache: false`
+  and keep the explicit `cache: npm`, so caching behaves exactly as before.
+- **Node** is pinned to 26.13.0, the current LTS line (26.x became LTS on
+  2026-10-28). `.node-version` pins the same version for fnm.
+- **npm** is pinned to 12.2.1. npm 12 blocks install scripts by default, so the
+  optional `fsevents` install script is skipped; fsevents only accelerates
+  dev-server file watching on macOS and is not needed to build, test or package.
+- **Rust** is pinned to 1.99.1, the current stable release, by `rust-toolchain.toml`
+  and by CI. The declared `rust-version` matches the toolchain the project
+  actually tests.
+- **Playwright** is pinned to 1.64.1; the browser suite runs chromium, firefox and
+  webkit from that release.
+- **Gitleaks** is pinned to 8.30.1, the current release.
+- **Runner images** are `ubuntu-24.04`, `macos-15` and `windows-2025`. GitHub
+  supports the two most recent versions of each OS: the macOS 14 runners were
+  retired on 2026-11-02, `macos-latest` now points at macOS 26, and Ubuntu 24.04
+  is both still supported and the distribution this project targets.
+- **Supported operating systems** are macOS 15+ Apple Silicon (macOS 14 Sonoma
+  reached end of life on 2026-09-14), Windows 11 x64 with Evergreen WebView2, and
+  Ubuntu 24.04 x86_64 with WebKitGTK 4.1, desktop/session D-Bus and X11/Wayland.
+
 ## Source package
 
 Use the pinned project Node/npm and native Rust development prerequisites. Keep
@@ -178,7 +208,7 @@ Binstall copies only the manifest executable. It does **not** install a macOS
 `.app`, run NSIS/DEB, preserve companion resources, register file associations or
 provision system webviews. Keep the existing `.app`/DMG, NSIS, DEB and AppImage
 routes.
-Support remains macOS 14+ Apple Silicon, Windows 11 x64 with Evergreen WebView2,
+Support remains macOS 15+ Apple Silicon, Windows 11 x64 with Evergreen WebView2,
 and Ubuntu 24.04 x86_64 with WebKitGTK 4.1, desktop/session D-Bus and X11/Wayland.
 There is no Intel macOS, Windows ARM, musl or all-distro claim.
 

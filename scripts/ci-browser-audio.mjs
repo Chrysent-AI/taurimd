@@ -417,7 +417,7 @@ export async function browserAudio({
         `Audio readiness deadline: ${lastError?.message ?? 'no connection'}`,
       );
     healthy();
-    // Playwright 1.59.1 explicitly detaches browser groups. Its pinned launcher
+    // Playwright 1.64.1 explicitly detaches browser groups. Its pinned launcher
     // reports each group before use via DEBUG=pw:browser; retaining these handles
     // covers those groups as well as npm/the worker's ordinary descendants.
     tests = start(browser, childEnv, process.stdout, (line, handle) => {

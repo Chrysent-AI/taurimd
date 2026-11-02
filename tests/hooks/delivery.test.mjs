@@ -768,9 +768,9 @@ test('branch pushes and tags run separate workflows, and the tag path builds the
 // A mistyped action SHA fails the run before any job starts, so every
 // reference is pinned here to the exact known-good commit.
 const pinnedActions = [
-  'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
-  'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020',
-  'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+  'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+  'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1',
+  'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9',
 ];
 test('every workflow action reference is a known pinned commit', () => {
   for (const file of ['checks.yml', 'release.yml']) {

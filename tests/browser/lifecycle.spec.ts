@@ -223,17 +223,17 @@ test('two actual readers hand off a contained link without replacing origin medi
     target.getByRole('heading', { name: 'Section', exact: true }),
   ).toBeFocused();
   expect(
-    await article?.evaluate(
+    await article.evaluate(
       (node) => node === document.querySelector('article'),
     ),
   ).toBe(true);
   expect(
-    await audio?.evaluate(
+    await audio.evaluate(
       (node) => node === document.querySelector('article audio'),
     ),
   ).toBe(true);
   expect(
-    await figure?.evaluate(
+    await figure.evaluate(
       (node) => node === document.querySelector('.diagram'),
     ),
   ).toBe(true);
@@ -276,13 +276,13 @@ test('two actual readers hand off a contained link without replacing origin medi
     false,
   );
   expect(
-    await article?.evaluate(
+    await article.evaluate(
       (node) => node === document.querySelector('article'),
     ),
   ).toBe(true);
-  await article?.dispose();
-  await audio?.dispose();
-  await figure?.dispose();
+  await article.dispose();
+  await audio.dispose();
+  await figure.dispose();
 });
 
 test('existing target fragments respect modal, composition, native Save without DOM, and replaced-document bindings without queued actions', async ({
@@ -492,17 +492,17 @@ test('stable menu subscription deduplicates per-reader sequences and shared comm
     await target.evaluate(() => window.readerFixture.listenerCount()),
   ).toBe(5);
   expect(
-    await article?.evaluate(
+    await article.evaluate(
       (node) => node === document.querySelector('article'),
     ),
   ).toBe(true);
   expect(
-    await otherArticle?.evaluate(
+    await otherArticle.evaluate(
       (node) => node === document.querySelector('article'),
     ),
   ).toBe(true);
   expect(await page.evaluate(() => window.readerFixture.parses())).toBe(1);
   expect(await target.evaluate(() => window.readerFixture.parses())).toBe(1);
-  await article?.dispose();
-  await otherArticle?.dispose();
+  await article.dispose();
+  await otherArticle.dispose();
 });

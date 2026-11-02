@@ -177,13 +177,13 @@ test('manual refresh settles through cached getters when only index notification
     before + 1,
   );
   expect(
-    await article?.evaluate(
+    await article.evaluate(
       (node) => node === document.querySelector('article'),
     ),
   ).toBe(true);
   expect(await page.evaluate(() => window.readerFixture.parses())).toBe(1);
   await loadingFocus.dispose();
-  await article?.dispose();
+  await article.dispose();
 });
 test('native action focuses once, debounces cache queries, file Tab hands off after dismissal exactly once', async ({
   page,
@@ -489,7 +489,7 @@ test('held old query cannot overwrite latest revision, Unicode highlights and 10
   await expect(input).toHaveValue('😀');
   await expect(options(page)).toContainText('😀new.md');
   expect(
-    await article?.evaluate(
+    await article.evaluate(
       (node) => node === document.querySelector('article'),
     ),
   ).toBe(true);
@@ -516,7 +516,7 @@ test('held old query cannot overwrite latest revision, Unicode highlights and 10
   expect(await page.locator(`[id="${active ?? ''}"]`).count()).toBe(1);
   await input.press('Escape');
   await expect(page.locator('article details')).toHaveAttribute('open', '');
-  await article?.dispose();
+  await article.dispose();
 });
 test('indexing, empty, no-match, partial, degraded and unavailable stay distinct with no active document reload', async ({
   page,
@@ -651,18 +651,18 @@ test('query and watch-only publications retain playing media, diagram controls, 
   await tick(page);
   await input.press('Escape');
   expect(
-    await article?.evaluate(
+    await article.evaluate(
       (node) => node === document.querySelector('article'),
     ),
   ).toBe(true);
   expect(
-    await figure?.evaluate(
+    await figure.evaluate(
       (node) => node === document.querySelector('.diagram'),
     ),
   ).toBe(true);
-  expect(await control?.evaluate((node) => node.isConnected)).toBe(true);
+  expect(await control.evaluate((node) => node.isConnected)).toBe(true);
   expect(
-    await audio?.evaluate(
+    await audio.evaluate(
       (node) => node === document.querySelector('article audio'),
     ),
   ).toBe(true);
@@ -686,10 +686,10 @@ test('query and watch-only publications retain playing media, diagram controls, 
       (call) => call.command === 'resolve_media',
     ),
   ).toHaveLength(1);
-  await article?.dispose();
-  await figure?.dispose();
-  await control?.dispose();
-  await audio?.dispose();
+  await article.dispose();
+  await figure.dispose();
+  await control.dispose();
+  await audio.dispose();
 });
 test('logical native Save without a DOM surface rejects Quick Open and queues nothing', async ({
   page,

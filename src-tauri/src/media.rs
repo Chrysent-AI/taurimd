@@ -148,7 +148,7 @@ pub fn insert(session: &mut Session, grant: Grant) -> Result<Resolved, AppError>
     }
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let number = NEXT
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
         .map_err(|_| AppError::new("resourceFailure", "Media identifiers exhausted."))?;
     let id = format!("{number:032x}");
     let (mime, hosts, slot, attempt) = match &grant.source {

@@ -6,7 +6,7 @@ authors = ["Chrysent"]
 license = "MIT"
 repository = "https://github.com/Chrysent-AI/taurimd"
 edition = "2024"
-rust-version = "1.97.1"
+rust-version = "1.99.1"
 
 readme = "package/README.md"
 keywords = ["markdown", "viewer", "tauri", "gui", "cross-platform"]

@@ -44,6 +44,6 @@
     ],
     "copyright": "Copyright (c) 2026 Chrysent",
     "shortDescription": "Read-only local document reader",
-    "macOS": { "minimumSystemVersion": "14.0" }
+    "macOS": { "minimumSystemVersion": "15.0" }
   }
 }
