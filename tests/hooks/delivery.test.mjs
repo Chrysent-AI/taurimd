@@ -765,6 +765,28 @@ test('branch pushes and tags run separate workflows, and the tag path builds the
   );
 });
 
+// A mistyped action SHA fails the run before any job starts, so every
+// reference is pinned here to the exact known-good commit.
+const pinnedActions = [
+  'actions/checkout@11d5960a326750d5838078e36cf38b85af677262',
+  'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020',
+  'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+];
+test('every workflow action reference is a known pinned commit', () => {
+  for (const file of ['checks.yml', 'release.yml']) {
+    const text = readFileSync(join(project, '.github/workflows', file), 'utf8');
+    const references = [...text.matchAll(/actions\/[a-z-]+@[a-f0-9]+/g)].map(
+      (match) => match[0],
+    );
+    assert.ok(references.length > 0, `${file}: no action reference found`);
+    for (const reference of references)
+      assert.ok(
+        pinnedActions.includes(reference),
+        `${file}: unknown action reference ${reference}`,
+      );
+  }
+});
+
 test('package preparation uses authoritative legal/document bytes and clears stale optional notices', (t) => {
   const root = fixture(t);
   preparePackage(root);
