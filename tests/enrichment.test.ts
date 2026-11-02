@@ -106,6 +106,54 @@ describe('real bundled Marked/footnote/highlight/sanitizer integration', () => {
       highlight.mockRestore();
     }
   });
+  it('auto-detects unlabelled fences and keeps the visible text identical', () => {
+    const source = 'const count: number = 42; // readable';
+    const { node } = host(`\`\`\`\n${source}\n\`\`\``);
+    const code = node.querySelector('code');
+    expect(code?.textContent).toBe(source);
+    expect(
+      node.querySelectorAll('code span[class*="hljs-"]').length,
+    ).toBeGreaterThan(0);
+  });
+  it('leaves labelled, unknown and Mermaid fences unchanged beside an auto-detected fence', () => {
+    const literal = '<img src="x" onerror="evil()"> & <script>evil()</script>';
+    const { node, reading } = host(
+      `\`\`\`\n${literal}\n\`\`\`\n\n\`\`\`typescript\nconst count: number = 42;\n\`\`\`\n\n\`\`\`unknown-language\n${literal}\n\`\`\`\n\n\`\`\`mermaid\n${literal}\n\`\`\``,
+    );
+    const codes = [...node.querySelectorAll('code')];
+    expect(codes).toHaveLength(4);
+    expect(codes[0].textContent).toBe(literal);
+    expect(
+      codes[0].querySelectorAll('span[class*="hljs-"]').length,
+    ).toBeGreaterThan(0);
+    expect(codes[1].querySelector('.hljs-keyword')?.textContent).toBe('const');
+    expect(codes[2].textContent).toBe(literal);
+    expect(codes[2].querySelector('span')).toBeNull();
+    expect(codes[3].textContent).toBe(literal);
+    expect(codes[3].querySelector('span')).toBeNull();
+    expect(reading.diagrams).toEqual([{ slot: '1', source: literal }]);
+    expect(node.querySelector('img,script')).toBeNull();
+  });
+  it('keeps indented code blocks literal', () => {
+    const { node } = host('    const count = 42;\n');
+    expect(node.querySelector('code')?.textContent).toBe('const count = 42;\n');
+    expect(node.querySelector('code span')).toBeNull();
+  });
+  it('keeps the escaped literal when auto-detection fails', () => {
+    const highlightAuto = vi
+      .spyOn(hljs, 'highlightAuto')
+      .mockImplementationOnce(() => {
+        throw new Error('highlight unavailable');
+      });
+    try {
+      const { node } = host('```\nconst count = 42;\n```');
+      expect(highlightAuto).toHaveBeenCalledOnce();
+      expect(node.querySelector('code')?.textContent).toBe('const count = 42;');
+      expect(node.querySelector('code span')).toBeNull();
+    } finally {
+      highlightAuto.mockRestore();
+    }
+  });
   it('isolates hostile and colliding labels, repeated references and every return occurrence', () => {
     const labels = [
       'label',

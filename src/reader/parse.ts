@@ -92,7 +92,7 @@ export function parseMarkdown(source: string): ParsedMarkdown {
       token.label = note.key;
     },
     renderer: {
-      code({ text, lang }) {
+      code({ text, lang, codeBlockStyle }) {
         let code = escapeCode(text);
         const language = lang?.trim().split(/\s+/)[0]?.toLowerCase();
         if (language && language !== 'mermaid' && hljs.getLanguage(language)) {
@@ -101,6 +101,13 @@ export function parseMarkdown(source: string): ParsedMarkdown {
               language,
               ignoreIllegals: true,
             }).value;
+          } catch {
+            // Highlight failure never changes the literal code content.
+          }
+        } else if (!language && codeBlockStyle !== 'indented') {
+          // Unlabelled fences are detected with the bundled common languages.
+          try {
+            code = hljs.highlightAuto(text).value;
           } catch {
             // Highlight failure never changes the literal code content.
           }
