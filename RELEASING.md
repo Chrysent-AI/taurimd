@@ -83,13 +83,12 @@ so they run two workflows:
   tag, runs the repository's own quality gate on the tagged commit, and builds
   the unsigned installer and archive candidates on the three platforms.
 
-The tag workflow deliberately does not repeat the browser matrix or the debug
-native builds for the same commit: the browser evidence for that commit comes
-from the branch workflow run of the identical commit SHA, and the candidate
-builds compile the same three platforms in release mode with the bundlers, which
-is a superset of the debug compile. One release candidate per tagged commit is
-retained; no workflow creates a GitHub release, publishes a crate or signs
-anything.
+The tag workflow deliberately does not repeat the quality gate, the browser
+matrix or the debug native builds for the same commit: those ran in the branch
+workflow on the identical commit SHA, and the candidate builds compile the same
+three platforms in release mode with the bundlers, which is a superset of the
+debug compile. One release candidate per tagged commit is retained; no workflow
+creates a GitHub release, publishes a crate or signs anything.
 
 ## Publishing to crates.io
 

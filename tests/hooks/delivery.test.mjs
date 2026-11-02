@@ -725,7 +725,6 @@ test('branch pushes and tags run separate workflows, and the tag path builds the
   const releaseJobs = release.jobs;
   assert.deepEqual(Object.keys(releaseJobs).sort(), [
     'package-candidates',
-    'quality',
     'release-version',
   ]);
   const releaseScripts = (job) =>
@@ -734,9 +733,10 @@ test('branch pushes and tags run separate workflows, and the tag path builds the
     releaseScripts('release-version'),
     /node scripts\/validate-tag.mjs/,
   );
-  assert.match(releaseScripts('quality'), /npm run check:ci/);
+  // The tag run only validates the tag and builds the candidates. The
+  // quality gate for that same commit runs in the branch workflow.
+  assert.equal(releaseJobs.quality, undefined);
   assert.deepEqual(releaseJobs['package-candidates'].needs, [
-    'quality',
     'release-version',
   ]);
   assert.deepEqual(buildCommandsIn(releaseJobs, 'package-candidates'), [
