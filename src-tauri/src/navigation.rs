@@ -30,7 +30,12 @@ pub struct Entry {
     pub kind: &'static str,
     pub context: u32,
     pub alpha_rank: usize,
-    pub date_rank: usize,
+    /// Ascending native modification-time bucket; equal timestamps share a
+    /// rank and an unknown time is absent rather than ranked.
+    pub date_rank: Option<usize>,
+    /// Ascending native byte-size bucket; equal sizes share a rank and a
+    /// directory or unknown size is absent rather than ranked.
+    pub size_rank: Option<usize>,
 }
 #[derive(Clone, Serialize)]
 pub struct Issue {
@@ -60,6 +65,7 @@ pub struct Record {
     pub lexical: PathBuf,
     pub canonical: PathBuf,
     modified: Option<SystemTime>,
+    byte_size: Option<u64>,
     pub entry: Entry,
 }
 #[derive(Clone)]
@@ -590,9 +596,11 @@ fn add_record(
     } else {
         "text"
     };
-    let modified = fs::metadata(&canonical)
-        .and_then(|metadata| metadata.modified())
-        .ok();
+    // One stat call supplies both orderable file facts. A directory length is
+    // not a folder total, so directories never carry a byte size.
+    let metadata = fs::metadata(&canonical).ok();
+    let modified = metadata.as_ref().and_then(|m| m.modified().ok());
+    let byte_size = metadata.as_ref().filter(|m| m.is_file()).map(|m| m.len());
     let entry = Entry {
         id: 0,
         ui_id: 0,
@@ -610,12 +618,14 @@ fn add_record(
         kind,
         context: 0,
         alpha_rank: 0,
-        date_rank: 0,
+        date_rank: None,
+        size_rank: None,
     };
     Arc::make_mut(&mut scope.records).push(Record {
         lexical: path,
         canonical,
         modified,
+        byte_size,
         entry,
     });
     Ok(())
@@ -629,16 +639,49 @@ fn rank(scope: &mut Scope) {
     });
     for (rank, record) in Arc::make_mut(&mut scope.records).iter_mut().enumerate() {
         record.entry.alpha_rank = rank;
+        record.entry.date_rank = None;
+        record.entry.size_rank = None;
     }
-    let mut dates: Vec<_> = (0..scope.records.len()).collect();
-    dates.sort_by(|a, b| {
-        scope.records[*b]
+    // Metadata ranks are ascending native buckets: equal values share a rank
+    // and an absent value stays absent so the reader can order it last in
+    // both directions. The record vector keeps its alpha order.
+    let mut dated: Vec<usize> = (0..scope.records.len())
+        .filter(|index| scope.records[*index].modified.is_some())
+        .collect();
+    dated.sort_by(|a, b| {
+        scope.records[*a]
             .modified
-            .cmp(&scope.records[*a].modified)
+            .cmp(&scope.records[*b].modified)
             .then_with(|| a.cmp(b))
     });
-    for (rank, index) in dates.into_iter().enumerate() {
-        Arc::make_mut(&mut scope.records)[index].entry.date_rank = rank;
+    let mut previous: Option<SystemTime> = None;
+    let mut bucket = 0usize;
+    for index in dated {
+        let modified = scope.records[index].modified;
+        if previous != modified {
+            bucket += 1;
+            previous = modified;
+        }
+        Arc::make_mut(&mut scope.records)[index].entry.date_rank = Some(bucket);
+    }
+    let mut sized: Vec<usize> = (0..scope.records.len())
+        .filter(|index| scope.records[*index].byte_size.is_some())
+        .collect();
+    sized.sort_by(|a, b| {
+        scope.records[*a]
+            .byte_size
+            .cmp(&scope.records[*b].byte_size)
+            .then_with(|| a.cmp(b))
+    });
+    let mut previous_size: Option<u64> = None;
+    let mut bucket = 0usize;
+    for index in sized {
+        let size = scope.records[index].byte_size;
+        if previous_size != size {
+            bucket += 1;
+            previous_size = size;
+        }
+        Arc::make_mut(&mut scope.records)[index].entry.size_rank = Some(bucket);
     }
 }
 fn issue(scope: &mut Scope, path: &Path, error: AppError) {

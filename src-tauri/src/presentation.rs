@@ -1,4 +1,5 @@
 use crate::documents::AppError;
+use crate::settings::{FileSortDirection, FileSortKey};
 use serde::Deserialize;
 use tauri::menu::{CheckMenuItem, MenuItem};
 
@@ -29,7 +30,17 @@ pub struct Presentation {
     #[serde(default)]
     pub next: bool,
     #[serde(default)]
-    pub newest: bool,
+    pub first: bool,
+    #[serde(default)]
+    pub last: bool,
+    #[serde(default)]
+    pub file_sort_key: FileSortKey,
+    #[serde(default)]
+    pub file_sort_direction: FileSortDirection,
+    /// A focused editable control owns the keyboard; the navigation
+    /// accelerators stay unavailable while it does.
+    #[serde(default)]
+    pub editing: bool,
     pub busy: bool,
     pub modal: Modal,
     pub composing: bool,
@@ -61,7 +72,11 @@ impl Default for Presentation {
             has_root: false,
             previous: false,
             next: false,
-            newest: false,
+            first: false,
+            last: false,
+            file_sort_key: FileSortKey::Name,
+            file_sort_direction: FileSortDirection::Asc,
+            editing: false,
             busy: false,
             modal: Modal::None,
             composing: false,
@@ -84,6 +99,21 @@ impl Presentation {
         }
         Ok(())
     }
+    pub fn checked(&self, id: &str) -> bool {
+        match id {
+            "sidebar" => self.sidebar_visible,
+            "sort-name" => self.file_sort_key == FileSortKey::Name,
+            "sort-modified" => self.file_sort_key == FileSortKey::Modified,
+            "sort-size" => self.file_sort_key == FileSortKey::Size,
+            "sort-asc" => self.file_sort_direction == FileSortDirection::Asc,
+            "sort-desc" => self.file_sort_direction == FileSortDirection::Desc,
+            "fit-diagrams" => self.fit_diagrams,
+            "appearance-system" => self.appearance == Appearance::System,
+            "appearance-light" => self.appearance == Appearance::Light,
+            "appearance-dark" => self.appearance == Appearance::Dark,
+            _ => false,
+        }
+    }
     pub fn enabled(&self, action: &str, has_document: bool) -> bool {
         let free = !self.busy && !self.composing;
         match action {
@@ -101,15 +131,19 @@ impl Presentation {
             "zoom-reset" => {
                 free && matches!(self.modal, Modal::None | Modal::Settings) && self.page_zoom != 100
             }
-            "previous" => free && self.modal == Modal::None && self.previous,
-            "next" => free && self.modal == Modal::None && self.next,
+            "previous" => free && self.modal == Modal::None && !self.editing && self.previous,
+            "next" => free && self.modal == Modal::None && !self.editing && self.next,
+            "first" => free && self.modal == Modal::None && !self.editing && self.first,
+            "last" => free && self.modal == Modal::None && !self.editing && self.last,
             "refresh-folder" => free && self.modal == Modal::None && self.has_root,
             "reload" | "information" | "reveal" | "export-svg" | "export-png" => {
                 free && self.modal == Modal::None && has_document
             }
-            "open" | "open-folder" | "sidebar" | "sort-alpha" | "sort-date" | "settings"
-            | "guide" | "about" | "status-bar" | "appearance-system" | "appearance-light"
-            | "appearance-dark" | "fit-diagrams" => free && self.modal == Modal::None,
+            "open" | "open-folder" | "sidebar" | "sort-name" | "sort-modified" | "sort-size"
+            | "sort-asc" | "sort-desc" | "settings" | "guide" | "about" | "status-bar"
+            | "appearance-system" | "appearance-light" | "appearance-dark" | "fit-diagrams" => {
+                free && self.modal == Modal::None
+            }
             _ => false,
         }
     }
@@ -123,16 +157,7 @@ impl ReaderMenu {
     pub fn restore_checks(&self, presentation: &Presentation) -> tauri::Result<()> {
         self.status.set_checked(presentation.status_visible)?;
         for (id, item) in &self.navigation_checks {
-            item.set_checked(match *id {
-                "sidebar" => presentation.sidebar_visible,
-                "sort-date" => presentation.newest,
-                "sort-alpha" => !presentation.newest,
-                "fit-diagrams" => presentation.fit_diagrams,
-                "appearance-system" => presentation.appearance == Appearance::System,
-                "appearance-light" => presentation.appearance == Appearance::Light,
-                "appearance-dark" => presentation.appearance == Appearance::Dark,
-                _ => false,
-            })?;
+            item.set_checked(presentation.checked(id))?;
         }
         Ok(())
     }
@@ -190,6 +215,52 @@ mod tests {
         }))
         .unwrap();
         assert!(wire.enabled("find-next", true));
+    }
+    #[test]
+    fn file_order_checks_and_editable_ownership_gate_the_navigation_actions() {
+        let mut applied = Presentation {
+            previous: true,
+            next: true,
+            first: true,
+            last: true,
+            ..Presentation::default()
+        };
+        for action in ["previous", "next", "first", "last"] {
+            assert!(applied.enabled(action, true));
+        }
+        // A focused editable control owns the keyboard.
+        applied.editing = true;
+        for action in ["previous", "next", "first", "last"] {
+            assert!(!applied.enabled(action, true));
+        }
+        // The remembered order stays available while a field owns the keyboard.
+        for action in [
+            "sort-name",
+            "sort-modified",
+            "sort-size",
+            "sort-asc",
+            "sort-desc",
+        ] {
+            assert!(applied.enabled(action, true));
+        }
+        applied.editing = false;
+        assert!(applied.checked("sort-name"));
+        assert!(applied.checked("sort-asc"));
+        assert!(!applied.checked("sort-modified"));
+        applied.file_sort_key = FileSortKey::Modified;
+        applied.file_sort_direction = FileSortDirection::Desc;
+        assert!(applied.checked("sort-modified"));
+        assert!(applied.checked("sort-desc"));
+        assert!(!applied.checked("sort-name"));
+        assert!(!applied.checked("sort-asc"));
+        let wire: Presentation = serde_json::from_value(serde_json::json!({
+            "sequence":3,"statusVisible":true,"busy":false,"modal":"none","composing":false,
+            "pageZoom":100,"fileSortKey":"size","fileSortDirection":"desc","editing":true
+        }))
+        .unwrap();
+        assert!(wire.checked("sort-size"));
+        assert!(wire.checked("sort-desc"));
+        assert!(!wire.enabled("previous", true));
     }
     #[test]
     fn presentation_wire_caller_ordering_and_menu_policy() {

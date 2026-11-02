@@ -16,6 +16,7 @@ const entries: FileEntry[] = [
     context: 10,
     alphaRank: 0,
     dateRank: 2,
+    sizeRank: 0,
   },
   {
     id: 20,
@@ -27,6 +28,7 @@ const entries: FileEntry[] = [
     context: 20,
     alphaRank: 1,
     dateRank: 0,
+    sizeRank: 2,
   },
   {
     id: 30,
@@ -38,6 +40,7 @@ const entries: FileEntry[] = [
     context: 30,
     alphaRank: 2,
     dateRank: 1,
+    sizeRank: 1,
   },
   {
     id: 40,
@@ -49,6 +52,7 @@ const entries: FileEntry[] = [
     context: 40,
     alphaRank: 3,
     dateRank: 3,
+    sizeRank: null,
   },
   {
     id: 50,
@@ -60,6 +64,7 @@ const entries: FileEntry[] = [
     context: 50,
     alphaRank: 4,
     dateRank: 4,
+    sizeRank: 3,
   },
 ];
 const index = (revision = 1): FileIndex => ({
@@ -74,8 +79,9 @@ const snapshot = (
   contextId = 10,
   source = text,
   revision = 1,
+  documentId = contextId,
 ): Snapshot => ({
-  documentId: contextId,
+  documentId,
   contextId,
   revision,
   name,
@@ -146,12 +152,30 @@ async function preview(
     },
     { name, context, source },
   );
-  await page
-    .getByRole('button', { name: `Show headings for ${name}`, exact: true })
-    .click();
-  await expect(
-    page.getByRole('button', { name: `Open ${name} at Repeat`, exact: true }),
-  ).toHaveCount(2);
+  const show = page.getByRole('button', {
+    name: `Show headings for ${name}`,
+    exact: true,
+  });
+  const retry = page.getByRole('button', {
+    name: 'Retry headings',
+    exact: true,
+  });
+  const headings = page.getByRole('button', {
+    name: `Open ${name} at Repeat`,
+    exact: true,
+  });
+  // A disclosed group may already be expanded or may have failed its preview.
+  await expect
+    .poll(async () => {
+      if (await headings.count()) return 'ready';
+      if (await show.count()) return 'collapsed';
+      if (await retry.count()) return 'failed';
+      return 'pending';
+    })
+    .not.toBe('pending');
+  if (await show.count()) await show.click();
+  else if (await retry.count()) await retry.click();
+  await expect(headings).toHaveCount(2);
 }
 test.beforeEach(async ({ page }) => {
   await page.goto(
@@ -479,7 +503,9 @@ test('native-ranked immediate siblings stop at endpoints and retain persistent c
   await expect(
     page.getByRole('navigation', { name: 'On this page' }),
   ).toContainText('Outline unavailable for plain text');
-  await page.getByLabel('Sibling order', { exact: true }).selectOption('date');
+  await page
+    .getByLabel('Sort files by', { exact: true })
+    .selectOption('modified');
   await expect(next).toBeEnabled();
   await siblings(page, 10);
   await page.evaluate(
@@ -1282,3 +1308,259 @@ for (const direction of ['previous', 'next'] as const)
       });
     });
   }
+
+test('opening a Markdown file expands its own heading group once and a deliberate collapse survives reordering', async ({
+  page,
+}) => {
+  await choose(page);
+  await siblings(page, 10);
+  await page.evaluate(
+    (doc) => {
+      window.readerFixture.enqueue('read_preview', {
+        value: {
+          documentId: 0,
+          contextId: 10,
+          revision: 99,
+          name: 'alpha.md',
+          location: 'fixture/alpha.md',
+          format: 'markdown',
+          source: '# Alpha\n## Section',
+        },
+      });
+      window.readerFixture.enqueue('open_index_entry', { value: doc });
+    },
+    snapshot('alpha.md', 10, '# Alpha\n## Section', 1, 101),
+  );
+  await page
+    .getByRole('button', { name: 'Open alpha.md', exact: true })
+    .click();
+  await expect(
+    page.getByRole('button', {
+      name: 'Hide headings for alpha.md',
+      exact: true,
+    }),
+  ).toHaveAttribute('aria-expanded', 'true');
+  await expect(
+    page.getByRole('button', { name: 'Open alpha.md at Section', exact: true }),
+  ).toHaveCount(1);
+  // A deliberate collapse is not undone by reordering the file list.
+  await page
+    .getByRole('button', { name: 'Hide headings for alpha.md', exact: true })
+    .click();
+  await expect(
+    page.getByRole('button', {
+      name: 'Show headings for alpha.md',
+      exact: true,
+    }),
+  ).toHaveAttribute('aria-expanded', 'false');
+  await page
+    .getByLabel('Sort files by', { exact: true })
+    .selectOption('modified');
+  await expect(
+    page.getByRole('button', {
+      name: 'Show headings for alpha.md',
+      exact: true,
+    }),
+  ).toHaveAttribute('aria-expanded', 'false');
+  // A later explicit open of the same file expands the group again.
+  await page.evaluate(
+    (doc) => {
+      window.readerFixture.enqueue('read_preview', {
+        value: {
+          documentId: 0,
+          contextId: 10,
+          revision: 99,
+          name: 'alpha.md',
+          location: 'fixture/alpha.md',
+          format: 'markdown',
+          source: '# Alpha\n## Section',
+        },
+      });
+      window.readerFixture.enqueue('open_index_entry', { value: doc });
+    },
+    snapshot('alpha.md', 10, '# Alpha\n## Section', 2, 102),
+  );
+  await page
+    .getByRole('button', { name: 'Open alpha.md', exact: true })
+    .click();
+  await expect(
+    page.getByRole('button', {
+      name: 'Hide headings for alpha.md',
+      exact: true,
+    }),
+  ).toHaveAttribute('aria-expanded', 'true');
+  // A failed open expands nothing new.
+  await page.evaluate(() => {
+    window.readerFixture.enqueue('open_index_entry', {
+      error: {
+        code: 'denied',
+        message: 'Target denied',
+        attempted: 'beta.MKDOWN',
+      },
+    });
+  });
+  await page
+    .getByRole('button', { name: 'Open beta.MKDOWN', exact: true })
+    .click();
+  await expect(page.getByRole('alert')).toContainText('beta.MKDOWN');
+  await expect(
+    page.getByRole('button', {
+      name: 'Show headings for beta.MKDOWN',
+      exact: true,
+    }),
+  ).toHaveAttribute('aria-expanded', 'false');
+  // A hidden sidebar performs no heading preview work for the opened file.
+  await page.evaluate(() => window.readerFixture.menu('sort-name'));
+  await page.evaluate(() => window.readerFixture.menu('sidebar'));
+  const previews = await page.evaluate(
+    () =>
+      window.readerFixture
+        .navigationCalls()
+        .filter((call) => call.command === 'read_preview').length,
+  );
+  await page.evaluate(
+    (doc) => {
+      window.readerFixture.enqueue('open_index_entry', { value: doc });
+    },
+    snapshot('beta.MKDOWN', 20, '# Beta', 3, 103),
+  );
+  // The settled sibling projection names the newly opened file.
+  await siblings(page, 20);
+  await page.evaluate(() => window.readerFixture.menu('next'));
+  await expect(
+    page.getByRole('article', { name: 'beta.MKDOWN' }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () =>
+        window.readerFixture
+          .navigationCalls()
+          .filter((call) => call.command === 'read_preview').length,
+    ),
+  ).toBe(previews);
+  // The hidden row is marked expanded without reading its headings.
+  await page.evaluate(() => {
+    window.readerFixture.enqueue('read_preview', {
+      value: {
+        documentId: 0,
+        contextId: 20,
+        revision: 99,
+        name: 'beta.MKDOWN',
+        location: 'fixture/beta.MKDOWN',
+        format: 'markdown',
+        source: '# Beta',
+      },
+    });
+  });
+  await page.evaluate(() => window.readerFixture.menu('sidebar'));
+  await expect(
+    page.getByRole('button', {
+      name: 'Hide headings for beta.MKDOWN',
+      exact: true,
+    }),
+  ).toHaveAttribute('aria-expanded', 'true');
+});
+
+test('a sort-only interaction replaces no reading session', async ({
+  page,
+}) => {
+  await choose(page);
+  await siblings(page, 10);
+  const reading = `# Reading\n\n## Section\n\n${'Readable words. '.repeat(300)}\n\n\`\`\`mermaid\ngraph LR\n A-->B\n\`\`\`\n\n<audio src="tone.wav"></audio>`;
+  await page.evaluate(
+    (doc) => {
+      window.readerFixture.enqueue('resolve_media', {
+        value: { id: '0'.repeat(31) + '2', mime: 'audio/wav' },
+      });
+      window.readerFixture.enqueue('open_index_entry', { value: doc });
+    },
+    snapshot('alpha.md', 10, reading, 1, 101),
+  );
+  await page
+    .getByRole('button', { name: 'Open alpha.md', exact: true })
+    .click();
+  await expect(page.getByRole('article', { name: 'alpha.md' })).toBeVisible();
+  await expect(page.locator('article .diagram svg')).toHaveCount(1);
+  await expect(page.locator('article audio')).toHaveCount(1);
+  const article = await page.getByRole('article').elementHandle();
+  const media = await page.locator('article audio').elementHandle();
+  const figure = await page.locator('article .diagram svg').elementHandle();
+  await page.evaluate(() => {
+    const heading = document.querySelector('article h2');
+    if (!heading) throw new Error('Missing reading heading');
+    const range = document.createRange();
+    range.selectNodeContents(heading);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    const main = document.querySelector('main');
+    if (main) main.scrollTop = 120;
+  });
+  const before = await page.evaluate(() => ({
+    scroll: document.querySelector('main')?.scrollTop ?? 0,
+    selection: window.getSelection()?.toString() ?? '',
+    calls: window.readerFixture.calls().length,
+    parses: window.readerFixture.parses(),
+    playback: (() => {
+      const audio = document.querySelector('article audio');
+      return audio instanceof HTMLAudioElement
+        ? { paused: audio.paused, time: audio.currentTime }
+        : null;
+    })(),
+  }));
+  await page
+    .getByLabel('Sort files by', { exact: true })
+    .selectOption('modified');
+  await expect(page.getByLabel('Sort files by', { exact: true })).toHaveValue(
+    'modified',
+  );
+  await page.evaluate(() => window.readerFixture.menu('sort-size'));
+  await expect(page.getByLabel('Sort files by', { exact: true })).toHaveValue(
+    'size',
+  );
+  const after = await page.evaluate(() => ({
+    scroll: document.querySelector('main')?.scrollTop ?? 0,
+    selection: window.getSelection()?.toString() ?? '',
+    calls: window.readerFixture.calls().length,
+    parses: window.readerFixture.parses(),
+    playback: (() => {
+      const audio = document.querySelector('article audio');
+      return audio instanceof HTMLAudioElement
+        ? { paused: audio.paused, time: audio.currentTime }
+        : null;
+    })(),
+  }));
+  expect(after.calls).toBe(before.calls);
+  expect(after.parses).toBe(before.parses);
+  expect(after.scroll).toBe(before.scroll);
+  expect(after.selection).toBe(before.selection);
+  expect(after.playback).toEqual(before.playback);
+  expect(
+    await article?.evaluate(
+      (node) => node === document.querySelector('article'),
+    ),
+  ).toBe(true);
+  expect(
+    await media?.evaluate(
+      (node) => node === document.querySelector('article audio'),
+    ),
+  ).toBe(true);
+  expect(
+    await figure?.evaluate(
+      (node) => node === document.querySelector('article .diagram svg'),
+    ),
+  ).toBe(true);
+  const calls = await page.evaluate(() => window.readerFixture.calls());
+  expect(
+    calls.filter((call) => call.command === 'open_index_entry'),
+  ).toHaveLength(1);
+  expect(
+    calls.filter((call) => call.command === 'commit_document'),
+  ).toHaveLength(1);
+  expect(calls.filter((call) => call.command === 'resolve_media')).toHaveLength(
+    1,
+  );
+  await article?.dispose();
+  await media?.dispose();
+  await figure?.dispose();
+});

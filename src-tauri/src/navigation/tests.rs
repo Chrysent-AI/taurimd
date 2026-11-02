@@ -138,27 +138,102 @@ fn deterministic_native_alpha_date_ties_missing_times_and_no_source_writes() {
             .collect::<Vec<_>>(),
         ["B.log", "a.md", "z.md"]
     );
-    assert!(
+    // One shared timestamp is one ascending bucket for every entry.
+    assert!(scope.records.iter().all(|r| r.entry.date_rank == Some(1)));
+    // Unequal sizes are distinct ascending buckets; equal sizes share one.
+    // "a.md" and "z.md" hold four bytes each and "B.log" holds five.
+    assert_eq!(
         scope
             .records
             .iter()
-            .all(|r| r.entry.alpha_rank == r.entry.date_rank)
+            .map(|r| r.entry.size_rank)
+            .collect::<Vec<_>>(),
+        [Some(2), Some(1), Some(1)]
     );
     Arc::make_mut(&mut scope.records)[0].modified = None;
     Arc::make_mut(&mut scope.records)[2].modified = Some(time + Duration::from_secs(1));
     rank(&mut scope);
+    // The missing time has no rank at all and never displaces a known one.
     assert_eq!(
         scope
             .records
             .iter()
             .map(|r| r.entry.date_rank)
             .collect::<Vec<_>>(),
-        [2, 1, 0]
+        [None, Some(1), Some(2)]
     );
     nav.publish(scope).unwrap();
     for name in ["z.md", "a.md", "B.log"] {
         assert_eq!(fs::read_to_string(dir.path().join(name)).unwrap(), name);
     }
+    drop(nav);
+    reap(dir);
+}
+#[test]
+fn metadata_ranks_cover_sizes_times_and_directory_totals() {
+    let dir = root();
+    fs::create_dir(dir.path().join("folder")).unwrap();
+    fs::write(dir.path().join("folder/inner.md"), "inner").unwrap();
+    fs::write(dir.path().join("empty.md"), "").unwrap();
+    fs::write(dir.path().join("one.md"), "1").unwrap();
+    fs::write(dir.path().join("two.md"), "22").unwrap();
+    // A pre-epoch timestamp is a known value, not a missing one.
+    let epoch = UNIX_EPOCH - Duration::from_secs(60);
+    fs::File::options()
+        .write(true)
+        .open(dir.path().join("empty.md"))
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(epoch))
+        .unwrap();
+    let mut nav = Navigation::default();
+    let index = published(&mut nav, dir.path(), true);
+    let entry = |relative: &str| {
+        index
+            .entries
+            .iter()
+            .find(|e| e.relative == relative)
+            .unwrap()
+            .clone()
+    };
+    // Size is the file byte size, never a recursive folder total.
+    assert_eq!(entry("empty.md").size_rank, Some(1));
+    assert_eq!(entry("one.md").size_rank, Some(2));
+    assert_eq!(entry("two.md").size_rank, Some(3));
+    assert_eq!(entry("folder/inner.md").size_rank, Some(4));
+    assert_eq!(entry("folder").size_rank, None);
+    // The oldest known timestamp ranks first and keeps a rank.
+    let empty = entry("empty.md");
+    assert_eq!(empty.date_rank, Some(1));
+    assert!(entry("one.md").date_rank.unwrap() > empty.date_rank.unwrap());
+    // The scan never reads a document body to learn its metadata.
+    assert_eq!(fs::read_to_string(dir.path().join("one.md")).unwrap(), "1");
+    assert_eq!(fs::read_to_string(dir.path().join("two.md")).unwrap(), "22");
+    drop(nav);
+    reap(dir);
+}
+#[cfg(unix)]
+#[test]
+fn alias_entries_rank_with_their_validated_target() {
+    use std::os::unix::fs::symlink;
+    let dir = root();
+    fs::write(dir.path().join("one.md"), "1").unwrap();
+    fs::write(dir.path().join("two.md"), "22").unwrap();
+    symlink(dir.path().join("one.md"), dir.path().join("alias.md")).unwrap();
+    let mut nav = Navigation::default();
+    let index = published(&mut nav, dir.path(), true);
+    let entry = |relative: &str| {
+        index
+            .entries
+            .iter()
+            .find(|e| e.relative == relative)
+            .unwrap()
+            .clone()
+    };
+    // The alias reports the validated target size, so it shares one bucket.
+    assert_eq!(entry("alias.md").size_rank, entry("one.md").size_rank);
+    assert_eq!(entry("alias.md").size_rank, Some(1));
+    assert_eq!(entry("two.md").size_rank, Some(2));
+    assert_eq!(fs::read_to_string(dir.path().join("one.md")).unwrap(), "1");
     drop(nav);
     reap(dir);
 }

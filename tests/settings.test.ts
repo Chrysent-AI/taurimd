@@ -305,3 +305,75 @@ it('shares committed revisions between two readers without propagating failed op
   });
   expect(listeners.size).toBe(0);
 });
+it('applies the remembered file order locally and commits it durably', async () => {
+  const { model, bridge } = await setup();
+  const pending = deferred<SettingsUpdate>();
+  bridge.update.mockReturnValueOnce(pending.promise);
+  model.change({ fileSortKey: 'modified', fileSortDirection: 'desc' });
+  expect(model.getState().settings.fileSortKey).toBe('modified');
+  expect(model.getState().settings.fileSortDirection).toBe('desc');
+  expect(model.getState().status).toBe('saving');
+  expect(model.getState().settings.sidebarDefault).toBe(true);
+  pending.resolve({
+    status: 'committed',
+    record: record(1, {
+      ...defaults,
+      fileSortKey: 'modified',
+      fileSortDirection: 'desc',
+    }),
+  });
+  await vi.waitFor(() => {
+    expect(model.getState().status).toBe('saved');
+  });
+  expect(bridge.update).toHaveBeenLastCalledWith(0, {
+    fileSortKey: 'modified',
+    fileSortDirection: 'desc',
+  });
+  expect(model.getState().revision).toBe(1);
+  expect(model.getState().settings.sidebarDefault).toBe(true);
+});
+it('keeps a failed file-order save local and shares only the committed order', async () => {
+  let committed = record();
+  const listeners = new Set<(record: SettingsRecord) => void>();
+  let fail = true;
+  const create = (first: boolean): SettingsBridge => ({
+    get: () => Promise.resolve(committed),
+    listen: (receive) => {
+      listeners.add(receive);
+      return Promise.resolve(() => {
+        listeners.delete(receive);
+      });
+    },
+    update: (revision, patch) => {
+      if (first && fail) return Promise.reject(new Error('Save unavailable'));
+      if (revision !== committed.revision)
+        return Promise.resolve({ status: 'conflict', record: committed });
+      committed = record(revision + 1, { ...committed.settings, ...patch });
+      listeners.forEach((receive) => {
+        receive(committed);
+      });
+      return Promise.resolve({ status: 'committed', record: committed });
+    },
+  });
+  const a = new SettingsController(create(true));
+  const b = new SettingsController(create(false));
+  cleanup.push(a.connect(), b.connect());
+  await vi.waitFor(() => {
+    expect(a.getState().status).toBe('saved');
+    expect(b.getState().status).toBe('saved');
+  });
+  a.change({ fileSortKey: 'size' });
+  await vi.waitFor(() => {
+    expect(a.getState().status).toBe('error');
+  });
+  expect(a.getState().settings.fileSortKey).toBe('size');
+  expect(b.getState().settings.fileSortKey).toBe('name');
+  fail = false;
+  a.retry();
+  await vi.waitFor(() => {
+    expect(a.getState().status).toBe('saved');
+    expect(b.getState().settings.fileSortKey).toBe('size');
+  });
+  expect(b.getState().settings.fileSortDirection).toBe('asc');
+  expect(b.getState().settings.sidebarDefault).toBe(true);
+});

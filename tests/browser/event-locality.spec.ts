@@ -19,6 +19,7 @@ const root = (scope: number, name: string, revision = 1): FileIndex => ({
       context: 1,
       alphaRank: 1,
       dateRank: 1,
+      sizeRank: 1,
     },
   ],
   issues: [],

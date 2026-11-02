@@ -337,6 +337,33 @@ mockIPC(async (command, payload) => {
     });
   calls.push({ command: name, payload: structuredClone(payload) });
   try {
+    if (name === 'read_preview') {
+      // The preview double answers the requested entry, like the native read.
+      // A queued reply that names another entry never satisfies this request.
+      const binding = (payload as { binding?: { entry?: number } }).binding;
+      const entry = cachedIndex.index?.entries.find(
+        (candidate) => candidate.id === binding?.entry,
+      );
+      const queue = replies.get(name) ?? [];
+      const match = entry
+        ? queue.findIndex((queued) => {
+            if (!('value' in queued)) return false;
+            const value = queued.value;
+            if (typeof value !== 'object' || value === null) return false;
+            const queuedName = (value as { name?: unknown }).name;
+            return (
+              typeof queuedName === 'string' &&
+              (queuedName === entry.name || queuedName === entry.relative)
+            );
+          })
+        : -1;
+      if (match >= 0) {
+        const [matched] = queue.splice(match, 1);
+        replies.set(name, queue);
+        return structuredClone((matched as { value: unknown }).value);
+      }
+      throw new Error(`Queue a backend response for ${name}`);
+    }
     const reply = replies.get(name)?.shift();
     const applyPresentation = () => {
       const next = (
@@ -616,10 +643,15 @@ const fixture = {
       | 'refresh-folder'
       | 'reveal'
       | 'sidebar'
-      | 'sort-alpha'
-      | 'sort-date'
+      | 'sort-name'
+      | 'sort-modified'
+      | 'sort-size'
+      | 'sort-asc'
+      | 'sort-desc'
       | 'previous'
       | 'next'
+      | 'first'
+      | 'last'
       | 'open'
       | 'reload'
       | 'settings'

@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import type { FileSortDirection, FileSortKey } from './settings/model';
 
 export interface MenuPresentation {
   findAvailable: boolean;
@@ -8,7 +9,11 @@ export interface MenuPresentation {
   hasRoot: boolean;
   previous: boolean;
   next: boolean;
-  newest: boolean;
+  first: boolean;
+  last: boolean;
+  fileSortKey: FileSortKey;
+  fileSortDirection: FileSortDirection;
+  editing: boolean;
   busy: boolean;
   modal: 'none' | 'settings' | 'quickOpen' | 'other';
   composing: boolean;

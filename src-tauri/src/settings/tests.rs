@@ -119,6 +119,121 @@ fn status_visibility_legacy_absence_is_not_corruption_but_invalid_presence_is() 
     );
 }
 #[test]
+fn file_order_fields_migrate_per_field_and_persist_atomically() {
+    let fixture = root();
+    let file = fixture.path().join("settings-v1.json");
+    let mut legacy = serde_json::to_value(Record {
+        version: 1,
+        revision: 9,
+        settings: SettingsV1::default(),
+        notice: None,
+    })
+    .unwrap();
+    // A valid older record without the order fields is not corruption.
+    legacy["settings"]
+        .as_object_mut()
+        .unwrap()
+        .remove("fileSortKey");
+    legacy["settings"]
+        .as_object_mut()
+        .unwrap()
+        .remove("fileSortDirection");
+    fs::write(&file, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let old = SettingsStore::load(Some(fixture.path().into()))
+        .get()
+        .unwrap();
+    assert_eq!(old.revision, 9);
+    assert_eq!(old.settings.file_sort_key, FileSortKey::Name);
+    assert_eq!(old.settings.file_sort_direction, FileSortDirection::Asc);
+    assert!(old.notice.is_none());
+    // A missing field keeps the other present field and the revision.
+    let mut partial = legacy.clone();
+    partial["settings"]["fileSortDirection"] = json!("desc");
+    fs::write(&file, serde_json::to_vec(&partial).unwrap()).unwrap();
+    let partial = SettingsStore::load(Some(fixture.path().into()))
+        .get()
+        .unwrap();
+    assert_eq!(partial.revision, 9);
+    assert_eq!(partial.settings.file_sort_key, FileSortKey::Name);
+    assert_eq!(
+        partial.settings.file_sort_direction,
+        FileSortDirection::Desc
+    );
+    assert!(partial.notice.is_none());
+    // An invalid present value falls back for that field only.
+    let mut invalid = legacy.clone();
+    invalid["settings"]["fileSortKey"] = json!("mtime");
+    invalid["settings"]["fileSortDirection"] = json!("desc");
+    fs::write(&file, serde_json::to_vec(&invalid).unwrap()).unwrap();
+    let invalid = SettingsStore::load(Some(fixture.path().into()))
+        .get()
+        .unwrap();
+    assert_eq!(invalid.settings.file_sort_key, FileSortKey::Name);
+    assert_eq!(
+        invalid.settings.file_sort_direction,
+        FileSortDirection::Desc
+    );
+    assert!(invalid.notice.is_some());
+    // A valid two-field patch commits both fields and survives a restart.
+    let store = SettingsStore::load(Some(fixture.path().into()));
+    let saved = committed(
+        store
+            .update(
+                9,
+                patch(json!({"fileSortKey":"modified","fileSortDirection":"desc"})),
+                |_| {},
+            )
+            .unwrap(),
+    );
+    assert_eq!(saved.revision, 10);
+    assert_eq!(saved.settings.file_sort_key, FileSortKey::Modified);
+    assert_eq!(saved.settings.file_sort_direction, FileSortDirection::Desc);
+    assert_eq!(
+        SettingsStore::load(Some(fixture.path().into()))
+            .get()
+            .unwrap(),
+        saved
+    );
+    assert_eq!(fs::read_dir(fixture.path()).unwrap().count(), 1);
+    // A stale revision returns the current record without losing the order.
+    let Update::Conflict { record } = store
+        .update(9, patch(json!({"fileSortKey":"size"})), |_| {
+            panic!("no stale event")
+        })
+        .unwrap()
+    else {
+        panic!("expected conflict");
+    };
+    assert_eq!(record, saved);
+    assert_eq!(record.settings.file_sort_key, FileSortKey::Modified);
+    // A failed save keeps the committed record and reaps its own temporary.
+    let config = fixture.path().join("config");
+    let failing = SettingsStore::load(Some(config.clone()));
+    let committed_record = committed(
+        failing
+            .update(0, patch(json!({"fileSortKey":"size"})), |_| {})
+            .unwrap(),
+    );
+    assert_eq!(committed_record.settings.file_sort_key, FileSortKey::Size);
+    let backup = fixture.path().join("saved-config");
+    fs::rename(&config, &backup).unwrap();
+    fs::create_dir(&config).unwrap();
+    fs::create_dir(config.join("settings-v1.json")).unwrap();
+    assert!(
+        failing
+            .update(1, patch(json!({"fileSortDirection":"asc"})), |_| panic!(
+                "no failure event"
+            ))
+            .is_err()
+    );
+    assert_eq!(failing.get().unwrap(), committed_record);
+    assert_eq!(fs::read_dir(&config).unwrap().count(), 1);
+    assert_eq!(
+        SettingsStore::load(Some(backup)).get().unwrap(),
+        committed_record
+    );
+}
+#[test]
 fn atomic_replacement_restart_and_source_write_scope() {
     let fixture = root();
     let config = fixture.path().join("config");
@@ -258,13 +373,15 @@ fn native_validation_and_dtos_match_frontend_wire_without_path_parameters() {
         json!({"pageZoom":1.5}),
         json!({"darkPalette":"untrusted"}),
         json!({"statusVisible":"yes"}),
+        json!({"fileSortKey":"mtime"}),
+        json!({"fileSortDirection":"sideways"}),
     ] {
         assert!(serde_json::from_value::<Patch>(invalid).is_err());
     }
     assert_eq!(
         serde_json::to_value(store.get().unwrap()).unwrap(),
         json!({
-            "version":1,"revision":0,"settings":{"mode":"system","lightPalette":"githubLight","darkPalette":"githubDark","pageZoom":100,"fitDiagrams":true,"sidebarDefault":true,"statusVisible":true},"notice":null
+            "version":1,"revision":0,"settings":{"mode":"system","lightPalette":"githubLight","darkPalette":"githubDark","pageZoom":100,"fitDiagrams":true,"sidebarDefault":true,"statusVisible":true,"fileSortKey":"name","fileSortDirection":"asc"},"notice":null
         })
     );
     let result = store

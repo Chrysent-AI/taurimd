@@ -364,11 +364,14 @@ it('restores appearance defaults in one revisioned change and leaves unrelated p
   });
   expect(bridge.update).toHaveBeenCalledTimes(1);
   expect(bridge.update).toHaveBeenCalledWith(0, appearanceDefaults);
+  // The appearance reset never touches the remembered file order.
   expect(model.getState().settings).toEqual({
     ...appearanceDefaults,
     fitDiagrams: false,
     sidebarDefault: false,
     statusVisible: false,
+    fileSortKey: 'name',
+    fileSortDirection: 'asc',
   });
   expect(screen.getByLabelText<HTMLSelectElement>('Appearance').value).toBe(
     'system',
@@ -412,10 +415,13 @@ it('keeps a failed appearance reset truthful and retries only the appearance fie
   });
   expect(bridge.update).toHaveBeenCalledTimes(2);
   expect(bridge.update).toHaveBeenLastCalledWith(0, appearanceDefaults);
+  // The appearance reset never touches the remembered file order.
   expect(model.getState().settings).toEqual({
     ...appearanceDefaults,
     fitDiagrams: false,
     sidebarDefault: false,
     statusVisible: false,
+    fileSortKey: 'name',
+    fileSortDirection: 'asc',
   });
 });

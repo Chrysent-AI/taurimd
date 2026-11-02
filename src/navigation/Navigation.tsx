@@ -10,10 +10,13 @@ import type { Heading } from '../reader/parse';
 import type { NavigationController } from './model';
 import {
   binding,
-  neighbors,
+  compareEntries,
+  siblingTargets,
   type EntryIntent,
   type FileEntry,
   type FileIndex,
+  type FileSortDirection,
+  type FileSortKey,
 } from './types';
 export function HeadingList({
   headings,
@@ -56,6 +59,13 @@ interface Props {
   visible: boolean;
   siblingGroupRef: (node: HTMLDivElement | null) => void;
   section: number | null;
+  sortKey: FileSortKey;
+  sortDirection: FileSortDirection;
+  changeSort: (
+    change:
+      | { fileSortKey: FileSortKey }
+      | { fileSortDirection: FileSortDirection },
+  ) => void;
 }
 export function Navigation(props: Props) {
   const { controller, document, disabled, allow, open, siblingGroupRef } =
@@ -66,13 +76,52 @@ export function Navigation(props: Props) {
     () => rootHeading.current?.focus({ preventScroll: true }),
     [],
   );
-  const adjacent = neighbors(state.siblings, state.newest);
+  const adjacent = siblingTargets(
+    state.siblings,
+    props.sortKey,
+    props.sortDirection,
+  );
   return (
     <>
       <nav aria-label="Files">
         <h2 ref={rootHeading} tabIndex={-1}>
           Files
         </h2>
+        <div className="file-order" role="group" aria-label="File order">
+          <label htmlFor="file-sort-key">Sort files by</label>
+          <select
+            id="file-sort-key"
+            disabled={disabled}
+            value={props.sortKey}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (value !== 'name' && value !== 'modified' && value !== 'size')
+                return;
+              if (allow()) props.changeSort({ fileSortKey: value });
+            }}
+          >
+            <option value="name">Name</option>
+            <option value="modified">Date modified</option>
+            <option value="size">Size (bytes)</option>
+          </select>
+          <label htmlFor="file-sort-direction">Direction</label>
+          <select
+            id="file-sort-direction"
+            disabled={disabled}
+            value={props.sortDirection}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (value !== 'asc' && value !== 'desc') return;
+              if (allow()) props.changeSort({ fileSortDirection: value });
+            }}
+          >
+            <option value="asc">Ascending</option>
+            <option value="desc">Descending</option>
+          </select>
+          <p className="hint">
+            Remembered for file lists and sibling navigation.
+          </p>
+        </div>
         <p>{state.message}</p>
         {!state.root ? (
           <p className="hint">Choose a folder with File → Open Folder…</p>
@@ -141,18 +190,6 @@ export function Navigation(props: Props) {
                 </button>
               ))}
             </div>
-            <label htmlFor="sibling-order">Sibling order</label>
-            <select
-              id="sibling-order"
-              disabled={disabled}
-              value={state.newest ? 'date' : 'alpha'}
-              onChange={(event) => {
-                if (allow()) controller.sort(event.target.value === 'date');
-              }}
-            >
-              <option value="alpha">Alphabetical</option>
-              <option value="date">Newest modified</option>
-            </select>
           </div>
         )}
       </nav>
@@ -199,7 +236,7 @@ function Rows(
 ) {
   return props.index.entries
     .filter((entry) => entry.parent === props.parent)
-    .sort((a, b) => a.alphaRank - b.alphaRank)
+    .sort((a, b) => compareEntries(a, b, props.sortKey, props.sortDirection))
     .map((entry) => <Row {...props} key={entry.uiId} entry={entry} />);
 }
 function Row(
@@ -210,7 +247,28 @@ function Row(
   const row = useRef<HTMLLIElement | null>(null);
   const content = useRef<HTMLDivElement>(null);
   const disclosure = useRef<HTMLButtonElement>(null);
+  const consumed = useRef<string | null>(null);
   const preview = controller.state.previews.get(entry.uiId);
+  const document = props.document;
+  // A successful new open is identified by its native context and document.
+  // A reload keeps the document identity, so it never re-opens a group.
+  const identity =
+    document && document.snapshot.contextId !== undefined
+      ? `${String(document.snapshot.contextId)}:${String(document.snapshot.documentId)}`
+      : null;
+  const settled = controller.state.siblingDocument === document;
+  const eligible =
+    entry.kind === 'markdown' &&
+    identity !== null &&
+    settled &&
+    document?.snapshot.contextId === entry.context &&
+    controller.state.siblings?.rootActive === entry.id;
+  useEffect(() => {
+    if (!eligible) return;
+    if (consumed.current === identity) return;
+    consumed.current = identity;
+    setExpanded(true);
+  }, [eligible, identity]);
   useEffect(() => {
     if (!props.visible || !expanded) {
       controller.collapse(entry.uiId);

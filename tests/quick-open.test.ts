@@ -143,6 +143,7 @@ describe('production Quick Open debounce and immutable query ownership', () => {
       context: 10,
       alphaRank: 0,
       dateRank: 0,
+      sizeRank: 0,
     };
     model.open({ ...root(), entries: [folder] }, false);
     model.enterDirectory(folder.relative, folder.id, folder.uiId);
@@ -179,6 +180,7 @@ describe('production Quick Open debounce and immutable query ownership', () => {
             context: id,
             alphaRank: id,
             dateRank: id,
+            sizeRank: id,
           },
           positions: [],
         })),

@@ -25,7 +25,6 @@ interface NavigationState {
   siblingDocument: Rendered | null;
   siblingMessage: string;
   previews: ReadonlyMap<number, Preview>;
-  newest: boolean;
 }
 export class NavigationController {
   state: NavigationState = {
@@ -42,7 +41,6 @@ export class NavigationController {
     siblingDocument: null,
     siblingMessage: '',
     previews: new Map(),
-    newest: false,
   };
   private listeners = new Set<() => void>();
   private sequence = 0;
@@ -258,9 +256,6 @@ export class NavigationController {
   }
   notice(message: string, error = false) {
     this.publish({ message, error });
-  }
-  sort(newest: boolean) {
-    this.publish({ newest });
   }
   async choose() {
     if (this.state.choosing) return 'failed' as const;

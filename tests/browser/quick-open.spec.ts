@@ -20,6 +20,7 @@ const entry = (
   context: id,
   alphaRank: id,
   dateRank: id,
+  sizeRank: id,
 });
 const index = (revision = 1): FileIndex => ({
   scope: 7,

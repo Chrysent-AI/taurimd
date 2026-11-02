@@ -683,31 +683,38 @@ pub fn run() {
                 true,
                 None::<&str>,
             )?;
-            let alphabetical = CheckMenuItem::with_id(
+            let sort_name =
+                CheckMenuItem::with_id(app, "sort-name", "Name", true, true, None::<&str>)?;
+            let sort_modified = CheckMenuItem::with_id(
                 app,
-                "sort-alpha",
-                "Alphabetical",
-                true,
-                true,
-                None::<&str>,
-            )?;
-            let newest = CheckMenuItem::with_id(
-                app,
-                "sort-date",
-                "Newest modified",
+                "sort-modified",
+                "Date Modified",
                 true,
                 false,
                 None::<&str>,
             )?;
+            let sort_size = CheckMenuItem::with_id(
+                app,
+                "sort-size",
+                "Size (Bytes)",
+                true,
+                false,
+                None::<&str>,
+            )?;
+            let sort_asc =
+                CheckMenuItem::with_id(app, "sort-asc", "Ascending", true, true, None::<&str>)?;
+            let sort_desc =
+                CheckMenuItem::with_id(app, "sort-desc", "Descending", true, false, None::<&str>)?;
             let previous = MenuItem::with_id(
                 app,
                 "previous",
                 "Previous File",
                 false,
-                Some("CmdOrCtrl+Alt+Left"),
+                Some("CmdOrCtrl+Left"),
             )?;
-            let next =
-                MenuItem::with_id(app, "next", "Next File", false, Some("CmdOrCtrl+Alt+Right"))?;
+            let next = MenuItem::with_id(app, "next", "Next File", false, Some("CmdOrCtrl+Right"))?;
+            let first = MenuItem::with_id(app, "first", "First File", false, Some("CmdOrCtrl+Up"))?;
+            let last = MenuItem::with_id(app, "last", "Last File", false, Some("CmdOrCtrl+Down"))?;
             let refresh =
                 MenuItem::with_id(app, "refresh-folder", "Refresh Folder", false, None::<&str>)?;
             let quick_open =
@@ -747,7 +754,21 @@ pub fn run() {
                     &find_previous,
                     &previous,
                     &next,
-                    &Submenu::with_items(app, "Sibling order", true, &[&alphabetical, &newest])?,
+                    &first,
+                    &last,
+                    &Submenu::with_items(
+                        app,
+                        "File Order",
+                        true,
+                        &[
+                            &sort_name,
+                            &sort_modified,
+                            &sort_size,
+                            &PredefinedMenuItem::separator(app)?,
+                            &sort_asc,
+                            &sort_desc,
+                        ],
+                    )?,
                     &refresh,
                 ],
             )?;
@@ -860,6 +881,8 @@ pub fn run() {
                     ("reveal", reveal),
                     ("previous", previous),
                     ("next", next),
+                    ("first", first),
+                    ("last", last),
                     ("refresh-folder", refresh),
                     ("export-svg", export_svg),
                     ("export-png", export_png),
@@ -875,8 +898,11 @@ pub fn run() {
                 ],
                 navigation_checks: vec![
                     ("sidebar", sidebar),
-                    ("sort-alpha", alphabetical),
-                    ("sort-date", newest),
+                    ("sort-name", sort_name),
+                    ("sort-modified", sort_modified),
+                    ("sort-size", sort_size),
+                    ("sort-asc", sort_asc),
+                    ("sort-desc", sort_desc),
                     ("appearance-system", appearance_system),
                     ("appearance-light", appearance_light),
                     ("appearance-dark", appearance_dark),

@@ -1,5 +1,7 @@
 import type { Snapshot } from '../types';
 import type { Heading } from '../reader/parse';
+import type { FileSortDirection, FileSortKey } from '../settings/model';
+export type { FileSortDirection, FileSortKey };
 export interface EntryBinding {
   scope: number;
   revision: number;
@@ -14,7 +16,8 @@ export interface FileEntry {
   kind: 'directory' | 'markdown' | 'text';
   context: number;
   alphaRank: number;
-  dateRank: number;
+  dateRank: number | null;
+  sizeRank: number | null;
 }
 export interface FileIndex {
   scope: number;
@@ -95,16 +98,66 @@ export interface NavigationBridge {
 export function binding(index: FileIndex, entry: FileEntry): EntryBinding {
   return { scope: index.scope, revision: index.revision, entry: entry.id };
 }
-export function neighbors(siblings: Siblings | null, newest: boolean) {
+export interface SiblingTargets {
+  previous?: FileEntry;
+  next?: FileEntry;
+  first?: FileEntry;
+  last?: FileEntry;
+}
+// A missing native value sorts after every known value in both directions.
+function knownRank(
+  a: number | null,
+  b: number | null,
+  direction: FileSortDirection,
+) {
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return direction === 'asc' ? a - b : b - a;
+}
+export function compareEntries(
+  a: FileEntry,
+  b: FileEntry,
+  key: FileSortKey,
+  direction: FileSortDirection,
+) {
+  const folderA = a.kind === 'directory';
+  const folderB = b.kind === 'directory';
+  if (folderA !== folderB) return folderA ? -1 : 1;
+  if (folderA) {
+    // Folders keep their native name order and never carry a byte total.
+    return key === 'name' && direction === 'desc'
+      ? b.alphaRank - a.alphaRank
+      : a.alphaRank - b.alphaRank;
+  }
+  if (key === 'name')
+    return direction === 'asc'
+      ? a.alphaRank - b.alphaRank
+      : b.alphaRank - a.alphaRank;
+  const primary =
+    key === 'modified'
+      ? knownRank(a.dateRank, b.dateRank, direction)
+      : knownRank(a.sizeRank, b.sizeRank, direction);
+  if (primary !== 0) return primary;
+  // Equal or missing metadata keeps the native name and path order.
+  return a.alphaRank - b.alphaRank;
+}
+export function siblingTargets(
+  siblings: Siblings | null,
+  key: FileSortKey,
+  direction: FileSortDirection,
+): SiblingTargets {
   const entries =
     siblings?.index.entries
-      .filter((e) => e.kind !== 'directory')
-      .sort((a, b) =>
-        newest ? a.dateRank - b.dateRank : a.alphaRank - b.alphaRank,
-      ) ?? [];
-  const position = entries.findIndex((e) => e.id === siblings?.active);
+      .filter((entry) => entry.kind !== 'directory')
+      .sort((a, b) => compareEntries(a, b, key, direction)) ?? [];
+  const position = entries.findIndex((entry) => entry.id === siblings?.active);
+  if (position < 0) return {};
   return {
     previous: position > 0 ? entries[position - 1] : undefined,
-    next: position >= 0 ? entries[position + 1] : undefined,
+    next: position < entries.length - 1 ? entries[position + 1] : undefined,
+    first: position > 0 ? entries[0] : undefined,
+    last:
+      position < entries.length - 1 ? entries[entries.length - 1] : undefined,
   };
 }

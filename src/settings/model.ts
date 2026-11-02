@@ -8,6 +8,8 @@ export const palettes = [
   ['nord', 'Nord'],
 ] as const;
 export type Palette = (typeof palettes)[number][0];
+export type FileSortKey = 'name' | 'modified' | 'size';
+export type FileSortDirection = 'asc' | 'desc';
 export interface SettingsV1 {
   mode: 'system' | 'light' | 'dark';
   lightPalette: Palette;
@@ -16,6 +18,8 @@ export interface SettingsV1 {
   fitDiagrams: boolean;
   sidebarDefault: boolean;
   statusVisible: boolean;
+  fileSortKey: FileSortKey;
+  fileSortDirection: FileSortDirection;
 }
 export const defaults: SettingsV1 = {
   mode: 'system',
@@ -25,6 +29,8 @@ export const defaults: SettingsV1 = {
   fitDiagrams: true,
   sidebarDefault: true,
   statusVisible: true,
+  fileSortKey: 'name',
+  fileSortDirection: 'asc',
 };
 export interface SettingsRecord {
   version: 1;

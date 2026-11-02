@@ -2,9 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { NavigationController } from '../src/navigation/model';
 import {
   binding,
-  neighbors,
+  compareEntries,
+  siblingTargets,
   type FileEntry,
   type FileIndex,
+  type FileSortDirection,
+  type FileSortKey,
   type NavigationBridge,
   type IndexSnapshot,
 } from '../src/navigation/types';
@@ -20,7 +23,8 @@ const file = (id = 1, kind: FileEntry['kind'] = 'markdown'): FileEntry => ({
   relative: `${String(id)}.md`,
   kind,
   alphaRank: id,
-  dateRank: 4 - id,
+  dateRank: id,
+  sizeRank: id,
 });
 const index = (revision = 1): FileIndex => ({
   scope: 7,
@@ -246,11 +250,18 @@ describe('production navigation state and shared native adapter DTO projection',
     });
     await controller.update(doc);
     expect(
-      neighbors(controller.state.siblings, false).previous,
+      siblingTargets(controller.state.siblings, 'name', 'asc').previous,
     ).toBeUndefined();
-    expect(neighbors(controller.state.siblings, false).next?.id).toBe(2);
-    expect(neighbors(controller.state.siblings, true).next).toBeUndefined();
-    expect(neighbors(controller.state.siblings, true).previous?.id).toBe(2);
+    expect(
+      siblingTargets(controller.state.siblings, 'name', 'asc').next?.id,
+    ).toBe(2);
+    expect(
+      siblingTargets(controller.state.siblings, 'modified', 'desc').next,
+    ).toBeUndefined();
+    expect(
+      siblingTargets(controller.state.siblings, 'modified', 'desc').previous
+        ?.id,
+    ).toBe(2);
     bridge.siblings.mockResolvedValueOnce({
       index: index(),
       active: null,
@@ -258,10 +269,11 @@ describe('production navigation state and shared native adapter DTO projection',
       rootActive: null,
     });
     await controller.update(doc);
-    expect(neighbors(controller.state.siblings, false)).toEqual({
-      previous: undefined,
-      next: undefined,
-    });
+    const excluded = siblingTargets(controller.state.siblings, 'name', 'asc');
+    expect(excluded.previous).toBeUndefined();
+    expect(excluded.next).toBeUndefined();
+    expect(excluded.first).toBeUndefined();
+    expect(excluded.last).toBeUndefined();
     bridge.reveal.mockRejectedValueOnce({ message: 'Missing file' });
     await controller.reveal(doc);
     expect(controller.state.message).toContain('Missing file');
@@ -278,7 +290,175 @@ describe('production navigation state and shared native adapter DTO projection',
       rootActive: 3,
       inRoot: true,
     };
-    expect(neighbors(siblings, false).next).toBeUndefined();
-    expect(neighbors(siblings, false).previous?.id).toBe(2);
+    expect(siblingTargets(siblings, 'name', 'asc').next).toBeUndefined();
+    expect(siblingTargets(siblings, 'name', 'asc').previous?.id).toBe(2);
+  });
+});
+describe('shared file order and the four sibling endpoints', () => {
+  const entry = (
+    id: number,
+    name: string,
+    kind: FileEntry['kind'],
+    alphaRank: number,
+    dateRank: number | null,
+    sizeRank: number | null,
+    parent: number | null = null,
+  ): FileEntry => ({
+    id,
+    uiId: id,
+    parent,
+    context: id + 10,
+    name,
+    relative: name,
+    kind,
+    alphaRank,
+    dateRank,
+    sizeRank,
+  });
+  const folder = entry(1, 'folder', 'directory', 0, null, null);
+  const alpha = entry(2, 'alpha.md', 'markdown', 1, 3, 5);
+  const beta = entry(3, 'beta.md', 'markdown', 2, 1, 5);
+  const gamma = entry(4, 'gamma.md', 'markdown', 3, 2, 2);
+  const missing = entry(5, 'missing.md', 'markdown', 4, null, 2);
+  const entries = [folder, alpha, beta, gamma, missing];
+  const files = [alpha, beta, gamma, missing];
+  const order = (
+    list: FileEntry[],
+    key: FileSortKey,
+    direction: FileSortDirection,
+  ) =>
+    [...list]
+      .sort((a, b) => compareEntries(a, b, key, direction))
+      .map((item) => item.name);
+  const siblings = (list: FileEntry[], active: number | null) => ({
+    index: {
+      scope: 7,
+      revision: 1,
+      name: 'fixture',
+      entries: list,
+      issues: [],
+    },
+    active,
+    rootActive: active,
+    inRoot: true,
+  });
+  it('orders every key and direction with folders first and stable ties', () => {
+    expect(order(entries, 'name', 'asc')).toEqual([
+      'folder',
+      'alpha.md',
+      'beta.md',
+      'gamma.md',
+      'missing.md',
+    ]);
+    expect(order(entries, 'name', 'desc')).toEqual([
+      'folder',
+      'missing.md',
+      'gamma.md',
+      'beta.md',
+      'alpha.md',
+    ]);
+    expect(order(entries, 'modified', 'asc')).toEqual([
+      'folder',
+      'beta.md',
+      'gamma.md',
+      'alpha.md',
+      'missing.md',
+    ]);
+    expect(order(entries, 'modified', 'desc')).toEqual([
+      'folder',
+      'alpha.md',
+      'gamma.md',
+      'beta.md',
+      'missing.md',
+    ]);
+    expect(order(entries, 'size', 'asc')).toEqual([
+      'folder',
+      'gamma.md',
+      'missing.md',
+      'alpha.md',
+      'beta.md',
+    ]);
+    expect(order(entries, 'size', 'desc')).toEqual([
+      'folder',
+      'alpha.md',
+      'beta.md',
+      'gamma.md',
+      'missing.md',
+    ]);
+  });
+  it('keeps known metadata before missing metadata in both directions', () => {
+    const unsized = entry(6, 'unsized.md', 'markdown', 5, 1, null);
+    for (const direction of ['asc', 'desc'] as const) {
+      const dated = order([alpha, missing], 'modified', direction);
+      expect(dated.indexOf('alpha.md')).toBeLessThan(
+        dated.indexOf('missing.md'),
+      );
+      const sized = order([unsized, alpha], 'size', direction);
+      expect(sized.indexOf('alpha.md')).toBeLessThan(
+        sized.indexOf('unsized.md'),
+      );
+    }
+  });
+  it('keeps nested subsets and the sidebar order equal to the sibling order', () => {
+    const nested = [
+      entry(6, 'nested/one.md', 'markdown', 1, 2, 1, 6),
+      entry(7, 'nested/two.md', 'markdown', 2, 1, 2, 6),
+    ];
+    expect(order(nested, 'modified', 'asc')).toEqual([
+      'nested/two.md',
+      'nested/one.md',
+    ]);
+    const projection = siblings(files, gamma.id);
+    const siblingOrder = siblingTargets(projection, 'modified', 'asc');
+    expect(siblingOrder.previous?.name).toBe('beta.md');
+    expect(siblingOrder.next?.name).toBe('alpha.md');
+    expect(siblingOrder.first?.name).toBe('beta.md');
+    expect(siblingOrder.last?.name).toBe('missing.md');
+    const sidebar = order(entries, 'modified', 'asc').filter(
+      (name) => name !== 'folder',
+    );
+    expect(sidebar).toEqual(['beta.md', 'gamma.md', 'alpha.md', 'missing.md']);
+  });
+  it('never mutates the native entry order while projecting siblings', () => {
+    const source = [...entries];
+    siblingTargets(siblings(source, beta.id), 'size', 'desc');
+    expect(source.map((item) => item.name)).toEqual(
+      entries.map((item) => item.name),
+    );
+  });
+  it('derives previous, next, first and last from one array without wrapping', () => {
+    const middle = siblingTargets(siblings(files, beta.id), 'name', 'asc');
+    expect(middle.previous?.name).toBe('alpha.md');
+    expect(middle.next?.name).toBe('gamma.md');
+    expect(middle.first?.name).toBe('alpha.md');
+    expect(middle.last?.name).toBe('missing.md');
+    const first = siblingTargets(siblings(files, alpha.id), 'name', 'asc');
+    expect(first.previous).toBeUndefined();
+    expect(first.first).toBeUndefined();
+    expect(first.next?.name).toBe('beta.md');
+    expect(first.last?.name).toBe('missing.md');
+    const last = siblingTargets(siblings(files, missing.id), 'name', 'asc');
+    expect(last.next).toBeUndefined();
+    expect(last.last).toBeUndefined();
+    expect(last.previous?.name).toBe('gamma.md');
+    expect(last.first?.name).toBe('alpha.md');
+  });
+  it('offers no target for an excluded active file, a singleton or an empty list', () => {
+    for (const list of [files, [alpha], []]) {
+      const excluded = siblingTargets(siblings(list, null), 'name', 'asc');
+      expect(excluded.previous).toBeUndefined();
+      expect(excluded.next).toBeUndefined();
+      expect(excluded.first).toBeUndefined();
+      expect(excluded.last).toBeUndefined();
+    }
+    const singleton = siblingTargets(
+      siblings([alpha], alpha.id),
+      'name',
+      'asc',
+    );
+    expect(singleton.previous).toBeUndefined();
+    expect(singleton.next).toBeUndefined();
+    expect(singleton.first).toBeUndefined();
+    expect(singleton.last).toBeUndefined();
   });
 });

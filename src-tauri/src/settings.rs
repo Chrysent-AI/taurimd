@@ -22,6 +22,21 @@ pub enum Palette {
     Monokai,
     Nord,
 }
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileSortDirection {
+    #[default]
+    Asc,
+    Desc,
+}
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileSortKey {
+    #[default]
+    Name,
+    Modified,
+    Size,
+}
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsV1 {
@@ -32,6 +47,8 @@ pub struct SettingsV1 {
     pub fit_diagrams: bool,
     pub sidebar_default: bool,
     pub status_visible: bool,
+    pub file_sort_key: FileSortKey,
+    pub file_sort_direction: FileSortDirection,
 }
 impl Default for SettingsV1 {
     fn default() -> Self {
@@ -43,6 +60,8 @@ impl Default for SettingsV1 {
             fit_diagrams: true,
             sidebar_default: true,
             status_visible: true,
+            file_sort_key: FileSortKey::Name,
+            file_sort_direction: FileSortDirection::Asc,
         }
     }
 }
@@ -64,6 +83,8 @@ pub struct Patch {
     pub fit_diagrams: Option<bool>,
     pub sidebar_default: Option<bool>,
     pub status_visible: Option<bool>,
+    pub file_sort_key: Option<FileSortKey>,
+    pub file_sort_direction: Option<FileSortDirection>,
 }
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
@@ -115,7 +136,11 @@ impl SettingsStore {
                             .expect("settings serialize");
                         for (key, default) in fields.as_object_mut().expect("settings object") {
                             // This field was added to version 1; absence alone is not corruption.
-                            if key == "statusVisible" && value["settings"].get(key).is_none() {
+                            if matches!(
+                                key.as_str(),
+                                "statusVisible" | "fileSortKey" | "fileSortDirection"
+                            ) && value["settings"].get(key).is_none()
+                            {
                                 continue;
                             }
                             let candidate = &value["settings"][key];
@@ -123,6 +148,13 @@ impl SettingsStore {
                                 "mode" => serde_json::from_value::<Mode>(candidate.clone()).is_ok(),
                                 "lightPalette" | "darkPalette" => {
                                     serde_json::from_value::<Palette>(candidate.clone()).is_ok()
+                                }
+                                "fileSortKey" => {
+                                    serde_json::from_value::<FileSortKey>(candidate.clone()).is_ok()
+                                }
+                                "fileSortDirection" => {
+                                    serde_json::from_value::<FileSortDirection>(candidate.clone())
+                                        .is_ok()
                                 }
                                 "pageZoom" => candidate
                                     .as_u64()
@@ -196,6 +228,12 @@ impl SettingsStore {
         }
         if let Some(value) = patch.status_visible {
             next.settings.status_visible = value;
+        }
+        if let Some(value) = patch.file_sort_key {
+            next.settings.file_sort_key = value;
+        }
+        if let Some(value) = patch.file_sort_direction {
+            next.settings.file_sort_direction = value;
         }
         next.revision = next.revision.checked_add(1).ok_or_else(unavailable)?;
         next.notice = None;

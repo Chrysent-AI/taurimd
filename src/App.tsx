@@ -19,7 +19,7 @@ import { NavigationController } from './navigation/model';
 import { Navigation } from './navigation/Navigation';
 import { QuickOpen } from './navigation/QuickOpen';
 import { QuickOpenController } from './navigation/quick-open';
-import { binding, neighbors, type EntryIntent } from './navigation/types';
+import { binding, siblingTargets, type EntryIntent } from './navigation/types';
 import { useDiagramExport } from './diagrams/useExport';
 import { mountDiagram, type DiagramView } from './diagrams/view';
 import { mountMedia } from './reader/media';
@@ -64,6 +64,18 @@ function usableFocus(
   return (
     getComputedStyle(node).visibility !== 'hidden' &&
     getComputedStyle(node).visibility !== 'collapse'
+  );
+}
+// A focused editable control owns the keyboard. The native navigation
+// accelerators stay unavailable while it does.
+function ownsEditingKeys(node: Element | null): boolean {
+  if (!node || !(node instanceof HTMLElement)) return false;
+  if (node.isContentEditable) return true;
+  const editable = node.closest('[contenteditable]');
+  if (editable && editable.getAttribute('contenteditable') !== 'false')
+    return true;
+  return !!node.closest(
+    'input, textarea, select, [role="textbox"], [role="combobox"], [role="searchbox"], [role="spinbutton"]',
   );
 }
 export function App({ controller }: { controller: ReaderController }) {
@@ -175,6 +187,25 @@ export function App({ controller }: { controller: ReaderController }) {
   const main = useRef<HTMLElement>(null);
   const statusBar = useRef<HTMLElement>(null);
   const [composition, setComposition] = useState(false);
+  const [editing, setEditing] = useState(() =>
+    ownsEditingKeys(window.document.activeElement),
+  );
+  useEffect(() => {
+    const update = () => {
+      setEditing(ownsEditingKeys(window.document.activeElement));
+    };
+    const settle = () => {
+      queueMicrotask(update);
+    };
+    window.addEventListener('focusin', update);
+    window.addEventListener('focusout', settle);
+    window.addEventListener('focus', update);
+    return () => {
+      window.removeEventListener('focusin', update);
+      window.removeEventListener('focusout', settle);
+      window.removeEventListener('focus', update);
+    };
+  }, []);
   const [actionFeedback, setActionFeedback] = useState<{
     message: string;
     state: typeof state;
@@ -646,11 +677,32 @@ export function App({ controller }: { controller: ReaderController }) {
           sidebarDefault:
             !settingsController.getState().settings.sidebarDefault,
         });
-      } else if (payload === 'sort-alpha' || payload === 'sort-date') {
-        navigation.sort(payload === 'sort-date');
-      } else if (payload === 'previous' || payload === 'next') {
+      } else if (payload.startsWith('sort-')) {
+        const choice = payload.slice('sort-'.length);
+        if (choice === 'name' || choice === 'modified' || choice === 'size')
+          settingsController.change({ fileSortKey: choice });
+        else if (choice === 'asc' || choice === 'desc')
+          settingsController.change({ fileSortDirection: choice });
+      } else if (
+        payload === 'previous' ||
+        payload === 'next' ||
+        payload === 'first' ||
+        payload === 'last'
+      ) {
+        if (ownsEditingKeys(window.document.activeElement)) {
+          setActionFeedback({
+            message:
+              'File navigation is unavailable while a text field owns the keyboard. Try again after leaving it.',
+            state: controller.state,
+          });
+          return;
+        }
         const siblings = navigation.state.siblings;
-        const entry = neighbors(siblings, navigation.state.newest)[payload];
+        const entry = siblingTargets(
+          siblings,
+          settings.fileSortKey,
+          settings.fileSortDirection,
+        )[payload];
         if (entry && siblings)
           openNavigation({
             binding: binding(siblings.index, entry),
@@ -744,6 +796,8 @@ export function App({ controller }: { controller: ReaderController }) {
     [
       controller,
       settingsController,
+      settings.fileSortKey,
+      settings.fileSortDirection,
       focusReading,
       startExport,
       navigation,
@@ -754,16 +808,24 @@ export function App({ controller }: { controller: ReaderController }) {
   );
   useEffect(() => {
     let disposed = false;
+    const targets = siblingTargets(
+      navigationState.siblings,
+      settings.fileSortKey,
+      settings.fileSortDirection,
+    );
     void syncMenu({
       findAvailable: !!state.displayed && modalOpen.current !== 'export',
       findMatches: findOpen && findResult.total > 0 && !findResult.error,
       statusVisible: settings.statusVisible,
       sidebarVisible: settings.sidebarDefault,
       hasRoot: !!navigationState.root && !navigationState.rootBusy,
-      previous: !!neighbors(navigationState.siblings, navigationState.newest)
-        .previous,
-      next: !!neighbors(navigationState.siblings, navigationState.newest).next,
-      newest: navigationState.newest,
+      previous: !!targets.previous,
+      next: !!targets.next,
+      first: !!targets.first,
+      last: !!targets.last,
+      fileSortKey: settings.fileSortKey,
+      fileSortDirection: settings.fileSortDirection,
+      editing,
       busy:
         busy ||
         exporting.progress !== null ||
@@ -797,10 +859,13 @@ export function App({ controller }: { controller: ReaderController }) {
   }, [
     settings.statusVisible,
     settings.sidebarDefault,
+    settings.fileSortKey,
+    settings.fileSortDirection,
     navigationState,
     settings.pageZoom,
     settings.mode,
     settings.fitDiagrams,
+    editing,
     busy,
     surface,
     composition,
@@ -1540,6 +1605,11 @@ export function App({ controller }: { controller: ReaderController }) {
             jump={jump}
             visible={settings.sidebarDefault}
             siblingGroupRef={siblingGroupRef}
+            sortKey={settings.fileSortKey}
+            sortDirection={settings.fileSortDirection}
+            changeSort={(change) => {
+              settingsController.change(change);
+            }}
             section={section}
           />
         </aside>
