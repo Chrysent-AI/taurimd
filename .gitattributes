@@ -1,0 +1,10 @@
+# Every text file is LF everywhere, including Windows checkouts: the release
+# tooling parses exact LF layouts in the version files, and a CRLF checkout
+# (the default conversion on Windows runners without this file) breaks them.
+* text=auto eol=lf
+
+# Binary types present in the repository; `binary` disables all conversion.
+*.png binary
+*.ico binary
+*.icns binary
+*.wav binary

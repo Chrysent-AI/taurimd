@@ -8,7 +8,19 @@ permissions:
   contents: read
 jobs:
   quality:
-    if: ${{ github.event_name == 'pull_request' || github.event.head_commit.message =~ '^(feat|fix|test|tests)(\(.+\))?:' }}
+    # GitHub expressions have no regex match operator, so the commit gate is
+    # a startsWith over each accepted conventional-commit prefix, with and
+    # without a scope.
+    if: >-
+      ${{ github.event_name == 'pull_request' ||
+      startsWith(github.event.head_commit.message, 'feat:') ||
+      startsWith(github.event.head_commit.message, 'feat(') ||
+      startsWith(github.event.head_commit.message, 'fix:') ||
+      startsWith(github.event.head_commit.message, 'fix(') ||
+      startsWith(github.event.head_commit.message, 'test:') ||
+      startsWith(github.event.head_commit.message, 'test(') ||
+      startsWith(github.event.head_commit.message, 'tests:') ||
+      startsWith(github.event.head_commit.message, 'tests(') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -49,7 +61,16 @@ jobs:
             npm run check:ci -- --initial "$head"
           fi
   browsers:
-    if: ${{ github.event_name == 'pull_request' || github.event.head_commit.message =~ '^(feat|fix|test|tests)(\(.+\))?:' }}
+    if: >-
+      ${{ github.event_name == 'pull_request' ||
+      startsWith(github.event.head_commit.message, 'feat:') ||
+      startsWith(github.event.head_commit.message, 'feat(') ||
+      startsWith(github.event.head_commit.message, 'fix:') ||
+      startsWith(github.event.head_commit.message, 'fix(') ||
+      startsWith(github.event.head_commit.message, 'test:') ||
+      startsWith(github.event.head_commit.message, 'test(') ||
+      startsWith(github.event.head_commit.message, 'tests:') ||
+      startsWith(github.event.head_commit.message, 'tests(') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -81,7 +102,16 @@ jobs:
           path: test-results/
           retention-days: 7
   native-build:
-    if: ${{ github.event_name == 'pull_request' || github.event.head_commit.message =~ '^(feat|fix|test|tests)(\(.+\))?:' }}
+    if: >-
+      ${{ github.event_name == 'pull_request' ||
+      startsWith(github.event.head_commit.message, 'feat:') ||
+      startsWith(github.event.head_commit.message, 'feat(') ||
+      startsWith(github.event.head_commit.message, 'fix:') ||
+      startsWith(github.event.head_commit.message, 'fix(') ||
+      startsWith(github.event.head_commit.message, 'test:') ||
+      startsWith(github.event.head_commit.message, 'test(') ||
+      startsWith(github.event.head_commit.message, 'tests:') ||
+      startsWith(github.event.head_commit.message, 'tests(') }}
     needs: quality
     strategy:
       fail-fast: false

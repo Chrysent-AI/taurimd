@@ -28,6 +28,7 @@ import { publishCrate, resolveToken } from '../../scripts/publish.mjs';
 import { archive, targets } from '../../scripts/archive.mjs';
 import { preparePackage } from '../../scripts/prepare-package.mjs';
 import { command } from './fixture-command.mjs';
+import { parseExpression } from './workflow-expression.mjs';
 import { validateTag } from '../../scripts/validate-tag.mjs';
 import { load } from 'js-yaml';
 
@@ -686,15 +687,32 @@ test('branch pushes and tags run separate workflows, and the tag path builds the
     'quality',
   ]);
   // The tests run on a push to main only for a feat, fix or test commit.
+  // GitHub expressions have no regex match operator, so the commit gate is a
+  // startsWith over each accepted prefix, with and without a scope.
+  const acceptedPrefixes = [
+    'feat:',
+    'feat(',
+    'fix:',
+    'fix(',
+    'test:',
+    'test(',
+    'tests:',
+    'tests(',
+  ];
   for (const job of Object.keys(jobs)) {
     assert.match(
       jobs[job].if,
       /github\.event_name == 'pull_request'/,
       `${job} must run for a pull request`,
     );
-    assert.match(
-      jobs[job].if,
-      /head_commit\.message =~ '\^\(feat\|fix\|test\|tests\)/,
+    const prefixes = [
+      ...jobs[job].if.matchAll(
+        /startsWith\(github\.event\.head_commit\.message, '([^']+)'\)/g,
+      ),
+    ].map((match) => match[1]);
+    assert.deepEqual(
+      [...new Set(prefixes)].sort(),
+      [...acceptedPrefixes].sort(),
       `${job} must be limited to feat, fix and test commits`,
     );
   }
@@ -813,6 +831,86 @@ test('every workflow action reference is a known pinned commit', () => {
         `${file}: unknown action reference ${reference}`,
       );
   }
+});
+
+// The runner rejects unknown expression syntax when it parses the workflow
+// file, which fails the whole run before any job starts. Every expression in
+// every workflow must parse under the documented grammar before it is pushed.
+test('every workflow expression parses under the documented grammar', () => {
+  for (const file of ['checks.yml', 'release.yml']) {
+    const text = readFileSync(join(project, '.github/workflows', file), 'utf8');
+    for (const match of text.matchAll(/\$\{\{([\s\S]*?)\}\}/g))
+      assert.doesNotThrow(
+        () => parseExpression(match[1]),
+        `${file}: invalid expression: ${match[1].trim()}`,
+      );
+    const workflow = load(text);
+    const conditions = [];
+    for (const [name, job] of Object.entries(workflow.jobs ?? {})) {
+      if (typeof job.if === 'string') conditions.push([name, job.if]);
+      for (const [index, step] of (job.steps ?? []).entries())
+        if (typeof step.if === 'string')
+          conditions.push([`${name}#${index}`, step.if]);
+    }
+    assert.ok(conditions.length > 0, `${file}: no if condition found`);
+    for (const [where, condition] of conditions)
+      assert.doesNotThrow(
+        () => parseExpression(condition),
+        `${file}: invalid if condition on ${where}: ${condition}`,
+      );
+  }
+});
+
+test('the expression validator rejects what the runner would reject', () => {
+  // The operator that made GitHub reject checks.yml as an invalid workflow.
+  assert.throws(
+    () =>
+      parseExpression(
+        "github.event.head_commit.message =~ '^(feat|fix|test|tests)'",
+      ),
+    /Unexpected character "="/,
+  );
+  assert.throws(
+    () => parseExpression('unknownContext.sha'),
+    /Unknown context 'unknownContext'/,
+  );
+  assert.throws(
+    () => parseExpression("notAFunction(github.sha, 'x')"),
+    /Unknown function 'notAFunction'/,
+  );
+  assert.throws(
+    () => parseExpression("startsWith(github.event.head_commit.message, 'v'"),
+    /Expected '\)'/,
+  );
+  assert.doesNotThrow(() => parseExpression("${{ runner.os == 'Linux' }}"));
+  assert.doesNotThrow(() =>
+    parseExpression("needs.gate.outputs.runs == 'true' || !cancelled()"),
+  );
+  assert.doesNotThrow(() =>
+    parseExpression("github.event.commits.*.message != ''"),
+  );
+});
+
+// A Windows checkout without a line-ending policy materializes CRLF, which
+// breaks the exact LF layouts the release tooling parses (the v0.1.4 Windows
+// candidate failed on exactly that), so the repository pins LF text files.
+test('the repository pins LF line endings for text files', () => {
+  const attributes = readFileSync(join(project, '.gitattributes'), 'utf8');
+  const rules = new Set(
+    attributes
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('#')),
+  );
+  assert.ok(
+    rules.has('* text=auto eol=lf'),
+    'every text file must be normalized and checked out as LF',
+  );
+  for (const pattern of ['*.png', '*.ico', '*.icns', '*.wav'])
+    assert.ok(
+      rules.has(`${pattern} binary`),
+      `${pattern} must be marked binary`,
+    );
 });
 
 // One Node version runs the gate, the frontend build, the Tauri build and the
