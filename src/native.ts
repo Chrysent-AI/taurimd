@@ -126,11 +126,21 @@ export const native: NativeReader = {
     }),
   commit: (requestId) => invoke('commit_document', { requestId }),
   cancel: (requestId) => invoke('cancel_operation', { requestId }),
-  resolve: (document, relativeReference) =>
+  resolve: (document, relativeReference, binding) =>
     invoke<ResolvedMedia>('resolve_media', {
       documentId: document.documentId,
       revision: document.revision,
       relativeReference,
+      // A local resolution keeps its exact payload; a remote one carries the
+      // application-owned binding and the address travels separately.
+      ...(binding ? { remoteBinding: binding } : {}),
+    }),
+  cancelRemote: (document, slot, attempt) =>
+    invoke<null>('cancel_remote_image', {
+      documentId: document.documentId,
+      revision: document.revision,
+      slot,
+      attempt,
     }),
   activate: (requestId, document, href) =>
     invoke<Activation>('activate_link', {

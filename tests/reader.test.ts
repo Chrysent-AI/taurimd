@@ -41,10 +41,20 @@ describe('production Markdown and sanitizer boundary', () => {
       ),
     ).toBeNull();
     expect(host.textContent).toContain('safe text');
-    expect(host.textContent).toContain('Blocked img');
+    expect(host.textContent).toContain('Blocked srcset');
+    expect(host.textContent).toContain('Blocked video poster');
     expect(
       safe.resources?.every((resource) => resource.sources.length === 0),
     ).toBe(true);
+    // An HTTPS image is not a local source and never reaches the document
+    // as an attribute. It stays a candidate whose host the native owner
+    // authorizes before any request is made.
+    const image = safe.resources?.find((resource) => resource.kind === 'img');
+    expect(image?.remote).toBe('https://invalid.example/image');
+    expect(image?.warnings).toEqual([
+      'Blocked srcset — use a scoped local image source.',
+    ]);
+    expect(host.querySelector('img[src], img[srcset]')).toBeNull();
     expect(safe.actions?.map((action) => action.href)).toEqual([
       'javascript:alert(1)',
       'file:///blocked',

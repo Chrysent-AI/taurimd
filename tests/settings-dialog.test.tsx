@@ -347,6 +347,7 @@ const customized: SettingsV1 = {
   fitDiagrams: false,
   sidebarDefault: false,
   statusVisible: false,
+  remoteImageHosts: ['github.com'],
 };
 it('restores appearance defaults in one revisioned change and leaves unrelated preferences untouched', async () => {
   const { model, bridge } = await setup(customized);
@@ -372,6 +373,8 @@ it('restores appearance defaults in one revisioned change and leaves unrelated p
     statusVisible: false,
     fileSortKey: 'name',
     fileSortDirection: 'asc',
+    // The appearance reset never touches the remote image hosts.
+    remoteImageHosts: ['github.com'],
   });
   expect(screen.getByLabelText<HTMLSelectElement>('Appearance').value).toBe(
     'system',
@@ -423,5 +426,45 @@ it('keeps a failed appearance reset truthful and retries only the appearance fie
     statusVisible: false,
     fileSortKey: 'name',
     fileSortDirection: 'asc',
+    remoteImageHosts: ['github.com'],
   });
+});
+
+it('adds, refuses and removes permitted remote image hosts', async () => {
+  const { model, bridge } = await setup({ ...defaults, remoteImageHosts: [] });
+  bridge.update.mockImplementation((revision, patch) => {
+    const next = { ...model.getState().settings, ...patch };
+    return Promise.resolve({
+      status: 'committed',
+      record: record(revision + 1, next),
+    });
+  });
+  render(<SettingsHarness model={model} />);
+  expect(screen.getByText(/No host is permitted/)).toBeTruthy();
+  const entry = screen.getByLabelText('Add a host');
+  // An unusable entry is refused before it reaches the native owner.
+  fireEvent.change(entry, { target: { value: 'https://example.com/image' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Add host' }));
+  expect(bridge.update).not.toHaveBeenCalled();
+  expect(screen.getByRole('alert').textContent).toContain('bare host name');
+  // A plain host is accepted and offered to the existing settings owner.
+  fireEvent.change(entry, { target: { value: 'raw.githubusercontent.com' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Add host' }));
+  await waitFor(() => {
+    expect(model.getState().settings.remoteImageHosts).toEqual([
+      'raw.githubusercontent.com',
+    ]);
+  });
+  expect(bridge.update).toHaveBeenCalledWith(0, {
+    remoteImageHosts: ['raw.githubusercontent.com'],
+  });
+  // Removing the last host saves an empty list rather than a missing value.
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Remove raw.githubusercontent.com' }),
+  );
+  await waitFor(() => {
+    expect(model.getState().settings.remoteImageHosts).toEqual([]);
+  });
+  expect(bridge.update).toHaveBeenLastCalledWith(1, { remoteImageHosts: [] });
+  expect(screen.getByText(/No host is permitted/)).toBeTruthy();
 });

@@ -3,7 +3,8 @@ use crate::documents::read_document;
 use tauri::http::header::HeaderValue;
 
 fn serve(state: &Mutex<Session>, caller: &str, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
-    super::serve(state, caller, request, std::convert::identity)
+    let policy = crate::remote_images::Policy::new(&[]);
+    super::serve(&policy, state, caller, request, std::convert::identity)
 }
 struct TestDir(Option<tempfile::TempDir>);
 impl TestDir {
@@ -201,7 +202,10 @@ fn active_media_survives_pending_failure_cancel_but_commit_and_drop_revoke_late_
     {
         let mut session = session.lock().unwrap();
         session.commit(3).unwrap();
-        assert_eq!(publish(&late, Ok(response_before_revoke)).status(), 410);
+        assert_eq!(
+            publish(None, &late, Ok(response_before_revoke)).status(),
+            410
+        );
         assert!(insert(&mut session, late).is_err());
         assert!(session.media.is_empty());
     }
@@ -214,6 +218,54 @@ fn active_media_survives_pending_failure_cancel_but_commit_and_drop_revoke_late_
     drop(session);
     assert!(new_scope.live().is_err());
 }
+#[test]
+fn a_remote_grant_authorized_only_by_a_removed_permission_does_not_publish() {
+    let (_root, session, _local) = fixture();
+    let policy = crate::remote_images::Policy::new(&["github.com".to_owned()]);
+    let lease = policy.authorize("github.com").unwrap();
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+    let permit = semaphore.try_acquire_owned().unwrap();
+    let fetched = crate::remote_images::Fetched {
+        bytes: Arc::new(b"\x89PNG\r\n\x1a\n".to_vec()),
+        mime: "image/png",
+        hosts: vec!["github.com".to_owned()],
+        leases: vec![lease.clone()],
+        permits: Arc::new(permit),
+    };
+    let granted = scope(&session.lock().unwrap(), "reader", 1, 1).unwrap();
+    let grant = remote_grant(granted, fetched, "slot-0".to_owned(), 1);
+    let resolved = {
+        let mut session = session.lock().unwrap();
+        insert(&mut session, grant).unwrap()
+    };
+    // While the permission is live the opaque representation is served.
+    let served = super::serve(
+        &policy,
+        &session,
+        "reader",
+        request(&resolved.id, "GET", None),
+        std::convert::identity,
+    );
+    assert_eq!(served.status(), 200);
+    assert_eq!(served.headers()["Content-Type"], "image/png");
+    assert!(!served.headers().contains_key("Accept-Ranges"));
+    // A removal revokes the lease permanently, so a late result is refused.
+    {
+        let mut committed = policy.guard();
+        committed.replace_hosts(&[]);
+    }
+    assert!(!lease.live());
+    let refused = super::serve(
+        &policy,
+        &session,
+        "reader",
+        request(&resolved.id, "GET", None),
+        std::convert::identity,
+    );
+    assert_eq!(refused.status(), 410);
+    assert!(refused.body().is_empty());
+}
+
 #[test]
 fn checked_reads_never_report_short_read_as_success_and_empty_ranges_are_unsatisfiable() {
     assert!(read_body(&mut std::io::Cursor::new(b"123"), 1, 3).is_err());

@@ -357,6 +357,90 @@ fn concurrent_writers_are_serialized_and_only_one_expected_revision_commits() {
     assert_eq!(store.get().unwrap().revision, 1);
 }
 #[test]
+fn remote_image_hosts_seed_once_stay_empty_when_saved_empty_and_fall_back_per_field() {
+    let fixture = root();
+    let file = fixture.path().join("settings-v1.json");
+    let starters = remote_images::starter_host_list();
+    assert_eq!(starters.len(), 4);
+    assert!(starters.contains(&"github.com".to_owned()));
+    assert!(starters.contains(&"raw.githubusercontent.com".to_owned()));
+    assert!(starters.contains(&"camo.githubusercontent.com".to_owned()));
+    assert!(starters.contains(&"user-images.githubusercontent.com".to_owned()));
+    // A valid older record without the field is not corruption.
+    let mut legacy = serde_json::to_value(Record {
+        version: 1,
+        revision: 2,
+        settings: SettingsV1::default(),
+        notice: None,
+    })
+    .unwrap();
+    legacy["settings"]
+        .as_object_mut()
+        .unwrap()
+        .remove("remoteImageHosts");
+    fs::write(&file, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let old = SettingsStore::load(Some(fixture.path().into()))
+        .get()
+        .unwrap();
+    assert_eq!(old.settings.remote_image_hosts, starters);
+    assert!(old.notice.is_none());
+    // An invalid present value falls back for that field only.
+    legacy["settings"]["remoteImageHosts"] = json!(["not a host"]);
+    fs::write(&file, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let invalid = SettingsStore::load(Some(fixture.path().into()))
+        .get()
+        .unwrap();
+    assert_eq!(invalid.settings.remote_image_hosts, starters);
+    assert!(invalid.notice.is_some());
+    assert_eq!(invalid.settings.mode, Mode::System);
+    // A deliberately saved empty list stays empty and authorizes nothing.
+    fs::remove_file(&file).unwrap();
+    let store = SettingsStore::load(Some(fixture.path().into()));
+    assert_eq!(store.get().unwrap().revision, 0);
+    let emptied = committed(
+        store
+            .update(0, patch(json!({"remoteImageHosts": []})), |_| {})
+            .unwrap(),
+    );
+    assert!(emptied.settings.remote_image_hosts.is_empty());
+    let reloaded = SettingsStore::load(Some(fixture.path().into()))
+        .get()
+        .unwrap();
+    assert!(reloaded.settings.remote_image_hosts.is_empty());
+    assert!(reloaded.notice.is_none());
+    assert!(store.policy().authorize("github.com").is_none());
+    // An invalid entry rejects the whole patch without partial mutation.
+    assert!(
+        store
+            .update(
+                emptied.revision,
+                patch(json!({"remoteImageHosts": ["https://github.com"]})),
+                |_| {}
+            )
+            .is_err()
+    );
+    assert_eq!(store.get().unwrap(), emptied);
+    // A valid list is canonicalized, de-duplicated and sorted.
+    let canonical = committed(
+        store
+            .update(
+                emptied.revision,
+                patch(json!({"remoteImageHosts": ["Raw.GitHub.com", "raw.github.com", "raw.githubusercontent.com", "github.com"]})),
+                |_| {},
+            )
+            .unwrap(),
+    );
+    assert_eq!(
+        canonical.settings.remote_image_hosts,
+        vec![
+            "github.com".to_owned(),
+            "raw.github.com".to_owned(),
+            "raw.githubusercontent.com".to_owned()
+        ]
+    );
+}
+
+#[test]
 fn native_validation_and_dtos_match_frontend_wire_without_path_parameters() {
     let fixture = root();
     let store = SettingsStore::load(Some(fixture.path().into()));
@@ -381,7 +465,8 @@ fn native_validation_and_dtos_match_frontend_wire_without_path_parameters() {
     assert_eq!(
         serde_json::to_value(store.get().unwrap()).unwrap(),
         json!({
-            "version":1,"revision":0,"settings":{"mode":"system","lightPalette":"githubLight","darkPalette":"githubDark","pageZoom":100,"fitDiagrams":true,"sidebarDefault":true,"statusVisible":true,"fileSortKey":"name","fileSortDirection":"asc"},"notice":null
+            "version":1,"revision":0,"settings":{"mode":"system","lightPalette":"githubLight","darkPalette":"githubDark","pageZoom":100,"fitDiagrams":true,"sidebarDefault":true,"statusVisible":true,"fileSortKey":"name","fileSortDirection":"asc",
+            "remoteImageHosts":["camo.githubusercontent.com","github.com","raw.githubusercontent.com","user-images.githubusercontent.com"]},"notice":null
         })
     );
     let result = store

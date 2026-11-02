@@ -20,6 +20,49 @@ export interface SettingsV1 {
   statusVisible: boolean;
   fileSortKey: FileSortKey;
   fileSortDirection: FileSortDirection;
+  remoteImageHosts: string[];
+}
+// The confirmed starter hosts for automatic HTTPS image requests, in the
+// canonical sorted order the native owner stores them.
+export const remoteImageHosts = [
+  'camo.githubusercontent.com',
+  'github.com',
+  'raw.githubusercontent.com',
+  'user-images.githubusercontent.com',
+];
+// Mirrors the native host rule so an unusable entry is reported before it
+// is offered to the native owner: a bare domain, no scheme, port, path,
+// userinfo, wildcard or address.
+export function remoteHostProblem(entry: string): string | null {
+  const trimmed = entry.trim();
+  if (!trimmed) return 'Enter a host name.';
+  if (
+    Array.from(trimmed).some((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 32 || code === 127;
+    })
+  )
+    return 'A host name cannot contain spaces.';
+  if (/[/\\:?#@%*[\]]/.test(trimmed))
+    return 'Enter a bare host name with no scheme, port, path or wildcard.';
+  if (/[。．｡]/.test(trimmed)) return 'Enter a host name with ordinary dots.';
+  if (trimmed.startsWith('.') || trimmed.endsWith('.'))
+    return 'Enter a host name that starts and ends with a label.';
+  const labels = trimmed.split('.');
+  if (labels.some((label) => !label))
+    return 'Enter a host name with single dots between labels.';
+  if (trimmed.length > 253) return 'That host name is too long.';
+  for (const label of labels) {
+    if (label.length > 63) return 'One label of that host name is too long.';
+    // ASCII only: a Unicode label would be folded to another identity by the
+    // native owner, so the exact host must be written in its ASCII form.
+    if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label))
+      return 'A host name label may only contain ASCII letters, digits and hyphens.';
+  }
+  // A numeric last label is an address or an address disguise, never a host.
+  if (/^\d+$/.test(labels[labels.length - 1]))
+    return 'Enter a host name, not an address.';
+  return null;
 }
 export const defaults: SettingsV1 = {
   mode: 'system',
@@ -31,6 +74,7 @@ export const defaults: SettingsV1 = {
   statusVisible: true,
   fileSortKey: 'name',
   fileSortDirection: 'asc',
+  remoteImageHosts: [...remoteImageHosts],
 };
 export interface SettingsRecord {
   version: 1;

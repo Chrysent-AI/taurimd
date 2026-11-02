@@ -170,7 +170,9 @@ test('actual rich worker output, keyboard fragment/footnote round trips, hostile
       'script,img[src],video[src],source,[style],[data-action],[data-reader-slot],#root',
     ),
   ).toHaveCount(0);
-  await expect(article).toContainText('Blocked img');
+  // The HTTPS image is a remote candidate the native owner denies, so the
+  // article keeps no address and no source.
+  await expect(article).toContainText('is not permitted');
   await expect(
     article.getByText('Safe text', { exact: true }),
   ).not.toHaveAttribute('class');
@@ -252,11 +254,23 @@ test('actual rich worker output, keyboard fragment/footnote round trips, hostile
   // CSP allows inline styles for trusted Mermaid output; ordinary author styles
   // are still stripped above, so this fixture should emit no CSP violations.
   expect(violations).toEqual([]);
+  // The only native command beyond opening the document is the remote
+  // image resolution, which the native owner denies for an unpermitted
+  // host. The document itself is never fetched by the reader.
   expect(
     (await page.evaluate(() => window.readerFixture.calls())).map(
       (call) => call.command,
     ),
-  ).toEqual(['select_document', 'commit_document']);
+  ).toEqual(['select_document', 'commit_document', 'resolve_media']);
+  const remoteCall = (
+    await page.evaluate(() => window.readerFixture.calls())
+  ).find((call) => call.command === 'resolve_media');
+  expect(remoteCall?.payload).toEqual({
+    documentId: 1,
+    revision: 1,
+    relativeReference: 'https://invalid.example/image',
+    remoteBinding: { slot: '0', attempt: 1 },
+  });
   const proof = {
     engineMediaImages,
     sourceSha256: createHash('sha256')

@@ -2,6 +2,11 @@ import type { Rendered } from '../types';
 import type { ReaderController } from '../controller';
 import { mediaURL } from '../native';
 
+// One attempt number per remote request. The native owner refuses an
+// attempt that does not increase for its slot, so the counter only grows for
+// the life of this reader.
+let remoteAttempt = 0;
+
 function failureMessage(error: unknown) {
   const code =
     typeof error === 'object' && error !== null && 'code' in error
@@ -14,6 +19,41 @@ function failureMessage(error: unknown) {
   if (code === 'unsupported')
     return 'Local resource unavailable — unsupported format.';
   return 'Local resource unavailable — file missing, denied or unsupported.';
+}
+
+// The native owner reports a remote failure with its own plain wording and
+// the canonical host only; never an address, a path, a query or a document
+// location. An unrecognized failure keeps a generic remote wording.
+const remoteCodes = new Set([
+  'blockedHost',
+  'invalidRemoteUrl',
+  'redirectBlocked',
+  'redirectLimit',
+  'remoteTimeout',
+  'remoteTls',
+  'remoteNetwork',
+  'remoteStatus',
+  'unsupportedImage',
+  'remoteBudget',
+  'stale',
+]);
+function remoteFailureMessage(error: unknown) {
+  if (typeof error === 'object' && error !== null && 'code' in error) {
+    const code = error.code;
+    const message = 'message' in error ? error.message : null;
+    if (
+      typeof code === 'string' &&
+      remoteCodes.has(code) &&
+      typeof message === 'string' &&
+      message
+    )
+      return message;
+  }
+  return 'Remote image unavailable — the image could not be loaded.';
+}
+interface Candidate {
+  reference: string;
+  remote: boolean;
 }
 export function mountMedia(
   host: HTMLElement,
@@ -71,21 +111,48 @@ export function mountMedia(
       });
       if (element instanceof HTMLMediaElement) element.load();
     });
+    // At most one remote image per element. The attempt number is allocated
+    // before the request starts, so a retirement can retire that attempt.
+    const binding =
+      resource.remote && element instanceof HTMLImageElement
+        ? { slot: resource.slot, attempt: ++remoteAttempt }
+        : undefined;
+    if (binding) {
+      cleanup.push(() => {
+        // A replaced document has nothing left to cancel; the native side
+        // owns the attempt and its outcome either way.
+        void controller
+          .cancelRemote(document, binding.slot, binding.attempt)
+          .catch(() => {});
+      });
+    }
+    const candidates: Candidate[] = [
+      ...resource.sources.map((reference) => ({ reference, remote: false })),
+      ...(binding && resource.remote
+        ? [{ reference: resource.remote, remote: true }]
+        : []),
+    ];
     const resolve = async (
-      reference: string,
+      candidate: Candidate,
       kind: 'image' | 'audio' | 'video',
     ) => {
-      const result = await controller.resolve(document, reference);
+      const result = await controller.resolve(
+        document,
+        candidate.reference,
+        candidate.remote ? binding : undefined,
+      );
       const compatible =
         kind === 'image'
           ? result.mime.startsWith('image/')
           : /^(audio|video)\//.test(result.mime);
       if (!compatible)
-        throw new Error('The local resource has an incompatible media type.');
+        throw new Error('The resource has an incompatible media type.');
+      // The bytes are published through the opaque reader-media grant. The
+      // document address never reaches a connected DOM attribute.
       return { url: mediaURL(result), mime: result.mime };
     };
     if (resource.poster && element instanceof HTMLVideoElement) {
-      void resolve(resource.poster, 'image')
+      void resolve({ reference: resource.poster, remote: false }, 'image')
         .then(({ url }) => {
           if (!retired) element.poster = url;
         })
@@ -96,10 +163,10 @@ export function mountMedia(
           }
         });
     }
-    if (!resource.sources.length) continue;
+    if (!candidates.length) continue;
     void Promise.allSettled(
-      resource.sources.map((reference) =>
-        resolve(reference, resource.kind === 'img' ? 'image' : resource.kind),
+      candidates.map((candidate) =>
+        resolve(candidate, resource.kind === 'img' ? 'image' : resource.kind),
       ),
     )
       .then((results) => {
@@ -107,13 +174,37 @@ export function mountMedia(
         const available = results.flatMap((result) =>
           result.status === 'fulfilled' ? [result.value] : [],
         );
-        const denied = results.filter((result) => result.status === 'rejected');
-        if (denied.length)
+        const failures = results.flatMap((result, index) =>
+          result.status === 'rejected'
+            ? [
+                {
+                  remote: candidates[index].remote,
+                  reason: result.reason as unknown,
+                },
+              ]
+            : [],
+        );
+        const localFailures = failures.filter((failure) => !failure.remote);
+        const remoteFailures = failures.filter((failure) => failure.remote);
+        if (localFailures.length)
           messages.push(
             'Some local sources are missing, denied or unsupported.',
           );
+        if (remoteFailures.length && available.length)
+          messages.push(
+            ...remoteFailures.map((failure) =>
+              remoteFailureMessage(failure.reason),
+            ),
+          );
         if (!available.length) {
-          show(denied.map((result) => failureMessage(result.reason)).join(' '));
+          show(
+            [
+              ...localFailures.map((failure) => failureMessage(failure.reason)),
+              ...remoteFailures.map((failure) =>
+                remoteFailureMessage(failure.reason),
+              ),
+            ].join(' '),
+          );
           return;
         }
         if (element instanceof HTMLImageElement) element.src = available[0].url;

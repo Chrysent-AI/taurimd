@@ -1,6 +1,11 @@
 import createDOMPurify from 'dompurify';
 import type { ParsedMarkdown, Reading } from './parse';
-import { localResource, type Resource, type ReadingAction } from './resources';
+import {
+  localResource,
+  remoteImageResource,
+  type Resource,
+  type ReadingAction,
+} from './resources';
 const DOMPurify = createDOMPurify(window);
 // The hook sees nodes only inside DOMPurify's inert document. No URL/style
 // attribute survives to a connected node; associations are rebuilt from this map.
@@ -135,8 +140,19 @@ export function sanitizeReading(
       warnings.push(
         'Caption track unavailable — this resource type is not supported.',
       );
+    let remote: string | undefined;
     const permitted = sources.filter((reference) => {
       if (localResource(reference)) return true;
+      // An HTTPS image may be delivered by the native owner when its host is
+      // permitted. That decision, and the redirect checks, happen natively
+      // before any request, so a denied host never reaches the network.
+      if (kind === 'img' && !remote) {
+        const candidate = remoteImageResource(reference);
+        if (candidate) {
+          remote = candidate;
+          return false;
+        }
+      }
       warnings.push(
         `Blocked ${kind}: automatic remote or unsafe resource disabled (${reference || 'empty reference'}).`,
       );
@@ -159,14 +175,25 @@ export function sanitizeReading(
     }
     for (const source of element.querySelectorAll('source')) source.remove();
     const slot = String(resources.length);
-    resources.push({ slot, kind, sources: permitted, poster, warnings });
+    resources.push({
+      slot,
+      kind,
+      sources: permitted,
+      poster,
+      warnings,
+      remote,
+    });
     // These adapter-created attributes are never taken from author data attrs.
     element.setAttribute('data-reader-media', slot);
-    if (kind === 'img' && attrs.alt === undefined)
-      element.setAttribute(
-        'alt',
-        `Local image: ${sources[0] || 'unnamed resource'}`,
-      );
+    if (kind === 'img' && attrs.alt === undefined) {
+      // A remote address never reaches a connected DOM attribute.
+      const label = permitted.length
+        ? `Local image: ${permitted[0]}`
+        : remote
+          ? 'Remote image'
+          : `Local image: ${sources[0] || 'unnamed resource'}`;
+      element.setAttribute('alt', label);
+    }
     if (kind !== 'img')
       element.setAttribute(
         'aria-label',
@@ -188,9 +215,11 @@ export function sanitizeReading(
     feedback.setAttribute('data-reader-media-feedback', slot);
     feedback.textContent = [
       ...warnings,
-      permitted.length
-        ? `Loading local ${kind}…`
-        : `${kind} unavailable — no permitted local source.`,
+      remote && !permitted.length
+        ? `Loading remote ${kind}…`
+        : permitted.length
+          ? `Loading local ${kind}…`
+          : `${kind} unavailable — no permitted local source.`,
     ].join(' ');
     element.after(feedback);
   }

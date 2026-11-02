@@ -19,7 +19,9 @@ test('real worker and sanitizer do not execute or fetch document content', async
   });
   await expect(page.locator('#reading h1')).toHaveText('Safe title');
   await expect(page.locator('#reading input')).toBeDisabled();
-  await expect(page.locator('#reading')).toContainText('Blocked img');
+  // An HTTPS image is a classified remote candidate. This surface only
+  // parses, so no request is made and no address reaches an attribute.
+  await expect(page.locator('#reading')).toContainText('Loading remote img');
   await expect(page.locator('#reading a')).toHaveAttribute('href', '#');
   await expect(
     page.locator(
