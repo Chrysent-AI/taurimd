@@ -79,6 +79,11 @@ pub struct GrantedDocument {
     pub snapshot: Snapshot,
 }
 
+/// One in-flight remote image attempt owned by this reader.
+pub struct RemoteAttempt {
+    pub attempt: u32,
+    pub signal: Arc<crate::remote_images::JobSignal>,
+}
 #[cfg(windows)]
 pub(crate) fn validate_windows_path(path: &Path) -> Result<(), AppError> {
     use std::{
@@ -217,6 +222,7 @@ pub struct Session {
     active: Option<GrantedDocument>,
     pub(crate) media_lifetime: Arc<AtomicBool>,
     pub(crate) media: std::collections::HashMap<String, crate::media::Grant>,
+    pub(crate) remote: std::collections::HashMap<String, RemoteAttempt>,
 }
 impl Session {
     pub fn enrolled(owner: String) -> Self {
@@ -240,6 +246,72 @@ impl Session {
     pub fn close_reads(&self) {
         self.cancel.store(true, Ordering::Relaxed);
         self.media_lifetime.store(true, Ordering::Release);
+        for attempt in self.remote.values() {
+            attempt.signal.cancel();
+        }
+    }
+    /// Registers a remote image attempt for one sanitizer slot. A newer
+    /// attempt retires the older one; an attempt number that does not
+    /// increase is refused so work is never reused within this reader.
+    pub fn remote_start(
+        &mut self,
+        slot: &str,
+        attempt: u32,
+    ) -> Result<(u32, Arc<crate::remote_images::JobSignal>), AppError> {
+        if slot.is_empty() {
+            return Err(Self::stale());
+        }
+        if let Some(existing) = self.remote.get(slot) {
+            if existing.attempt >= attempt {
+                return Err(Self::stale());
+            }
+            existing.signal.cancel();
+        }
+        let signal = crate::remote_images::JobSignal::new();
+        self.remote.insert(
+            slot.to_owned(),
+            RemoteAttempt {
+                attempt,
+                signal: signal.clone(),
+            },
+        );
+        Ok((attempt, signal))
+    }
+    /// Installs the owned task of a registered attempt. A task whose attempt
+    /// is no longer current is aborted instead.
+    pub fn remote_attach(
+        &mut self,
+        slot: &str,
+        attempt: u32,
+        handle: tauri::async_runtime::JoinHandle<()>,
+    ) {
+        match self.remote.get(slot) {
+            Some(entry) if entry.attempt == attempt => entry.signal.attach(handle),
+            _ => handle.abort(),
+        }
+    }
+    /// Whether the given attempt is still the current one for its slot.
+    pub fn remote_live(&self, slot: &str, attempt: u32) -> bool {
+        self.remote
+            .get(slot)
+            .is_some_and(|entry| entry.attempt == attempt && !entry.signal.cancelled())
+    }
+    /// Retires only the matching attempt. A stale cancel cannot retire a
+    /// newer attempt.
+    pub fn remote_cancel(&mut self, slot: &str, attempt: u32) -> bool {
+        match self.remote.get(slot) {
+            Some(entry) if entry.attempt == attempt => {
+                entry.signal.cancel();
+                self.remote.remove(slot);
+                true
+            }
+            _ => false,
+        }
+    }
+    /// Drops remote grants whose permission was revoked and releases their
+    /// retained bytes.
+    pub fn prune_remote(&mut self) {
+        self.media.retain(|_, grant| grant.remote_leases_live());
     }
     pub fn begin(&mut self, request: u32) -> Result<Arc<AtomicBool>, AppError> {
         if self.closed || request <= self.latest {
@@ -314,6 +386,10 @@ impl Session {
         self.media_lifetime.store(true, Ordering::Release);
         self.media.clear();
         self.media_lifetime = Arc::new(AtomicBool::new(false));
+        for attempt in self.remote.values() {
+            attempt.signal.cancel();
+        }
+        self.remote.clear();
         self.active = Some(document);
         Ok(name)
     }

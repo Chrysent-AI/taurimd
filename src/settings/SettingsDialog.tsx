@@ -1,7 +1,8 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   defaults,
   palettes,
+  remoteHostProblem,
   type SettingsController,
   type SettingsV1,
 } from './model';
@@ -42,6 +43,98 @@ export function SettingsFeedback({
         </p>
       )}
     </section>
+  );
+}
+export function RemoteImageHosts({
+  controller,
+  settings,
+}: {
+  controller: SettingsController;
+  settings: SettingsV1;
+}) {
+  const [entry, setEntry] = useState('');
+  const [problem, setProblem] = useState<string | null>(null);
+  const add = () => {
+    const failure = remoteHostProblem(entry);
+    if (failure) {
+      setProblem(failure);
+      return;
+    }
+    const host = entry.trim().toLowerCase();
+    if (settings.remoteImageHosts.includes(host)) {
+      setProblem('That host is already permitted.');
+      return;
+    }
+    setProblem(null);
+    setEntry('');
+    controller.change({
+      remoteImageHosts: [...settings.remoteImageHosts, host].sort(),
+    });
+  };
+  return (
+    <fieldset>
+      <legend>Remote image hosts</legend>
+      <p className="hint">
+        A permitted host may receive an automatic HTTPS image request when a
+        document contains an image from it. Images from other hosts stay
+        blocked, and no document content, path or other resource is sent.
+      </p>
+      {settings.remoteImageHosts.length ? (
+        <ul>
+          {settings.remoteImageHosts.map((host) => (
+            <li key={host}>
+              <span>{host}</span>{' '}
+              <button
+                onClick={() => {
+                  controller.change({
+                    remoteImageHosts: settings.remoteImageHosts.filter(
+                      (permitted) => permitted !== host,
+                    ),
+                  });
+                }}
+              >
+                Remove {host}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="hint">
+          No host is permitted, so every remote image stays blocked.
+        </p>
+      )}
+      <div className="commands">
+        <label htmlFor="remote-image-host">Add a host</label>
+        <input
+          id="remote-image-host"
+          type="text"
+          value={entry}
+          onChange={(event) => {
+            setEntry(event.target.value);
+            setProblem(null);
+          }}
+          onKeyDown={(event) => {
+            // An IME composition owns Enter until it is finished.
+            if (
+              event.nativeEvent.isComposing ||
+              // eslint-disable-next-line @typescript-eslint/no-deprecated -- Legacy IME engines can report 229 without isComposing.
+              event.keyCode === 229
+            )
+              return;
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              add();
+            }
+          }}
+        />
+        <button onClick={add}>Add host</button>
+      </div>
+      {problem && (
+        <p role="alert" className="warning">
+          {problem}
+        </p>
+      )}
+    </fieldset>
   );
 }
 export function SettingsDialog({
@@ -171,6 +264,7 @@ export function SettingsDialog({
         Fit updates current diagrams without rerendering them. Sidebar
         visibility applies immediately and is remembered.
       </p>
+      <RemoteImageHosts controller={controller} settings={settings} />
       {children}
     </>
   );

@@ -34,6 +34,7 @@ import {
   type SettingsRecord,
   type SettingsPatch,
 } from '../../src/settings/model';
+import type { RemoteBinding } from '../../src/types';
 
 type Command =
   | 'pending_document'
@@ -56,6 +57,7 @@ type Command =
   | 'get_settings'
   | 'update_settings'
   | 'resolve_media'
+  | 'cancel_remote_image'
   | 'present_reader'
   | 'activate_link'
   | 'begin_export'
@@ -73,6 +75,7 @@ const openings: { command: string; dialog: boolean; focused: string | null }[] =
 const calls: Call[] = [];
 const settled: Command[] = [];
 const replies = new Map<Command, Reply[]>();
+const remoteReplies: Outcome[] = [];
 const pending = new Map<string, (outcome: Outcome) => void>();
 let indexSequence = 0;
 function indexSnapshot(
@@ -231,6 +234,37 @@ function retain(record: SettingsRecord) {
   }
 }
 
+// The browser-only double of the native remote-image owner. It answers a
+// remote resolution from the same committed host list the Settings dialog
+// writes, so an unpermitted host is denied before any request is made.
+const remoteImageId = '0'.repeat(31) + '9';
+function remoteHost(reference: string) {
+  const rest = reference.replace(/^https:\/\//i, '');
+  const end = rest.search(/[/?#]/);
+  return (end === -1 ? rest : rest.slice(0, end)).toLowerCase();
+}
+function remoteOutcome(payload: unknown) {
+  const request = payload as {
+    relativeReference: string;
+    remoteBinding: RemoteBinding;
+  };
+  const host = remoteHost(request.relativeReference);
+  if (!settings.settings.remoteImageHosts.includes(host)) {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- Tauri rejects a command with the serialized AppError DTO.
+    throw {
+      code: 'blockedHost',
+      message: `Image blocked — ${host} is not permitted. Manage hosts in Settings.`,
+    };
+  }
+  return {
+    id: remoteImageId,
+    mime: 'image/svg+xml',
+    hosts: [host],
+    slot: request.remoteBinding.slot,
+    attempt: request.remoteBinding.attempt,
+  };
+}
+
 // This is a browser-only backend double. It does not read files or emulate
 // native grants, permissions, menus, dialogs or source-byte preservation.
 let incoming: DocumentRequest | null = new URL(location.href).searchParams.has(
@@ -316,6 +350,7 @@ mockIPC(async (command, payload) => {
       'get_settings',
       'update_settings',
       'resolve_media',
+      'cancel_remote_image',
       'activate_link',
       'present_reader',
       'begin_export',
@@ -337,7 +372,13 @@ mockIPC(async (command, payload) => {
     });
   calls.push({ command: name, payload: structuredClone(payload) });
   try {
-    const reply = replies.get(name)?.shift();
+    const binding =
+      name === 'resolve_media'
+        ? (payload as { remoteBinding?: RemoteBinding }).remoteBinding
+        : undefined;
+    // A remote resolution owns its own queue: the local media queue keeps
+    // its exact order.
+    const reply = binding ? undefined : replies.get(name)?.shift();
     const applyPresentation = () => {
       const next = (
         payload as { presentation: MenuPresentation & { sequence: number } }
@@ -377,6 +418,18 @@ mockIPC(async (command, payload) => {
     if (!reply && (name === 'commit_document' || name === 'cancel_operation'))
       return null;
     if (!reply && name === 'get_settings') return structuredClone(settings);
+    if (!reply && name === 'cancel_remote_image') return null;
+    if (!reply && name === 'resolve_media' && binding) {
+      const queued = remoteReplies.shift();
+      if (queued) {
+        if ('error' in queued) {
+          // eslint-disable-next-line @typescript-eslint/only-throw-error -- Tauri rejects a command with the serialized AppError DTO.
+          throw queued.error;
+        }
+        return structuredClone(queued.value);
+      }
+      return remoteOutcome(payload);
+    }
     if (!reply && name === 'update_settings') {
       const args = payload as {
         expectedRevision: number;
@@ -533,6 +586,9 @@ const fixture = {
     const queue = replies.get(command) ?? [];
     queue.push(reply);
     replies.set(command, queue);
+  },
+  enqueueRemote(reply: Outcome) {
+    remoteReplies.push(reply);
   },
   release(key: string, outcome: Outcome) {
     const resolve = pending.get(key);

@@ -158,13 +158,25 @@ test('untrusted markup cannot invoke the native JS bridge from the actual shell'
   await expect(
     article.getByRole('heading', { name: 'Safe reading' }),
   ).toBeVisible();
-  await expect(article).toContainText('Blocked img');
+  // The HTTPS image is a remote candidate: the native owner is asked for it
+  // and denies the unpermitted host, so the document keeps no source and
+  // the reader stays inert.
+  await expect(article).toContainText('is not permitted');
   await expect(
     article.locator('script, img[src], a[href]:not([href="#"]), [onerror]'),
   ).toHaveCount(0);
   expect(await page.evaluate(() => window.readerFixture.calls())).toEqual([
     { command: 'select_document', payload: { requestId: 1 } },
     { command: 'commit_document', payload: { requestId: 1 } },
+    {
+      command: 'resolve_media',
+      payload: {
+        documentId: 1,
+        revision: 1,
+        relativeReference: 'https://invalid.example/image',
+        remoteBinding: { slot: '0', attempt: 1 },
+      },
+    },
   ]);
   expect(requests).toEqual([]);
 });

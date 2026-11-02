@@ -23,6 +23,7 @@ fn main() {
             "get_settings",
             "update_settings",
             "resolve_media",
+            "cancel_remote_image",
             "activate_link",
             "present_reader",
             "begin_export",

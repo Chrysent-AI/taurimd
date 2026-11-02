@@ -26,6 +26,7 @@
     "allow-get-settings",
     "allow-update-settings",
     "allow-resolve-media",
+    "allow-cancel-remote-image",
     "allow-activate-link",
     "allow-present-reader",
     "allow-begin-export",

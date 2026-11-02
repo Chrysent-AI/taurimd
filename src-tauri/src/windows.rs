@@ -57,6 +57,19 @@ pub fn handle(app: &AppHandle, label: &str) -> Result<Handle, AppError> {
 pub fn reader(window: &WebviewWindow) -> Result<Handle, AppError> {
     handle(window.app_handle(), window.label())
 }
+/// Drops remote grants whose host permission was revoked and releases their
+/// retained bytes across every enrolled reader.
+pub fn prune_remote(app: &AppHandle) {
+    let registry = app.state::<Windows>();
+    let Ok(windows) = registry.lock() else {
+        return;
+    };
+    for reader in windows.readers.values() {
+        if let Ok(mut session) = reader.session.lock() {
+            session.prune_remote();
+        }
+    }
+}
 impl Registry {
     fn detach(&mut self, label: &str) -> Option<Reader> {
         let reader = self.readers.remove(label)?;

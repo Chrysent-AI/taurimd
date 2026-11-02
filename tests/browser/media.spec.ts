@@ -288,9 +288,22 @@ test('real decode/controls/seek and visible failures retain nodes, focus and pla
   await expect(
     page.locator('article track, article [src*="captions.vtt"]'),
   ).toHaveCount(0);
+  // An HTTPS image from an unpermitted host is requested from the native
+  // owner and denied there. The document keeps no address and no source.
   await expect(page.locator('[data-reader-media-feedback="4"]')).toContainText(
-    'Blocked img',
+    'is not permitted',
   );
+  const remoteImage = page.locator('article img').last();
+  await expect(remoteImage).not.toHaveAttribute('src');
+  expect(
+    await page
+      .getByRole('article')
+      .evaluate((article) =>
+        [...article.querySelectorAll('*')].flatMap((element) =>
+          [...element.attributes].map((attribute) => attribute.value),
+        ),
+      ),
+  ).not.toContain('https://invalid.example/image');
   const node = await audio.elementHandle();
   await page.getByText('Reading disclosure', { exact: true }).click();
   const link = page.getByRole('link', { name: 'External', exact: true });
@@ -370,11 +383,26 @@ test('real decode/controls/seek and visible failures retain nodes, focus and pla
   await expect(link).toBeFocused();
   expect(await page.evaluate(() => getSelection()?.toString())).toBe(selected);
   expect(await page.evaluate(() => window.readerFixture.parses())).toBe(1);
+  const mediaCalls = (
+    await page.evaluate(() => window.readerFixture.calls())
+  ).filter((call) => call.command === 'resolve_media');
+  // Six local sources and one remote image, which carries the application
+  // owned binding instead of a local reference.
+  expect(mediaCalls).toHaveLength(7);
+  expect(mediaCalls[6].payload).toEqual({
+    documentId: 1,
+    revision: 1,
+    relativeReference: 'https://invalid.example/image',
+    remoteBinding: { slot: '4', attempt: 1 },
+  });
   expect(
-    (await page.evaluate(() => window.readerFixture.calls())).filter(
-      (call) => call.command === 'resolve_media',
-    ),
-  ).toHaveLength(6);
+    mediaCalls
+      .slice(0, 6)
+      .every(
+        (call) =>
+          !('remoteBinding' in (call.payload as Record<string, unknown>)),
+      ),
+  ).toBe(true);
   expect(unexpected).toEqual([]);
   await expect(
     page.locator(
@@ -593,9 +621,11 @@ test('last-good media survives pending/fail/cancel; same text/new context replac
   const resolves = (
     await page.evaluate(() => window.readerFixture.calls())
   ).filter((call) => call.command === 'resolve_media');
+  // The first document resolves seven sources: one local image, three audio
+  // sources, two videos and the remote image the native owner denied.
   expect(
     resolves
-      .slice(6)
+      .slice(7)
       .every(
         (call) => (call.payload as { documentId: number }).documentId === 5,
       ),

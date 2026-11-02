@@ -193,11 +193,13 @@ test('real offline engine renders ordered flow sequence class duplicates and loc
     flow,
   );
   expect(requests).toEqual([]);
+  // The only native command beyond opening the document is the remote image
+  // resolution, which the native owner denies for an unpermitted host.
   expect(
     (await page.evaluate(() => window.readerFixture.calls())).map(
       (call) => call.command,
     ),
-  ).toEqual(['select_document', 'commit_document']);
+  ).toEqual(['select_document', 'commit_document', 'resolve_media']);
   const ids = await page
     .locator('.diagram svg')
     .evaluateAll((items) => items.map((item) => item.id));

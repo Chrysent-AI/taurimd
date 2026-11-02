@@ -38,6 +38,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "=3.27.0"
 zip = { version = "=9.0.1", default-features = false }
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls-no-provider", "charset", "http2"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+tokio = { version = "=1.54.1", default-features = false, features = ["sync", "time"] }
+quick-xml = { version = "=0.42.0", default-features = false }
 same-file = "=1.0.6"
 notify = "=8.2.0"
 

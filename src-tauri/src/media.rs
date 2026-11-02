@@ -1,8 +1,9 @@
 use crate::{
     documents::{AppError, Session, contained_file},
     links,
+    remote_images::{Fetched, HostLease, Policy, PolicyState},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
@@ -13,6 +14,7 @@ use std::{
     },
 };
 use tauri::http::{Request, Response, StatusCode};
+use tokio::sync::OwnedSemaphorePermit;
 
 #[derive(Clone)]
 pub struct Scope {
@@ -28,17 +30,71 @@ impl Scope {
         }
     }
 }
+/// The bytes of one authorized remote image, kept with the permission leases
+/// that authorized it and the budget permits that retain them.
+#[derive(Clone)]
+pub struct RemotePayload {
+    bytes: Arc<Vec<u8>>,
+    mime: &'static str,
+    hosts: Vec<String>,
+    leases: Vec<Arc<HostLease>>,
+    permits: Option<Arc<OwnedSemaphorePermit>>,
+    slot: String,
+    attempt: u32,
+}
+impl Drop for RemotePayload {
+    fn drop(&mut self) {
+        // The retained bytes return to the shared application-wide budget
+        // when this payload is released.
+        self.permits.take();
+    }
+}
+
+/// Where a granted representation came from. Local files keep their existing
+/// path and range behavior; remote bytes are never written to disk.
+#[derive(Clone)]
+pub enum Source {
+    File { path: PathBuf, mime: &'static str },
+    Remote(RemotePayload),
+}
 #[derive(Clone)]
 pub struct Grant {
     scope: Scope,
-    path: PathBuf,
-    mime: &'static str,
+    source: Source,
+}
+impl Grant {
+    pub fn is_remote(&self) -> bool {
+        matches!(self.source, Source::Remote(_))
+    }
+    /// Whether every lease of a remote grant is still live. Local grants are
+    /// always live.
+    pub fn remote_leases_live(&self) -> bool {
+        match &self.source {
+            Source::File { .. } => true,
+            Source::Remote(payload) => payload.leases.iter().all(|lease| lease.live()),
+        }
+    }
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Resolved {
     pub id: String,
     pub mime: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hosts: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u32>,
+}
+
+/// The application-owned binding of one remote image attempt. It carries no
+/// URL: the reference travels separately and is authorized natively.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteBinding {
+    pub slot: String,
+    pub attempt: u32,
 }
 pub fn scope(session: &Session, label: &str, id: u32, revision: u32) -> Result<Scope, AppError> {
     session.caller(label)?;
@@ -64,7 +120,26 @@ pub fn resolve(scope: Scope, reference: &str) -> Result<Grant, AppError> {
         return Err(AppError::new("unsupported", "Not a regular media file."));
     }
     scope.live()?;
-    Ok(Grant { scope, path, mime })
+    Ok(Grant {
+        scope,
+        source: Source::File { path, mime },
+    })
+}
+
+/// Wraps already validated remote bytes with the leases that authorized them.
+pub fn remote_grant(scope: Scope, fetched: Fetched, slot: String, attempt: u32) -> Grant {
+    Grant {
+        scope,
+        source: Source::Remote(RemotePayload {
+            bytes: fetched.bytes,
+            mime: fetched.mime,
+            hosts: fetched.hosts,
+            leases: fetched.leases,
+            permits: Some(fetched.permits),
+            slot,
+            attempt,
+        }),
+    }
 }
 pub fn insert(session: &mut Session, grant: Grant) -> Result<Resolved, AppError> {
     grant.scope.live()?;
@@ -76,9 +151,21 @@ pub fn insert(session: &mut Session, grant: Grant) -> Result<Resolved, AppError>
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
         .map_err(|_| AppError::new("resourceFailure", "Media identifiers exhausted."))?;
     let id = format!("{number:032x}");
+    let (mime, hosts, slot, attempt) = match &grant.source {
+        Source::File { mime, .. } => (*mime, None, None, None),
+        Source::Remote(payload) => (
+            payload.mime,
+            Some(payload.hosts.clone()),
+            Some(payload.slot.clone()),
+            Some(payload.attempt),
+        ),
+    };
     let result = Resolved {
         id: id.clone(),
-        mime: grant.mime,
+        mime,
+        hosts,
+        slot,
+        attempt,
     };
     session.media.insert(id, grant);
     Ok(result)
@@ -109,6 +196,7 @@ fn response(
     length: u64,
     body: Vec<u8>,
     range: Option<String>,
+    ranges: bool,
 ) -> Response<Vec<u8>> {
     let mut response = Response::new(body);
     *response.status_mut() = status;
@@ -118,7 +206,9 @@ fn response(
     headers.insert("Content-Length", length.into());
     headers.insert("X-Content-Type-Options", "nosniff".parse().unwrap());
     headers.insert("Cache-Control", "no-store".parse().unwrap());
-    headers.insert("Accept-Ranges", "bytes".parse().unwrap());
+    if ranges {
+        headers.insert("Accept-Ranges", "bytes".parse().unwrap());
+    }
     headers.insert(
         "Content-Security-Policy",
         "default-src 'none'; sandbox".parse().unwrap(),
@@ -132,7 +222,7 @@ fn response(
     response
 }
 fn error(status: StatusCode) -> Response<Vec<u8>> {
-    response(status, "text/plain", 0, Vec::new(), None)
+    response(status, "text/plain", 0, Vec::new(), None, true)
 }
 #[derive(Debug, PartialEq)]
 enum RangeError {
@@ -188,9 +278,45 @@ fn representation(
     request: &Request<Vec<u8>>,
     grant: &Grant,
 ) -> Result<Response<Vec<u8>>, AppError> {
+    match &grant.source {
+        Source::File { path, mime } => file_representation(request, grant, path, mime),
+        Source::Remote(payload) => {
+            grant.scope.live()?;
+            let length = payload.bytes.len() as u64;
+            if request.method() == "HEAD" {
+                return Ok(response(
+                    StatusCode::OK,
+                    payload.mime,
+                    length,
+                    Vec::new(),
+                    None,
+                    false,
+                ));
+            }
+            // A remote representation is a complete immutable body: it never
+            // advertises or answers byte ranges.
+            let bytes = payload.bytes.as_ref().clone();
+            Ok(response(
+                StatusCode::OK,
+                payload.mime,
+                length,
+                bytes,
+                None,
+                false,
+            ))
+        }
+    }
+}
+
+fn file_representation(
+    request: &Request<Vec<u8>>,
+    grant: &Grant,
+    path: &std::path::Path,
+    kind: &str,
+) -> Result<Response<Vec<u8>>, AppError> {
     grant.scope.live()?;
-    let path = contained_file(&grant.path, Some(&grant.scope.parent))?;
-    if mime(&path) != Some(grant.mime) {
+    let path = contained_file(path, Some(&grant.scope.parent))?;
+    if mime(&path) != Some(kind) {
         return Err(AppError::new("denied", "Media type changed."));
     }
     let mut file = File::open(path)?;
@@ -202,10 +328,11 @@ fn representation(
     if request.method() == "HEAD" {
         return Ok(response(
             StatusCode::OK,
-            grant.mime,
+            kind,
             length,
             Vec::new(),
             None,
+            true,
         ));
     }
     let mut start = 0;
@@ -239,21 +366,23 @@ fn representation(
                 Err(RangeError::Unsatisfiable) => {
                     return Ok(response(
                         StatusCode::RANGE_NOT_SATISFIABLE,
-                        grant.mime,
+                        kind,
                         0,
                         Vec::new(),
                         Some(format!("bytes */{length}")),
+                        true,
                     ));
                 }
             }
         }
     }
     let bytes = read_body(&mut file, start, count)?;
-    Ok(response(status, grant.mime, count, bytes, content_range))
+    Ok(response(status, kind, count, bytes, content_range, true))
 }
 // This helper is called by the registered handler. File work takes no session
 // lock. The final synchronous responder handoff serializes with commit/revocation.
 pub fn serve<T>(
+    policy: &Policy,
     state: &Mutex<Session>,
     caller: &str,
     request: Request<Vec<u8>>,
@@ -291,9 +420,25 @@ pub fn serve<T>(
         return respond(error(StatusCode::NOT_FOUND));
     };
     let result = representation(&request, &grant);
+    if grant.is_remote() {
+        // A remote representation is published under the committed-policy
+        // guard and then the session guard, in that order, so a removal that
+        // wins the race denies the delivery.
+        let committed = policy.guard();
+        let publication = state.lock();
+        let response = if publication.is_ok() {
+            publish(Some(&committed), &grant, result)
+        } else {
+            error(StatusCode::INTERNAL_SERVER_ERROR)
+        };
+        let delivered = respond(response);
+        drop(publication);
+        drop(committed);
+        return delivered;
+    }
     let publication = state.lock();
     let response = if publication.is_ok() {
-        publish(&grant, result)
+        publish(None, &grant, result)
     } else {
         error(StatusCode::INTERNAL_SERVER_ERROR)
     };
@@ -302,11 +447,24 @@ pub fn serve<T>(
     drop(publication);
     delivered
 }
-fn publish(grant: &Grant, result: Result<Response<Vec<u8>>, AppError>) -> Response<Vec<u8>> {
+fn publish(
+    committed: Option<&PolicyState>,
+    grant: &Grant,
+    result: Result<Response<Vec<u8>>, AppError>,
+) -> Response<Vec<u8>> {
     // Revocation cannot retract bytes already buffered by a webview. It denies
     // late work here and all subsequent requests; pending-read cancel is separate.
     if grant.scope.live().is_err() {
         return error(StatusCode::GONE);
+    }
+    if let Source::Remote(payload) = &grant.source {
+        // Every lease of the contacted chain must still be live.
+        let Some(committed) = committed else {
+            return error(StatusCode::GONE);
+        };
+        if !committed.leases_live(&payload.leases) {
+            return error(StatusCode::GONE);
+        }
     }
     match result {
         Ok(response) => response,

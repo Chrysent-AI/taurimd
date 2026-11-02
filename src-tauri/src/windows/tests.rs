@@ -218,9 +218,19 @@ fn same_numeric_ids_do_not_cross_media_root_export_or_presentation_owners() {
             .body(Vec::new())
             .unwrap()
     };
-    assert_eq!(media::serve(&one, &a, request(), |r| r.status()), 200);
-    assert_eq!(media::serve(&two, &b, request(), |r| r.status()), 404);
-    assert_eq!(media::serve(&one, &b, request(), |r| r.status()), 403);
+    let policy = crate::remote_images::Policy::new(&[]);
+    assert_eq!(
+        media::serve(&policy, &one, &a, request(), |r| r.status()),
+        200
+    );
+    assert_eq!(
+        media::serve(&policy, &two, &b, request(), |r| r.status()),
+        404
+    );
+    assert_eq!(
+        media::serve(&policy, &one, &b, request(), |r| r.status()),
+        403
+    );
     let scope = one
         .lock()
         .unwrap()
@@ -271,7 +281,11 @@ fn same_numeric_ids_do_not_cross_media_root_export_or_presentation_owners() {
     assert!(windows.readers[&b].presentation.status_visible);
     assert_eq!(windows.readers[&b].presentation.page_zoom, 130);
     retire(windows.detach(&a).unwrap()).unwrap();
-    assert_eq!(media::serve(&one, &a, request(), |r| r.status()), 403);
+    let policy = crate::remote_images::Policy::new(&[]);
+    assert_eq!(
+        media::serve(&policy, &one, &a, request(), |r| r.status()),
+        403
+    );
     assert!(two.lock().unwrap().active(1, 1).is_ok());
     assert!(!root.path().join("cache").read_dir().unwrap().any(|entry| {
         entry

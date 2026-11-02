@@ -1,6 +1,12 @@
 import type { EntryIntent } from './navigation/types';
 import type { Reading } from './reader/parse';
-import type { NativeReader, ReaderState, Snapshot, Rendered } from './types';
+import type {
+  NativeReader,
+  ReaderState,
+  RemoteBinding,
+  Rendered,
+  Snapshot,
+} from './types';
 import type { ParseJob } from './reader/worker';
 export class ReaderController {
   state: ReaderState = {
@@ -31,13 +37,26 @@ export class ReaderController {
       listener();
     });
   }
-  async resolve(document: Rendered, reference: string) {
+  async resolve(
+    document: Rendered,
+    reference: string,
+    binding?: RemoteBinding,
+  ) {
     if (this.state.displayed !== document)
       throw new Error('This media belongs to a retired document.');
-    const result = await this.bridge.resolve(document.snapshot, reference);
+    const result = await this.bridge.resolve(
+      document.snapshot,
+      reference,
+      binding,
+    );
     if (this.state.displayed !== document)
       throw new Error('This media belongs to a retired document.');
     return result;
+  }
+  // Retires one remote image attempt of this document. A retired document or
+  // a reader without the native command simply has nothing to retire.
+  async cancelRemote(document: Rendered, slot: string, attempt: number) {
+    await this.bridge.cancelRemote?.(document.snapshot, slot, attempt);
   }
   async activate(document: Rendered, href: string) {
     if (

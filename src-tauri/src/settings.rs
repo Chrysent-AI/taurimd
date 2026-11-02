@@ -1,7 +1,13 @@
 use crate::documents::AppError;
+use crate::remote_images::{self, Policy};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fs, io::Write, path::PathBuf, sync::Mutex};
+use std::{
+    fs,
+    io::Write,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +38,7 @@ pub struct SettingsV1 {
     pub fit_diagrams: bool,
     pub sidebar_default: bool,
     pub status_visible: bool,
+    pub remote_image_hosts: Vec<String>,
 }
 impl Default for SettingsV1 {
     fn default() -> Self {
@@ -43,6 +50,7 @@ impl Default for SettingsV1 {
             fit_diagrams: true,
             sidebar_default: true,
             status_visible: true,
+            remote_image_hosts: remote_images::starter_host_list(),
         }
     }
 }
@@ -64,6 +72,7 @@ pub struct Patch {
     pub fit_diagrams: Option<bool>,
     pub sidebar_default: Option<bool>,
     pub status_visible: Option<bool>,
+    pub remote_image_hosts: Option<Vec<String>>,
 }
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
@@ -87,6 +96,9 @@ pub struct SettingsStore {
     directory: Option<PathBuf>,
     committed: Mutex<Record>,
     writer: Mutex<()>,
+    // The derived per-host permission leases live beside the committed
+    // record; they are rebuilt from it and are never a second store.
+    policy: Arc<Policy>,
 }
 impl SettingsStore {
     pub fn load(directory: Option<PathBuf>) -> Self {
@@ -118,7 +130,27 @@ impl SettingsStore {
                             if key == "statusVisible" && value["settings"].get(key).is_none() {
                                 continue;
                             }
+                            // The remote-image host list was added later still: an absent
+                            // field keeps the confirmed starter hosts without a notice.
+                            if key == "remoteImageHosts" && value["settings"].get(key).is_none() {
+                                continue;
+                            }
                             let candidate = &value["settings"][key];
+                            if key == "remoteImageHosts" {
+                                // A valid but deliberately empty list stays empty. Invalid
+                                // present data falls back for this field only.
+                                match serde_json::from_value::<Vec<String>>(candidate.clone()) {
+                                    Ok(list) => match remote_images::canonical_host_list(&list) {
+                                        Ok(canonical) => {
+                                            *default = serde_json::to_value(canonical)
+                                                .expect("hosts serialize");
+                                        }
+                                        Err(_) => record.notice = Some(FALLBACK.into()),
+                                    },
+                                    Err(_) => record.notice = Some(FALLBACK.into()),
+                                }
+                                continue;
+                            }
                             let valid = match key.as_str() {
                                 "mode" => serde_json::from_value::<Mode>(candidate.clone()).is_ok(),
                                 "lightPalette" | "darkPalette" => {
@@ -148,9 +180,14 @@ impl SettingsStore {
         }
         Self {
             directory,
+            policy: Arc::new(Policy::new(&record.settings.remote_image_hosts)),
             committed: Mutex::new(record),
             writer: Mutex::new(()),
         }
+    }
+    /// The committed per-host permission policy derived from this record.
+    pub fn policy(&self) -> Arc<Policy> {
+        self.policy.clone()
     }
     pub fn get(&self) -> Result<Record, AppError> {
         self.committed
@@ -176,6 +213,17 @@ impl SettingsStore {
                 "Page zoom must be 50–300% in steps of 10%.",
             ));
         }
+        // The whole host list is validated before any field is applied: an
+        // invalid entry rejects the patch without partial mutation.
+        let remote_hosts = match &patch.remote_image_hosts {
+            Some(list) => Some(remote_images::canonical_host_list(list).map_err(|_| {
+                AppError::new(
+                    "unsupported",
+                    "Remote-image hosts must be plain DNS host names such as images.example.com.",
+                )
+            })?),
+            None => None,
+        };
         if let Some(value) = patch.mode {
             next.settings.mode = value;
         }
@@ -197,6 +245,9 @@ impl SettingsStore {
         if let Some(value) = patch.status_visible {
             next.settings.status_visible = value;
         }
+        if let Some(value) = remote_hosts {
+            next.settings.remote_image_hosts = value;
+        }
         next.revision = next.revision.checked_add(1).ok_or_else(unavailable)?;
         next.notice = None;
         let directory = self.directory.as_ref().ok_or_else(unavailable)?;
@@ -209,7 +260,15 @@ impl SettingsStore {
         temporary
             .persist(directory.join("settings-v1.json"))
             .map_err(|_| unavailable())?;
-        *self.committed.lock().map_err(|_| unavailable())? = next.clone();
+        // The record and the derived permission leases change together under
+        // the single committed-policy guard. Removed hosts are revoked
+        // permanently and their pending jobs are cancelled.
+        {
+            let mut policy = self.policy.guard();
+            *self.committed.lock().map_err(|_| unavailable())? = next.clone();
+            policy.replace_hosts(&next.settings.remote_image_hosts);
+            debug_assert_eq!(policy.hosts(), next.settings.remote_image_hosts);
+        }
         // Publish only committed snapshots, in write order, outside the record lock.
         notify(&next);
         Ok(Update::Committed { record: next })

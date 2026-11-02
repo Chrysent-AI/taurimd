@@ -10,6 +10,7 @@ use navigation_commands::{
     read_preview, refresh_index, reveal_document, select_root,
 };
 mod presentation;
+mod remote_images;
 mod settings;
 use documents::{AppError, Session, Snapshot, read_document};
 use presentation::{Presentation, ReaderMenu};
@@ -215,8 +216,20 @@ async fn resolve_media(
     document_id: u32,
     revision: u32,
     relative_reference: String,
+    remote_binding: Option<media::RemoteBinding>,
 ) -> Result<media::Resolved, AppError> {
     let state = reader(&window)?;
+    if let Some(binding) = remote_binding {
+        return resolve_remote_image(
+            &window,
+            &state,
+            document_id,
+            revision,
+            relative_reference,
+            binding,
+        )
+        .await;
+    }
     let grant = media::scope(
         &*session(&window, &state)?,
         window.label(),
@@ -230,6 +243,97 @@ async fn resolve_media(
                 AppError::new("resourceFailure", "Media resolution could not finish.")
             })??;
     media::insert(&mut *session(&window, &state)?, resolved)
+}
+
+/// Resolves one authorized HTTPS image. The host is authorized against the
+/// committed policy before any request, every redirect hop is authorized
+/// again, and the result is published only if the permission and the current
+/// resource ownership still hold.
+async fn resolve_remote_image(
+    window: &WebviewWindow,
+    state: &ReaderState,
+    document_id: u32,
+    revision: u32,
+    reference: String,
+    binding: media::RemoteBinding,
+) -> Result<media::Resolved, AppError> {
+    let policy = window.app_handle().state::<SettingsStore>().policy();
+    let target = remote_images::parse_image_url(&reference)
+        .map_err(remote_images::RemoteError::into_app_error)?;
+    let lease = policy.authorize(&target.host).ok_or_else(|| {
+        remote_images::RemoteError::new(
+            remote_images::RemoteErrorKind::BlockedHost,
+            Some(target.host.clone()),
+        )
+        .into_app_error()
+    })?;
+    let (scope, (_attempt, signal)) = {
+        let mut session = session_for_caller(window.label(), state)?;
+        let scope = media::scope(&session, window.label(), document_id, revision)?;
+        let attempt = session.remote_start(&binding.slot, binding.attempt)?;
+        (scope, attempt)
+    };
+    lease.register(&signal);
+    // One owned task per attempt. Its abort handle is installed before the
+    // start gate is released, so a removal cannot miss an unregistered task.
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let start = gate.clone();
+    let (sender, mut receiver) = tauri::async_runtime::channel(1);
+    let owned_policy = policy.clone();
+    let task_lease = lease.clone();
+    let host = target.host.clone();
+    let handle = tauri::async_runtime::spawn(async move {
+        start.notified().await;
+        let outcome = remote_images::fetch(&owned_policy, &target, task_lease, signal).await;
+        let _ = sender.send(outcome).await;
+    });
+    {
+        let mut session = session_for_caller(window.label(), state)?;
+        session.remote_attach(&binding.slot, binding.attempt, handle);
+    }
+    gate.notify_one();
+    let outcome = receiver
+        .recv()
+        .await
+        .ok_or_else(|| AppError::new("stale", "This image request is no longer current."))?;
+    let fetched = outcome.map_err(remote_images::RemoteError::into_app_error)?;
+    // Publication takes the committed-policy guard and then the session
+    // guard, in that order, so a removal that wins the race denies it.
+    let _committed = policy.guard();
+    let mut session = session_for_caller(window.label(), state)?;
+    if !session.remote_live(&binding.slot, binding.attempt) {
+        return Err(AppError::new(
+            "stale",
+            "This image request is no longer current.",
+        ));
+    }
+    if !lease.live() {
+        return Err(remote_images::RemoteError::new(
+            remote_images::RemoteErrorKind::BlockedHost,
+            Some(host),
+        )
+        .into_app_error());
+    }
+    scope.live()?;
+    let grant = media::remote_grant(scope, fetched, binding.slot, binding.attempt);
+    media::insert(&mut session, grant)
+}
+
+/// Retires one matching remote image attempt in the invoking reader. It has
+/// no fetch, selection, local path or write effect.
+#[tauri::command]
+fn cancel_remote_image(
+    window: WebviewWindow,
+    document_id: u32,
+    revision: u32,
+    slot: String,
+    attempt: u32,
+) -> Result<(), AppError> {
+    let state = reader(&window)?;
+    let mut session = session_for_caller(window.label(), &state)?;
+    session.active_ref(document_id, revision)?;
+    session.remote_cancel(&slot, attempt);
+    Ok(())
 }
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
@@ -496,6 +600,9 @@ async fn update_settings(
     tauri::async_runtime::spawn_blocking(move || {
         app.state::<SettingsStore>()
             .update(expected_revision, patch, |record| {
+                // Retired remote grants are pruned before the committed
+                // revision is announced.
+                windows::prune_remote(&app);
                 if let Err(error) = app.emit("settings_changed", record) {
                     eprintln!("Preferences notification failed: {error}");
                 }
@@ -554,7 +661,8 @@ pub fn run() {
             let caller = context.webview_label().to_owned();
             tauri::async_runtime::spawn_blocking(move || match windows::handle(&app, &caller) {
                 Ok(state) => {
-                    media::serve(&state, &caller, request, |response| {
+                    let policy = app.state::<SettingsStore>().policy();
+                    media::serve(&policy, &state, &caller, request, |response| {
                         responder.respond(response)
                     });
                 }
@@ -577,6 +685,7 @@ pub fn run() {
             get_settings,
             update_settings,
             resolve_media,
+            cancel_remote_image,
             activate_link,
             present_reader,
             begin_export,
@@ -1216,7 +1325,10 @@ mod protocol_tests {
         assert_eq!(
             to_value(media::Resolved {
                 id: "0".repeat(32),
-                mime: "image/png"
+                mime: "image/png",
+                hosts: None,
+                slot: None,
+                attempt: None,
             })
             .unwrap(),
             json!({"id": "0".repeat(32), "mime": "image/png"})

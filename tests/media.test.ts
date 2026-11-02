@@ -170,3 +170,145 @@ describe('mounted media ownership and actual controller', () => {
     expect(host.textContent).toBe(feedback);
   });
 });
+describe('remote image classification and opaque publication', () => {
+  const remote = 'https://raw.githubusercontent.com/a/b.png';
+  function bridgeFor(
+    resolve: NativeReader['resolve'],
+    cancelRemote?: NativeReader['cancelRemote'],
+  ): NativeReader {
+    return {
+      openEntry: () => Promise.reject(new Error('No navigation fixture')),
+      select: () => Promise.resolve({ status: 'ready', snapshot }),
+      reload: () => Promise.resolve(snapshot),
+      commit: async () => {},
+      cancel: async () => {},
+      activate: () => Promise.resolve({ status: 'externalOpened' }),
+      resolve,
+      cancelRemote,
+    };
+  }
+  async function mount(source: string, bridge: NativeReader) {
+    const reading = sanitizeReading(parseMarkdown(source));
+    const controller = new ReaderController(bridge, () => ({
+      result: Promise.resolve(reading),
+      cancel() {},
+    }));
+    await controller.run('open');
+    const displayed = controller.state.displayed;
+    if (!displayed) throw new Error('Expected displayed document');
+    const host = document.createElement('div');
+    host.innerHTML = reading.html;
+    document.body.append(host);
+    const stop = mountMedia(host, displayed, controller);
+    return { reading, controller, displayed, host, stop };
+  }
+  it('classifies an HTTPS image as a remote candidate and keeps its address out of the document', () => {
+    const reading = sanitizeReading(
+      parseMarkdown(
+        `![Remote figure](${remote})\n\n![Local](figure.svg)\n\n<img src="${remote}">`,
+      ),
+    );
+    expect(reading.resources?.[0].remote).toBe(remote);
+    expect(reading.resources?.[0].sources).toEqual([]);
+    expect(reading.resources?.[1].remote).toBeUndefined();
+    expect(reading.resources?.[1].sources).toEqual(['figure.svg']);
+    expect(reading.resources?.[2].remote).toBe(remote);
+    const host = document.createElement('div');
+    host.innerHTML = reading.html;
+    expect(host.querySelector('img')?.hasAttribute('src')).toBe(false);
+    // An author alt is kept; a generated alt never carries an address.
+    const images = host.querySelectorAll('img');
+    expect(images[0].getAttribute('alt')).toBe('Remote figure');
+    expect(images[2].getAttribute('alt')).toBe('Remote image');
+    expect(
+      [...host.querySelectorAll('*')].flatMap((element) =>
+        [...element.attributes].map((attribute) => attribute.value),
+      ),
+    ).not.toContain(remote);
+    expect(host.textContent).toContain('Loading remote img');
+  });
+  it('publishes the validated bytes through the opaque grant and asks the native owner with a binding', async () => {
+    mockConvertFileSrc('linux');
+    const calls: unknown[] = [];
+    const { host } = await mount(
+      `![Remote figure](${remote})`,
+      bridgeFor(
+        vi.fn<NativeReader['resolve']>((_document, reference, binding) => {
+          calls.push({ reference, binding });
+          return Promise.resolve({ id, mime: 'image/png' });
+        }),
+      ),
+    );
+    await vi.waitFor(() => {
+      expect(host.querySelector('img')?.getAttribute('src')).toBe(
+        `reader-media://localhost/${id}`,
+      );
+    });
+    expect(calls).toHaveLength(1);
+    const [call] = calls as { reference: string; binding?: unknown }[];
+    expect(call.reference).toBe(remote);
+    const binding = call.binding as { slot: string; attempt: number };
+    expect(binding.slot).toBe('0');
+    expect(binding.attempt).toBeGreaterThan(0);
+    expect(
+      [...host.querySelectorAll('*')].flatMap((element) =>
+        [...element.attributes].map((attribute) => attribute.value),
+      ),
+    ).not.toContain(remote);
+  });
+  it('reports a denied host locally and leaves the rest of the document readable', async () => {
+    mockConvertFileSrc('linux');
+    const { host } = await mount(
+      `# Reading\n\n![Remote figure](${remote})\n\nReadable paragraph.`,
+      bridgeFor(
+        vi.fn<NativeReader['resolve']>(() =>
+          // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- Tauri rejects a command with the serialized AppError DTO, not a JS Error.
+          Promise.reject({
+            code: 'blockedHost',
+            message:
+              'Image blocked — raw.githubusercontent.com is not permitted. Manage hosts in Settings.',
+          }),
+        ),
+      ),
+    );
+    await vi.waitFor(() => {
+      expect(host.textContent).toContain('is not permitted');
+    });
+    expect(host.querySelector('img')?.hasAttribute('src')).toBe(false);
+    expect(host.textContent).toContain('Readable paragraph.');
+    expect(host.textContent).not.toContain('Some local sources');
+  });
+  it('retires an obsolete attempt and never publishes a late result', async () => {
+    mockConvertFileSrc('linux');
+    const pending = deferred<{ id: string; mime: string }>();
+    const cancelRemote = vi.fn<NonNullable<NativeReader['cancelRemote']>>(() =>
+      Promise.resolve(null),
+    );
+    const { host, stop } = await mount(
+      `![Remote figure](${remote})`,
+      bridgeFor(
+        vi.fn<NativeReader['resolve']>((_document, reference) =>
+          reference === remote
+            ? pending.promise
+            : Promise.resolve({ id, mime: 'image/png' }),
+        ),
+        cancelRemote,
+      ),
+    );
+    await vi.waitFor(() => {
+      expect(host.textContent).toContain('Loading remote img');
+    });
+    stop();
+    await vi.waitFor(() => {
+      expect(cancelRemote).toHaveBeenCalledWith(
+        snapshot,
+        '0',
+        expect.anything(),
+      );
+    });
+    pending.resolve({ id, mime: 'image/png' });
+    await pending.promise;
+    await Promise.resolve();
+    expect(host.querySelector('img')?.hasAttribute('src')).toBe(false);
+  });
+});
