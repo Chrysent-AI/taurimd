@@ -1406,7 +1406,7 @@ export function App({ controller }: { controller: ReaderController }) {
                     ? 'Document Information'
                     : surface === 'export'
                       ? `Export diagrams — ${exporting.progress?.mode.toUpperCase() ?? ''} ZIP`
-                      : 'About tauri.md'
+                      : 'About taurimd'
           }
           close={surface === 'export' ? exporting.cancel : closeSurface}
           restoreFocus={surface !== 'export'}
@@ -1507,7 +1507,7 @@ export function App({ controller }: { controller: ReaderController }) {
             </dl>
           ) : (
             <>
-              <p>tauri.md {version}</p>
+              <p>taurimd {version}</p>
               <p>Copyright © 2026 Chrysent. MIT licensed.</p>
               <p>
                 Dependency distribution notices and native platform

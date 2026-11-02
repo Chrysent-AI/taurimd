@@ -524,7 +524,7 @@ fn package_configuration_keeps_viewer_aliases_supported_platforms_and_narrow_del
     let common: serde_json::Value =
         serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
     let bundle = &common["bundle"];
-    assert_eq!(common["productName"], "tauri.md");
+    assert_eq!(common["productName"], "taurimd");
     assert_eq!(common["mainBinaryName"], "taurimd");
     // Preserve existing identifier-derived preferences and single-instance behavior.
     assert_eq!(common["identifier"], "com.chrysent.mdviewerrsx");

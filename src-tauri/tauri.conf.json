@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "tauri.md",
+  "productName": "taurimd",
   "mainBinaryName": "taurimd",
   "version": "0.1.0",
   "identifier": "com.chrysent.mdviewerrsx",
@@ -15,7 +15,7 @@
       {
         "label": "reader",
         "create": false,
-        "title": "tauri.md",
+        "title": "taurimd",
         "width": 1000,
         "height": 760,
         "dragDropEnabled": false

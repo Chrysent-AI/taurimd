@@ -67,16 +67,16 @@ test.afterEach(async ({ page }) => {
   });
 });
 
-test('renamed About displays tauri.md without reading or replacing a document', async ({
+test('renamed About displays taurimd without reading or replacing a document', async ({
   page,
 }) => {
   const before = await page.evaluate(() => window.readerFixture.calls());
   await page.evaluate(() => window.readerFixture.menu('about'));
   const about = page.getByRole('dialog', {
-    name: 'About tauri.md',
+    name: 'About taurimd',
     exact: true,
   });
-  await expect(about).toContainText(`tauri.md ${packageMetadata.version}`);
+  await expect(about).toContainText(`taurimd ${packageMetadata.version}`);
   await expect(about).toContainText('MIT licensed');
   expect(await page.evaluate(() => window.readerFixture.calls())).toEqual(
     before,
@@ -564,7 +564,7 @@ test('bundled Guide is a separate real parsed surface with scoped fragments, com
     .poll(() => page.evaluate(() => window.readerFixture.activeWorkers()))
     .toBe(0);
   await page.evaluate(() => window.readerFixture.menu('about'));
-  const about = page.getByRole('dialog', { name: 'About tauri.md' });
+  const about = page.getByRole('dialog', { name: 'About taurimd' });
   await expect(about).toContainText('MIT licensed');
   await expect(about).toContainText('remain separate checks');
   await capture(page, info, 'about-empty-reader');

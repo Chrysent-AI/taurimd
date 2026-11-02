@@ -194,7 +194,7 @@ async fn reload_document(
 #[tauri::command]
 fn commit_document(window: WebviewWindow, request_id: u32) -> Result<(), AppError> {
     let name = windows::commit(&window, request_id)?;
-    if let Err(error) = window.set_title(&format!("{name} — tauri.md")) {
+    if let Err(error) = window.set_title(&format!("{name} — taurimd")) {
         let _ = window.emit_to(
             EventTarget::webview_window(window.label()),
             "reader_notice",
@@ -635,7 +635,7 @@ pub fn run() {
                 None::<&str>,
             )?;
             let guide = MenuItem::with_id(app, "guide", "User Guide", true, None::<&str>)?;
-            let about = MenuItem::with_id(app, "about", "About tauri.md", true, None::<&str>)?;
+            let about = MenuItem::with_id(app, "about", "About taurimd", true, None::<&str>)?;
             let information = MenuItem::with_id(
                 app,
                 "information",
@@ -821,7 +821,7 @@ pub fn run() {
                 &[
                     &Submenu::with_items(
                         app,
-                        "tauri.md",
+                        "taurimd",
                         true,
                         &[
                             &about,
@@ -941,7 +941,7 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("tauri.md could not start")
+        .expect("taurimd could not start")
         .run(|app, event| match event {
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Opened { urls } => windows::enqueue(

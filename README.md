@@ -1,4 +1,4 @@
-# tauri.md
+# taurimd
 
 A local, read-only document reader. Copyright © 2026 Chrysent. MIT licensed.
 

@@ -1,6 +1,6 @@
 # A quiet reading desk
 
-This original example works offline in **tauri.md**.
+This original example works offline in **taurimd**.
 
 ## Notes
 

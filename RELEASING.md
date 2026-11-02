@@ -1,7 +1,9 @@
-# Preparing tauri.md candidates
+# Preparing taurimd candidates
 
 This is local build preparation, **not a publication command or a distribution clearance**.
-The repository URL and registry ownership are not yet confirmed. No download/install
+The repository is the public `https://github.com/Chrysent-AI/taurimd`. No crate is
+published on crates.io under this name yet, so registry ownership is not
+established. No download/install
 command here presumes that a public crate, release or asset exists.
 
 ## Human version changes
@@ -111,8 +113,9 @@ There is no Intel macOS, Windows ARM, musl or all-distro claim.
   implemented. Public branding and association/MIME labels use the new name.
   A future identifier change is deferred and requires a deliberate preference
   migration and affected-platform qualification, not a silent configuration edit.
-- Registry ownership and the actual renamed repository URL must be supplied
-  before URL-dependent metadata or official-asset retrieval can be finalized.
+- Registry ownership must be supplied before URL-dependent metadata or
+  official-asset retrieval can be finalized. The repository URL is confirmed;
+  no crates.io crate under this name exists yet.
 - `DEPENDENCIES.md` and any generated PARTIAL / NON-DISTRIBUTABLE inventory retain
   their unresolved attribution and recipient-source obligations. Neither an
   archive nor a source crate is distribution-cleared by successful compilation.
