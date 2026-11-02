@@ -93,10 +93,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          set -- candidates/*
-          [ -e "$1" ] || { echo 'No candidate files to publish.' >&2; exit 1; }
-          gh release create "$RELEASE_TAG" "$@" \
+          # Artifacts keep their upload directory layout, so the candidate
+          # files live at mixed depths under the download root, never
+          # directly in it.
+          mapfile -t files < <(find candidates -type f | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo 'No candidate files to publish.' >&2
+            exit 1
+          fi
+          # An earlier failed attempt may have left a page without assets;
+          # upload into it instead of failing on the existing release.
+          gh release view "$RELEASE_TAG" --repo "$REPOSITORY" > /dev/null 2>&1 ||
+            gh release create "$RELEASE_TAG" \
+              --repo "$REPOSITORY" \
+              --title "taurimd $RELEASE_TAG" \
+              --generate-notes \
+              --verify-tag
+          gh release upload "$RELEASE_TAG" "${files[@]}" \
             --repo "$REPOSITORY" \
-            --title "taurimd $RELEASE_TAG" \
-            --generate-notes \
-            --verify-tag
+            --clobber

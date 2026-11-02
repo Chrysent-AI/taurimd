@@ -784,6 +784,12 @@ test('branch pushes and tags run separate workflows, and the tag path builds the
     'package-candidates',
   ]);
   assert.match(releaseScripts('publish-release'), /gh release create/);
+  // The downloaded artifacts keep their upload directory layout, so the
+  // publisher collects files recursively instead of assuming a flat root,
+  // and uploads idempotently into a page a failed attempt may have left.
+  assert.match(releaseScripts('publish-release'), /find candidates -type f/);
+  assert.match(releaseScripts('publish-release'), /gh release upload/);
+  assert.match(releaseScripts('publish-release'), /--clobber/);
   assert.deepEqual(buildCommandsIn(releaseJobs, 'package-candidates'), [
     [
       'npm',
