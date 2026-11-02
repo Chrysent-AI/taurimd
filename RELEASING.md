@@ -65,30 +65,30 @@ This only reads an already-existing local tag and complete ancestry; it does not
 create a tag. PR/push quality, secret/range/full-message, browser and native
 debug-profile no-bundle compilation checks remain ordinary checks. `--no-bundle`
 only skips installers; `--debug` explicitly selects the ordinary compile profile.
-Only validated tag pushes can use the default release profile to generate
-installer/archive workflow artifacts. Workflow artifacts are a
-human qualification handoff, not GitHub releases or registry publication. No
-signing, release creation, publication credential or contents-write permission is
-configured. Editing this workflow is not authorization to trigger it.
+Only validated tag pushes can use the default release profile to generate the
+installer and archive candidates. The tag workflow publishes those unsigned
+candidates on a GitHub release page for the tag; it signs nothing and it does
+not publish to any registry. Editing this workflow is not authorization to
+trigger it.
 
 ## Workflow split
 
 A branch push and a tag push are two events even when they name the same commit,
 so they run two workflows:
 
-- `.github/workflows/checks.yml` runs on pull requests and on branch pushes. It
-  holds the quality gate, the three-engine browser matrix and the unsigned
-  debug native builds.
+- `.github/workflows/checks.yml` runs on pull requests and on pushes to `main`. On
+  a push to `main` the quality gate, the three-engine browser matrix and the
+  unsigned debug native builds run only when the pushed commit message is a
+  conventional `feat`, `fix`, `test` or `tests` commit. A push to `main` with any
+  other commit message runs no test.
 - `.github/workflows/release.yml` runs on `v*` tag pushes only. It validates the
-  tag, runs the repository's own quality gate on the tagged commit, and builds
-  the unsigned installer and archive candidates on the three platforms.
+  tag, builds the unsigned installer and archive candidates on the three
+  platforms, and publishes them on a GitHub release page for that tag.
 
-The tag workflow deliberately does not repeat the quality gate, the browser
-matrix or the debug native builds for the same commit: those ran in the branch
-workflow on the identical commit SHA, and the candidate builds compile the same
-three platforms in release mode with the bundlers, which is a superset of the
-debug compile. One release candidate per tagged commit is retained; no workflow
-creates a GitHub release, publishes a crate or signs anything.
+The release stage runs no quality gate, no build of the product and no test: it
+validates the tag, produces the binaries and hosts them. The candidates are
+unsigned, and the release stage publishes to GitHub only; the crates.io
+publication is a separate, human-driven step.
 
 ## Publishing to crates.io
 

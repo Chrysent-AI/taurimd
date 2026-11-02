@@ -3,11 +3,12 @@ on:
   pull_request:
   push:
     branches:
-      - '**'
+      - main
 permissions:
   contents: read
 jobs:
   quality:
+    if: ${{ github.event_name == 'pull_request' || github.event.head_commit.message =~ '^(feat|fix|test|tests)(\(.+\))?:' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -48,6 +49,7 @@ jobs:
             npm run check:ci -- --initial "$head"
           fi
   browsers:
+    if: ${{ github.event_name == 'pull_request' || github.event.head_commit.message =~ '^(feat|fix|test|tests)(\(.+\))?:' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -79,6 +81,7 @@ jobs:
           path: test-results/
           retention-days: 7
   native-build:
+    if: ${{ github.event_name == 'pull_request' || github.event.head_commit.message =~ '^(feat|fix|test|tests)(\(.+\))?:' }}
     needs: quality
     strategy:
       fail-fast: false

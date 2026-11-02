@@ -1,10 +1,10 @@
-name: Release candidates
+name: Release
 on:
   push:
     tags:
       - 'v*'
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -73,3 +73,30 @@ jobs:
             src-tauri/target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
           retention-days: 7
+  publish-release:
+    needs: [package-candidates]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: unsigned-candidates-*
+          merge-multiple: true
+          path: candidates
+      - name: Publish the release page hosting the candidates
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -- candidates/*
+          [ -e "$1" ] || { echo 'No candidate files to publish.' >&2; exit 1; }
+          gh release create "$RELEASE_TAG" "$@" \
+            --repo "$REPOSITORY" \
+            --title "taurimd $RELEASE_TAG" \
+            --generate-notes \
+            --verify-tag

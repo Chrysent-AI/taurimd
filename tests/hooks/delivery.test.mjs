@@ -676,7 +676,7 @@ test('branch pushes and tags run separate workflows, and the tag path builds the
   // The branch workflow never runs for a tag, and the tag workflow never
   // repeats the browser matrix or the debug native builds for the same commit.
   assert.deepEqual(Object.keys(checks.on).sort(), ['pull_request', 'push']);
-  assert.deepEqual(checks.on.push.branches, ['**']);
+  assert.deepEqual(checks.on.push.branches, ['main']);
   assert.equal(checks.on.push.tags, undefined);
   assert.equal(checks.permissions.contents, 'read');
   const jobs = checks.jobs;
@@ -685,6 +685,19 @@ test('branch pushes and tags run separate workflows, and the tag path builds the
     'native-build',
     'quality',
   ]);
+  // The tests run on a push to main only for a feat, fix or test commit.
+  for (const job of Object.keys(jobs)) {
+    assert.match(
+      jobs[job].if,
+      /github\.event_name == 'pull_request'/,
+      `${job} must run for a pull request`,
+    );
+    assert.match(
+      jobs[job].if,
+      /head_commit\.message =~ '\^\(feat\|fix\|test\|tests\)/,
+      `${job} must be limited to feat, fix and test commits`,
+    );
+  }
   const scripts = (job) =>
     jobs[job].steps.map((step) => step.run ?? '').join('\n');
   assert.match(scripts('quality'), /npm run check:ci/);
@@ -721,10 +734,12 @@ test('branch pushes and tags run separate workflows, and the tag path builds the
   assert.deepEqual(Object.keys(release.on), ['push']);
   assert.deepEqual(release.on.push.tags, ['v*']);
   assert.equal(release.on.push.branches, undefined);
-  assert.equal(release.permissions.contents, 'read');
+  // The release stage creates the release page, so it needs contents: write.
+  assert.equal(release.permissions.contents, 'write');
   const releaseJobs = release.jobs;
   assert.deepEqual(Object.keys(releaseJobs).sort(), [
     'package-candidates',
+    'publish-release',
     'release-version',
   ]);
   const releaseScripts = (job) =>
@@ -733,12 +748,24 @@ test('branch pushes and tags run separate workflows, and the tag path builds the
     releaseScripts('release-version'),
     /node scripts\/validate-tag.mjs/,
   );
-  // The tag run only validates the tag and builds the candidates. The
-  // quality gate for that same commit runs in the branch workflow.
+  // The release stage builds the binaries and publishes the release page. It
+  // runs no quality gate and no test.
   assert.equal(releaseJobs.quality, undefined);
+  assert.equal(releaseJobs.browsers, undefined);
+  assert.equal(releaseJobs['native-build'], undefined);
+  for (const job of Object.keys(releaseJobs))
+    assert.doesNotMatch(
+      releaseScripts(job),
+      /check:ci|check:local|playwright|test:hooks/,
+      `${job} must not run a gate or a test`,
+    );
   assert.deepEqual(releaseJobs['package-candidates'].needs, [
     'release-version',
   ]);
+  assert.deepEqual(releaseJobs['publish-release'].needs, [
+    'package-candidates',
+  ]);
+  assert.match(releaseScripts('publish-release'), /gh release create/);
   assert.deepEqual(buildCommandsIn(releaseJobs, 'package-candidates'), [
     [
       'npm',
@@ -771,6 +798,7 @@ const pinnedActions = [
   'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
   'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1',
   'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9',
+  'actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333',
 ];
 test('every workflow action reference is a known pinned commit', () => {
   for (const file of ['checks.yml', 'release.yml']) {
