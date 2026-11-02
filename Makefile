@@ -8,6 +8,9 @@ help:
 		'make bump-version [BUMP=patch|minor|major | VERSION=X.Y.Z] (rewrite, commit, tag; never pushes)'
 
 # Explicit human operation only; values pass as data, never shell source.
+# VERIFY=1 runs the local protection gate before the release commit; the
+# default release commit does not run it.
+bump-version: export TAURIMD_RELEASE_VERIFY = $(VERIFY)
 bump-version: export TAURIMD_BUMP_VALUE = $(BUMP)
 bump-version: export TAURIMD_VERSION_VALUE = $(VERSION)
 bump-version: export TAURIMD_BUMP_ORIGIN = $(origin BUMP)

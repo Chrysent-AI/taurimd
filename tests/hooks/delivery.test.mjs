@@ -301,14 +301,30 @@ test('a failed release commit restores the version files and leaves no tag', (t)
   assert.equal(gitText(root, env, ['status', '--porcelain']), '');
   assert.equal(gitText(root, env, ['diff', '--cached', '--name-only']), '');
 });
-test('a protection hook that rejects the commit aborts the release and restores the tree', (t) => {
+test('the release commit does not run the protection hooks unless verification is requested', (t) => {
+  const { root, env } = gitFixture(t);
+  const hook = join(root, '.git', 'hooks', 'pre-commit');
+  writeFileSync(hook, '#!/bin/sh\nexit 1\n');
+  chmodSync(hook, 0o755);
+  const made = command(root, process.execPath, ['scripts/release.mjs'], {
+    env,
+  });
+  assert.equal(made.status, 0, made.output);
+  assert.equal(versions(readAt(root)).version, '0.1.1');
+  assert.equal(
+    gitText(root, env, ['log', '-1', '--format=%s']),
+    'chore(release): taurimd v0.1.1',
+  );
+  assert.equal(gitText(root, env, ['rev-list', '--count', 'HEAD']), '2');
+});
+test('verification runs the protection hooks, and a rejecting hook aborts the release', (t) => {
   const { root, env } = gitFixture(t);
   const hook = join(root, '.git', 'hooks', 'pre-commit');
   writeFileSync(hook, '#!/bin/sh\nexit 1\n');
   chmodSync(hook, 0o755);
   const before = snapshot(root);
   const blocked = command(root, process.execPath, ['scripts/release.mjs'], {
-    env,
+    env: { ...env, TAURIMD_RELEASE_VERIFY: '1' },
   });
   assert.notEqual(blocked.status, 0, blocked.output);
   assert.match(blocked.output, /release commit failed/);

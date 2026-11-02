@@ -119,6 +119,9 @@ test(
         CARGO_TARGET_DIR: join(root, 'inherited-output'),
         CARGO_BUILD_BUILD_DIR: join(root, 'inherited-output'),
         CARGO_BUILD_TARGET: 'wasm32-unknown-unknown',
+        // Own Cargo home: the fixture must not wait on the shared package
+        // cache while another test file runs Cargo against the real one.
+        CARGO_HOME: join(root, 'cargo-home'),
       };
       const before = snapshot(root);
       t.diagnostic(`before: ${JSON.stringify(before)}`);
