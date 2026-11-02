@@ -303,30 +303,13 @@ test('a failed release commit restores the version files and leaves no tag', (t)
   assert.equal(gitText(root, env, ['status', '--porcelain']), '');
   assert.equal(gitText(root, env, ['diff', '--cached', '--name-only']), '');
 });
-test('the release commit runs the protection hooks, and a rejecting hook aborts the release', (t) => {
-  const { root, env } = gitFixture(t);
-  const hook = join(root, '.git', 'hooks', 'pre-commit');
-  writeFileSync(hook, '#!/bin/sh\nexit 1\n');
-  chmodSync(hook, 0o755);
-  const before = snapshot(root);
-  const blocked = command(root, process.execPath, ['scripts/release.mjs'], {
-    env,
-  });
-  assert.notEqual(blocked.status, 0, blocked.output);
-  assert.match(blocked.output, /release commit failed/);
-  assertUnchanged(root, before);
-  assert.equal(gitText(root, env, ['status', '--porcelain']), '');
-  assert.equal(gitText(root, env, ['diff', '--cached', '--name-only']), '');
-  assert.equal(gitText(root, env, ['rev-list', '--count', 'HEAD']), '1');
-  assert.equal(gitText(root, env, ['tag', '--list']), '');
-});
-test('the release commit skips the protection hooks only when the gate is skipped', (t) => {
+test('the release commit does not run the local gate, the build or the lint', (t) => {
   const { root, env } = gitFixture(t);
   const hook = join(root, '.git', 'hooks', 'pre-commit');
   writeFileSync(hook, '#!/bin/sh\nexit 1\n');
   chmodSync(hook, 0o755);
   const made = command(root, process.execPath, ['scripts/release.mjs'], {
-    env: { ...env, TAURIMD_RELEASE_SKIP_GATE: '1' },
+    env,
   });
   assert.equal(made.status, 0, made.output);
   assert.equal(versions(readAt(root)).version, '0.1.1');
@@ -339,6 +322,23 @@ test('the release commit skips the protection hooks only when the gate is skippe
     gitText(root, env, ['rev-parse', 'refs/tags/v0.1.1^{commit}']),
     gitText(root, env, ['rev-parse', 'HEAD']),
   );
+});
+test('verification runs the local gate, and a rejecting hook aborts the release', (t) => {
+  const { root, env } = gitFixture(t);
+  const hook = join(root, '.git', 'hooks', 'pre-commit');
+  writeFileSync(hook, '#!/bin/sh\nexit 1\n');
+  chmodSync(hook, 0o755);
+  const before = snapshot(root);
+  const blocked = command(root, process.execPath, ['scripts/release.mjs'], {
+    env: { ...env, TAURIMD_RELEASE_VERIFY: '1' },
+  });
+  assert.notEqual(blocked.status, 0, blocked.output);
+  assert.match(blocked.output, /release commit failed/);
+  assertUnchanged(root, before);
+  assert.equal(gitText(root, env, ['status', '--porcelain']), '');
+  assert.equal(gitText(root, env, ['diff', '--cached', '--name-only']), '');
+  assert.equal(gitText(root, env, ['rev-list', '--count', 'HEAD']), '1');
+  assert.equal(gitText(root, env, ['tag', '--list']), '');
 });
 test('the release command refuses a repository that has no commit yet', (t) => {
   const root = fixture(t);

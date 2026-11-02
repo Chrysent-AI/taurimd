@@ -16,7 +16,7 @@ lock versions. Dependencies and formatting remain unchanged.
 make bump-version                 # default patch
 make bump-version BUMP=minor       # patch, minor or major
 make bump-version VERSION=1.2.3    # stable, strictly increasing version
-make bump-version SKIP_GATE=1      # skip the local protection gate
+make bump-version VERIFY=1      # run the local gate, build and lint first
 ```
 
 On Windows, or without Make:
@@ -35,9 +35,11 @@ branch and the tag are still pushed by the human. If the tag itself fails, the
 release commit stays and the command prints the exact `git tag` command that
 finishes it; nothing is pushed either way.
 
-The local protection gate runs before the release commit: a failing gate aborts
-the release and restores the version files. `SKIP_GATE=1` commits without it;
-the same checks then run on the branch push and on the tag push in CI.
+The release commit does not run the local gate, the build or the lint: it only
+rewrites the six version values, commits them and tags the commit. The same
+checks run on the branch push and on the tag push in CI. `VERIFY=1` runs them
+locally first instead, and a failing gate then aborts the release and restores
+the version files.
 
 Use only one input. Stop other edits while bumping. The helper stages owned local
 files and restores already-replaced originals on a normal write failure. This is
