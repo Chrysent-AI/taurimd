@@ -26,6 +26,8 @@ export interface ExportProgress {
 }
 function captureFocus(fallback: () => void) {
   const active = document.activeElement;
+  const reading = document.querySelector('main');
+  const scrollTop = reading?.scrollTop;
   const selection = window.getSelection();
   const ranges: Range[] = [];
   for (let index = 0; selection && index < selection.rangeCount; index++) {
@@ -47,6 +49,10 @@ function captureFocus(fallback: () => void) {
       for (const range of ranges)
         if (range.commonAncestorContainer.isConnected) current?.addRange(range);
     }
+    // An export is a background operation: it must not move the reading
+    // position. The focus restore above can make an engine scroll an
+    // off-screen element into view, so the offset is restored afterwards.
+    if (reading && scrollTop !== undefined) reading.scrollTop = scrollTop;
   };
 }
 export function useDiagramExport(

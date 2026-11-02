@@ -1201,6 +1201,12 @@ test('repair reload consumes its own reading origin instead of prior filename or
   }, second);
   await next.click();
   await expect(next).toBeFocused();
+  // The reload applies to the displayed document. Wait for beta.MKDOWN to be
+  // shown: while the reader is still opening it, the command is refused.
+  await expect(page.getByRole('article')).toHaveAttribute(
+    'aria-label',
+    'beta.MKDOWN',
+  );
   await page.getByRole('article').focus();
   await page.evaluate(
     (doc) => {
