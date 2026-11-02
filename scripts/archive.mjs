@@ -94,13 +94,12 @@ export async function archive({ root, target, binary, output }, tar = run) {
     const notices = join(root, 'src-tauri/target/THIRD_PARTY_NOTICES.md');
     if (existsSync(notices))
       copyFileSync(notices, join(directory, 'THIRD_PARTY_NOTICES.md'));
-    await tar('tar', [
-      '-czf',
-      join(scratch, `${name}.tgz`),
-      '-C',
-      scratch,
-      name,
-    ]);
+    // The archive name stays relative and tar runs with its cwd inside the
+    // scratch directory: to GNU tar, a colon-prefixed Windows drive-letter
+    // archive path is remote-tape syntax and it tries to resolve the drive
+    // letter as a hostname. A relative name is colon-free on every
+    // supported tar.
+    await tar('tar', ['-czf', `${name}.tgz`, name], { cwd: scratch });
     const bytes = readFileSync(join(scratch, `${name}.tgz`));
     const hash = createHash('sha256').update(bytes).digest('hex');
     mkdirSync(output, { recursive: true });

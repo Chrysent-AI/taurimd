@@ -594,8 +594,8 @@ test('archive tool failure reaps its exact scratch and missing legal handoff fai
   await assert.rejects(
     archive(
       { root, target: targets[0], binary: executable, output },
-      async (_program, args) => {
-        scratch = dirname(args[1]);
+      async (_program, _args, options) => {
+        scratch = options.cwd;
         throw new Error('injected tar failure');
       },
     ),
