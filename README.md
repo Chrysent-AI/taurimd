@@ -1,4 +1,4 @@
-# MDViewerRSX
+# tauri.md
 
 A local, read-only document reader. Copyright © 2026 Chrysent. MIT licensed.
 
@@ -75,5 +75,9 @@ These native checks remain deferred until recorded on actual target systems; com
 Automated tests exercise the production native media GET/HEAD/range, lifetime, scoped-path and link-policy seams without invoking OS handlers. Browser tests additionally decode original media, seek, show decode/fallback errors and exercise the actual React shell, controller, native JS adapter and worker with explicit IPC/URL-conversion/HTTP transport doubles. These mocks do not execute the real native chooser, custom protocol, IPC/capability enforcement or native menus. Native dialog, menu, focus, CSP/transport, system-webview codec, OS handoff and visual evidence must still be recorded on actual targets. A build or browser pass alone must not be recorded as a native-interaction pass.
 
 ## Dependency notices
+
+See `RELEASING.md` for human-only version changes, source-package preparation,
+validated tag-only candidate archives and the outstanding native/legal
+qualification boundaries. No public crate or release availability is assumed.
 
 `DEPENDENCIES.md` records licensing choices and known notice gaps. `scripts/notices.mjs` generates exact installed npm runtime and local Apple Silicon Cargo closure notices into `src-tauri/target/THIRD_PARTY_NOTICES.md`, including build dependencies. Generated legal texts are distribution artifacts, not authored source; they preserve upstream copyright notices verbatim and are not committed. DOMPurify uses its Apache-2.0 licensing option. Unmodified MPL components retain their separate terms and versioned source links. Some Cargo packages omit license text from their published crates; the notice inventory explicitly identifies those unresolved upstream notices. Resolve those entries and other platform closures before distributing binaries. No third-party source is patched or vendored.

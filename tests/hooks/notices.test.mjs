@@ -44,7 +44,7 @@ const unresolved = [
   ].map((name) => [name, '0.3.2']),
 ];
 function fixture(check) {
-  const root = mkdtempSync(join(tmpdir(), 'mdviewerrsx-notices-'));
+  const root = mkdtempSync(join(tmpdir(), 'taurimd-notices-'));
   const cleanup = () => {
     rmSync(root, { recursive: true, force: true });
     assert.equal(existsSync(root), false);

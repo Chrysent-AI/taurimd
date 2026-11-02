@@ -1,6 +1,6 @@
 # Offline reading examples
 
-Open these local files in MDViewerRSX. The examples use original neutral content
+Open these local files in tauri.md. The examples use original neutral content
 under the repository's MIT license; the Mermaid examples require no remote
 assets, fonts or services.
 

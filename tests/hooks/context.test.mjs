@@ -27,7 +27,7 @@ function hookProbe() {
   assert.equal(process.env.GIT_DIR, join(outer, '.git'));
   assert.equal(process.env.GIT_WORK_TREE, outer);
   assert.equal(process.env.GIT_INDEX_FILE, join(outer, '.git/index'));
-  assert.equal(process.env.MDVIEWERRSX_CONTEXT_FIXTURE, outer);
+  assert.equal(process.env.TAURIMD_CONTEXT_FIXTURE, outer);
   const inner = join(outer, 'inner');
   mkdirSync(inner);
   const git = (...args) => {
@@ -55,7 +55,7 @@ function hookProbe() {
     assert.equal(command(inner, 'git', ['config', '--get', key]).status, 1);
   const marker = command(inner, process.execPath, [
     '-e',
-    'process.stdout.write(process.env.MDVIEWERRSX_CONTEXT_FIXTURE)',
+    'process.stdout.write(process.env.TAURIMD_CONTEXT_FIXTURE)',
   ]);
   assert.equal(marker.status, 0, marker.output);
   assert.equal(marker.output, outer);
@@ -84,7 +84,7 @@ if (process.argv[2] === 'hook-probe') {
 } else {
   test('foreign fixture commands cannot mutate the invoking hook repository', () => {
     const root = realpathSync(
-      mkdtempSync(join(tmpdir(), 'mdviewerrsx-git-context-')),
+      mkdtempSync(join(tmpdir(), 'taurimd-git-context-')),
     );
     const outer = join(root, 'outer');
     // Independent bootstrap: no inherited Git repository, index or config context.
@@ -170,7 +170,7 @@ if (process.argv[2] === 'hook-probe') {
       );
       writeFileSync(
         join(outer, '.git/hooks/pre-commit'),
-        '#!/bin/sh\n"$MDVIEWERRSX_TEST_NODE" tests/hooks/context.test.mjs hook-probe || exit $?\nexec "$MDVIEWERRSX_TEST_NODE" --test --test-name-pattern="staged native Git traversal|merge-parent traversal|effective linked/custom hooks" tests/hooks/protection.test.mjs\n',
+        '#!/bin/sh\n"$TAURIMD_TEST_NODE" tests/hooks/context.test.mjs hook-probe || exit $?\nexec "$TAURIMD_TEST_NODE" --test --test-name-pattern="staged native Git traversal|merge-parent traversal|effective linked/custom hooks" tests/hooks/protection.test.mjs\n',
         { mode: 0o755 },
       );
       const before = snapshot();
@@ -185,8 +185,8 @@ if (process.argv[2] === 'hook-probe') {
           GIT_CONFIG_KEY_0: 'fixture.context',
           GIT_CONFIG_VALUE_0: 'outer',
           GIT_CONFIG_PARAMETERS: "'fixture.parameter=outer'",
-          MDVIEWERRSX_TEST_NODE: process.execPath,
-          MDVIEWERRSX_CONTEXT_FIXTURE: outer,
+          TAURIMD_TEST_NODE: process.execPath,
+          TAURIMD_CONTEXT_FIXTURE: outer,
         },
       });
       assert.equal(

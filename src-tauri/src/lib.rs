@@ -11,23 +11,23 @@ use navigation_commands::{
 };
 mod presentation;
 mod settings;
-use documents::{read_document, AppError, Session, Snapshot};
+use documents::{AppError, Session, Snapshot, read_document};
 use presentation::{Presentation, ReaderMenu};
 use serde::Serialize;
 use settings::{Patch, Record, SettingsStore, Update};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 use tauri::{
-    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     Emitter, EventTarget, Manager, State, WebviewWindow,
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
 };
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 mod windows;
-use windows::{reader, Windows};
+use windows::{Windows, reader};
 type ReaderState = Mutex<Session>;
 #[tauri::command]
 async fn present_reader(window: WebviewWindow, presentation: Presentation) -> Result<(), AppError> {
@@ -171,10 +171,9 @@ async fn reload_document(
             .root
             .as_ref()
             .is_some_and(|root| granted.path.starts_with(&root.path))
+            && let Some(worker) = &session.navigation.worker
         {
-            if let Some(worker) = &session.navigation.worker {
-                worker.refresh();
-            }
+            worker.refresh();
         }
         let cancel = session.begin(request_id)?;
         (granted, cancel)
@@ -190,13 +189,12 @@ async fn reload_document(
     })
     .await
     .map_err(|_| AppError::new("resourceFailure", "The document reload could not finish."))??;
-    let result = session(&window, &state)?.stage(request_id, document);
-    result
+    session(&window, &state)?.stage(request_id, document)
 }
 #[tauri::command]
 fn commit_document(window: WebviewWindow, request_id: u32) -> Result<(), AppError> {
     let name = windows::commit(&window, request_id)?;
-    if let Err(error) = window.set_title(&format!("{name} — MDViewerRSX")) {
+    if let Err(error) = window.set_title(&format!("{name} — tauri.md")) {
         let _ = window.emit_to(
             EventTarget::webview_window(window.label()),
             "reader_notice",
@@ -231,8 +229,7 @@ async fn resolve_media(
             .map_err(|_| {
                 AppError::new("resourceFailure", "Media resolution could not finish.")
             })??;
-    let result = media::insert(&mut *session(&window, &state)?, resolved);
-    result
+    media::insert(&mut *session(&window, &state)?, resolved)
 }
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
@@ -291,15 +288,14 @@ fn activate_pending_link(
                     AppError::new("resourceFailure", "Reader state is unavailable.")
                 })?;
                 session.current(request_id)?;
-                if let Some(fragment) = &fragment {
-                    if session
+                if let Some(fragment) = &fragment
+                    && session
                         .displayed()
                         .is_some_and(|document| document.path == path)
-                    {
-                        return Ok(Activation::Anchor {
-                            fragment: fragment.clone(),
-                        });
-                    }
+                {
+                    return Ok(Activation::Anchor {
+                        fragment: fragment.clone(),
+                    });
                 }
             }
             handoff(path, fragment)?;
@@ -381,12 +377,11 @@ async fn begin_export(window: WebviewWindow, request: export::Begin) -> Result<u
     result.map(|()| id)
 }
 fn release_export(window: &WebviewWindow, id: u32) {
-    if let Ok(state) = reader(window) {
-        if let Ok(mut session) = session(window, &state) {
-            if session.export.as_ref().is_some_and(|job| job.id == id) {
-                session.export = None;
-            }
-        }
+    if let Ok(state) = reader(window)
+        && let Ok(mut session) = session(window, &state)
+        && session.export.as_ref().is_some_and(|job| job.id == id)
+    {
+        session.export = None;
     }
 }
 #[tauri::command]
@@ -488,8 +483,7 @@ fn get_settings(
 }
 fn settings_caller(window: &WebviewWindow) -> Result<(), AppError> {
     let state = reader(window)?;
-    let result = session(window, &state).map(|_| ());
-    result
+    session(window, &state).map(|_| ())
 }
 #[tauri::command]
 async fn update_settings(
@@ -641,7 +635,7 @@ pub fn run() {
                 None::<&str>,
             )?;
             let guide = MenuItem::with_id(app, "guide", "User Guide", true, None::<&str>)?;
-            let about = MenuItem::with_id(app, "about", "About MDViewerRSX", true, None::<&str>)?;
+            let about = MenuItem::with_id(app, "about", "About tauri.md", true, None::<&str>)?;
             let information = MenuItem::with_id(
                 app,
                 "information",
@@ -827,7 +821,7 @@ pub fn run() {
                 &[
                     &Submenu::with_items(
                         app,
-                        "MDViewerRSX",
+                        "tauri.md",
                         true,
                         &[
                             &about,
@@ -931,15 +925,15 @@ pub fn run() {
                         .get(window.label())
                         .map(|reader| (reader.session.clone(), reader.presentation))
                 });
-                if let Some((state, presentation)) = applied {
-                    if let Ok(session) = state.lock() {
-                        if let Some(worker) = &session.navigation.worker {
-                            worker.focus();
-                        }
-                        let _ = app
-                            .state::<ReaderMenu>()
-                            .apply(&presentation, session.has_document());
+                if let Some((state, presentation)) = applied
+                    && let Ok(session) = state.lock()
+                {
+                    if let Some(worker) = &session.navigation.worker {
+                        worker.focus();
                     }
+                    let _ = app
+                        .state::<ReaderMenu>()
+                        .apply(&presentation, session.has_document());
                 }
             }
             if matches!(event, tauri::WindowEvent::Destroyed) {
@@ -947,7 +941,7 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("MDViewerRSX could not start")
+        .expect("tauri.md could not start")
         .run(|app, event| match event {
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Opened { urls } => windows::enqueue(

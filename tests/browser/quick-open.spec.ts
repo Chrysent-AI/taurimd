@@ -82,7 +82,7 @@ async function open(
 }
 test.beforeEach(async ({ page }) => {
   await page.goto(
-    `${process.env.MDVIEWERRSX_TEST_URL ?? ''}/tests/browser/shell.html`,
+    `${process.env.TAURIMD_TEST_URL ?? ''}/tests/browser/shell.html`,
   );
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.listenerCount()))
@@ -105,7 +105,7 @@ test('manual refresh settles through cached getters when only index notification
   page,
 }) => {
   await page.goto(
-    `${process.env.MDVIEWERRSX_TEST_URL ?? ''}/tests/browser/shell.html?index-failure`,
+    `${process.env.TAURIMD_TEST_URL ?? ''}/tests/browser/shell.html?index-failure`,
   );
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.listenerCount()))

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { command } from './fixture-command.mjs';
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -21,7 +22,7 @@ function git(cwd, ...args) {
   return result.output.trim();
 }
 function fixture(run) {
-  const root = mkdtempSync(join(tmpdir(), 'mdviewerrsx-hooks-'));
+  const root = mkdtempSync(join(tmpdir(), 'taurimd-hooks-'));
   try {
     git(root, 'init', '--initial-branch=main');
     cpSync(resolve(project, 'scripts'), join(root, 'scripts'), {
@@ -381,6 +382,36 @@ test('shared type and test commands reject real failures and accept a repaired f
       0,
     );
   }));
+test('managed hook description may change but executable bytes and permissions cannot', () =>
+  fixture((root) => {
+    const install = () =>
+      command(root, process.execPath, ['scripts/hooks.mjs']);
+    assert.equal(install().status, 0);
+    const path = join(root, '.git/hooks/pre-commit');
+    const original = readFileSync(path, 'utf8');
+    const commentOnly = original.replace(
+      /^# Repository managed dispatcher[^\n]*$/m,
+      '# Earlier managed description',
+    );
+    assert.notEqual(commentOnly, original);
+    writeFileSync(path, commentOnly);
+    assert.equal(install().status, 0);
+    assert.equal(readFileSync(path, 'utf8'), commentOnly);
+    const changed = commentOnly.replace(
+      'exec node scripts/check.mjs',
+      'exec node other.mjs',
+    );
+    writeFileSync(path, changed);
+    assert.notEqual(install().status, 0);
+    assert.equal(readFileSync(path, 'utf8'), changed);
+    if (process.platform !== 'win32') {
+      writeFileSync(path, commentOnly);
+      chmodSync(path, 0o644);
+      assert.notEqual(install().status, 0);
+      chmodSync(path, 0o755);
+    }
+  }));
+
 test('documented installer preserves existing hooks and custom routing', () =>
   fixture((root) => {
     git(root, 'config', 'core.hooksPath', '.custom-hooks');

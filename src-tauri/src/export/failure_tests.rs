@@ -1,5 +1,5 @@
 use super::{
-    tests::{cache_empty, close, fixture, SVG},
+    tests::{SVG, cache_empty, close, fixture},
     *,
 };
 
@@ -21,26 +21,30 @@ fn copy_flush_and_sync_failures_are_checked_before_atomic_replacement() {
     let mut stage = Stage::create(root.path()).unwrap();
     let mut output = FlushDenied(Vec::new());
     let mut input = SVG;
-    assert!(copy_checked(
-        &mut input,
-        &mut output,
-        || Ok(()),
-        |_| panic!("flush must precede sync")
-    )
-    .is_err());
+    assert!(
+        copy_checked(
+            &mut input,
+            &mut output,
+            || Ok(()),
+            |_| panic!("flush must precede sync")
+        )
+        .is_err()
+    );
     assert_eq!(output.0, SVG);
     let mut file = OpenOptions::new()
         .write(true)
         .open(&stage.owned.path)
         .unwrap();
     let mut input = SVG;
-    assert!(copy_checked(
-        &mut input,
-        &mut file,
-        || Ok(()),
-        |_| Err(std::io::ErrorKind::PermissionDenied.into())
-    )
-    .is_err());
+    assert!(
+        copy_checked(
+            &mut input,
+            &mut file,
+            || Ok(()),
+            |_| Err(std::io::ErrorKind::PermissionDenied.into())
+        )
+        .is_err()
+    );
     drop(file);
     stage.owned.remove().unwrap();
     drop(stage);
@@ -93,13 +97,15 @@ fn bad_append_binding_retires_the_registered_transaction() {
             1 => binding.revision += 1,
             _ => binding.mode = Mode::Png,
         }
-        assert!(registered
-            .append_bound(&Image {
-                binding,
-                ordinal: 1,
-                bytes: SVG.to_vec()
-            })
-            .is_err());
+        assert!(
+            registered
+                .append_bound(&Image {
+                    binding,
+                    ordinal: 1,
+                    bytes: SVG.to_vec()
+                })
+                .is_err()
+        );
         assert!(job.append(1, SVG).is_err());
         cache_empty(root.path());
         drop(registered);
@@ -190,13 +196,14 @@ fn consumed_writer_finish_failure_still_reaps_the_independent_archive_guard_befo
         archive.writer = None;
         archive.writer = Some(ZipWriter::new(File::open(&archive.archive.path).unwrap()));
     }
-    assert!(job
-        .finish(
+    assert!(
+        job.finish(
             || panic!("failed finalization must not open Save"),
             |_| panic!("no Replace"),
             || panic!("no commit")
         )
-        .is_err());
+        .is_err()
+    );
     cache_empty(root.path());
     close(root, session, job);
 }
@@ -242,20 +249,22 @@ fn cache_cleanup_failure_precedes_persist_and_keeps_the_confirmed_old_destinatio
         .path
         .join("unknown");
     fs::write(&unknown, b"preserve unexpected data").unwrap();
-    assert!(job
-        .finish(
+    assert!(
+        job.finish(
             || Ok(Some(destination.clone())),
             |_| true,
             || job.commit_start(&session)
         )
-        .is_err());
+        .is_err()
+    );
     assert_eq!(fs::read(&destination).unwrap(), b"previous archive");
     assert!(unknown.exists());
-    assert!(!fs::read_dir(root.path()).unwrap().any(|item| item
-        .unwrap()
-        .file_name()
-        .to_string_lossy()
-        .starts_with(".mdviewerrsx-export-")));
+    assert!(!fs::read_dir(root.path()).unwrap().any(|item| {
+        item.unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".taurimd-export-")
+    }));
     fs::remove_file(unknown).unwrap(); // Only the fixture removes its known child.
     job.reap().unwrap();
     close(root, session, job);
@@ -319,13 +328,14 @@ fn destination_appearance_cleanup_failure_and_mid_copy_cancel_leave_old_output_i
     let original = root.path().join("held-archive");
     fs::rename(&archive_path, &original).unwrap();
     fs::write(&archive_path, b"foreign archive").unwrap();
-    assert!(job
-        .finish(
+    assert!(
+        job.finish(
             || Ok(Some(destination.clone())),
             |_| true,
             || job.commit_start(&session)
         )
-        .is_err());
+        .is_err()
+    );
     assert_eq!(fs::read(&destination).unwrap(), b"appeared");
     assert_eq!(fs::read(&archive_path).unwrap(), b"foreign archive");
     fs::remove_file(&archive_path).unwrap();

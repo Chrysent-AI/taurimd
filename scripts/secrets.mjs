@@ -37,7 +37,7 @@ export async function scan(mode, values = []) {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
-  const scratch = mkdtempSync(join(tmpdir(), 'mdviewerrsx-scan-'));
+  const scratch = mkdtempSync(join(tmpdir(), 'taurimd-scan-'));
   const ignore = join(scratch, 'empty-ignore');
   writeFileSync(ignore, '');
   const flags = [

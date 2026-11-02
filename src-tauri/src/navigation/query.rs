@@ -680,14 +680,16 @@ mod tests {
             .unwrap();
         let next = nav.root.as_ref().unwrap();
         let new_file = Path::new("new").join("new.md");
-        assert!(next
-            .records
-            .iter()
-            .any(|row| row.entry.relative == new_file.to_string_lossy()));
-        assert!(next
-            .records
-            .iter()
-            .any(|row| row.entry.relative == sub_a.to_string_lossy()));
+        assert!(
+            next.records
+                .iter()
+                .any(|row| row.entry.relative == new_file.to_string_lossy())
+        );
+        assert!(
+            next.records
+                .iter()
+                .any(|row| row.entry.relative == sub_a.to_string_lossy())
+        );
         assert!(query(next, request("a"), Some(&home)).is_err());
         assert!(scope.live().is_err());
         assert_eq!(fs::read(root.join("a.md")).unwrap(), [0xff]);

@@ -66,10 +66,12 @@ fn metadata_only_recursive_formats_and_shared_root_siblings() {
             .count(),
         8
     );
-    assert!(!index
-        .entries
-        .iter()
-        .any(|e| e.name.starts_with('.') || e.name == "bad.mdx"));
+    assert!(
+        !index
+            .entries
+            .iter()
+            .any(|e| e.name.starts_with('.') || e.name == "bad.mdx")
+    );
     assert!(index.issues.is_empty());
     let scope = nav.scope(index.scope).unwrap();
     let nested = Path::new("nested").join("a.md");
@@ -95,14 +97,16 @@ fn metadata_only_recursive_formats_and_shared_root_siblings() {
         .root_siblings(&dir.path().join("a.MD").canonicalize().unwrap())
         .unwrap();
     assert_eq!(top.index.entries.len(), 7);
-    assert!(top
-        .index
-        .entries
-        .iter()
-        .all(|e| Path::new(&e.relative).components().count() == 1));
-    assert!(nav
-        .root_siblings(&dir.path().join(".hidden.md").canonicalize().unwrap())
-        .is_none());
+    assert!(
+        top.index
+            .entries
+            .iter()
+            .all(|e| Path::new(&e.relative).components().count() == 1)
+    );
+    assert!(
+        nav.root_siblings(&dir.path().join(".hidden.md").canonicalize().unwrap())
+            .is_none()
+    );
     drop(nav);
     reap(dir);
 }
@@ -134,10 +138,12 @@ fn deterministic_native_alpha_date_ties_missing_times_and_no_source_writes() {
             .collect::<Vec<_>>(),
         ["B.log", "a.md", "z.md"]
     );
-    assert!(scope
-        .records
-        .iter()
-        .all(|r| r.entry.alpha_rank == r.entry.date_rank));
+    assert!(
+        scope
+            .records
+            .iter()
+            .all(|r| r.entry.alpha_rank == r.entry.date_rank)
+    );
     Arc::make_mut(&mut scope.records)[0].modified = None;
     Arc::make_mut(&mut scope.records)[2].modified = Some(time + Duration::from_secs(1));
     rank(&mut scope);
@@ -185,14 +191,18 @@ fn initial_iterator_and_nested_denial_are_not_false_empty_success() {
     })
     .unwrap();
     assert!(scope.records.iter().any(|r| r.entry.name == "good.md"));
-    assert!(scope
-        .issues
-        .iter()
-        .any(|e| e.code == "denied" && e.relative == "denied"));
-    assert!(scope
-        .issues
-        .iter()
-        .any(|e| e.message.contains("iterator failure")));
+    assert!(
+        scope
+            .issues
+            .iter()
+            .any(|e| e.code == "denied" && e.relative == "denied")
+    );
+    assert!(
+        scope
+            .issues
+            .iter()
+            .any(|e| e.message.contains("iterator failure"))
+    );
     fs::remove_file(dir.path().join("good.md")).unwrap();
     fs::remove_dir(dir.path().join("denied")).unwrap();
     let mut missing = scope;
@@ -270,12 +280,14 @@ fn native_hidden_flag_excludes_even_a_non_dot_filename() {
     let dir = root();
     let path = dir.path().join("native-hidden.md");
     fs::write(&path, "# Hidden").unwrap();
-    assert!(std::process::Command::new("chflags")
-        .arg("hidden")
-        .arg(&path)
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        std::process::Command::new("chflags")
+            .arg("hidden")
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success()
+    );
     let mut nav = Navigation::default();
     let index = published(&mut nav, dir.path(), true);
     assert!(index.entries.is_empty());
@@ -322,21 +334,25 @@ fn epochs_old_ids_preview_cancellation_context_and_commit_lifetime_are_native_ow
     assert_ne!(fresh.entries[0].id, index.entries[0].id);
     assert_eq!(fresh.entries[0].ui_id, index.entries[0].ui_id);
     assert_eq!(fresh.entries[0].context, index.entries[0].context);
-    assert!(session
-        .navigation
-        .scope(entry.scope)
-        .unwrap()
-        .entry(entry)
-        .is_err());
+    assert!(
+        session
+            .navigation
+            .scope(entry.scope)
+            .unwrap()
+            .entry(entry)
+            .is_err()
+    );
     assert!(session.navigation.scope(999).is_err());
     let mut forged = binding(&fresh, "same.md");
     forged.entry = 0;
-    assert!(session
-        .navigation
-        .scope(forged.scope)
-        .unwrap()
-        .entry(forged)
-        .is_err());
+    assert!(
+        session
+            .navigation
+            .scope(forged.scope)
+            .unwrap()
+            .entry(forged)
+            .is_err()
+    );
     let foreign = published(&mut session.navigation, other.path(), true);
     assert_ne!(foreign.entries[0].context, index.entries[0].context);
     assert_eq!(active.snapshot.source, "# Same");

@@ -155,7 +155,7 @@ async function preview(
 }
 test.beforeEach(async ({ page }) => {
   await page.goto(
-    `${process.env.MDVIEWERRSX_TEST_URL ?? ''}/tests/browser/shell.html`,
+    `${process.env.TAURIMD_TEST_URL ?? ''}/tests/browser/shell.html`,
   );
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.listenerCount()))

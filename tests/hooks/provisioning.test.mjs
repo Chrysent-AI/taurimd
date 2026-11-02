@@ -15,10 +15,15 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const project = fileURLToPath(new URL('../../', import.meta.url));
 function fixture(check) {
-  const root = mkdtempSync(join(tmpdir(), 'mdviewerrsx-provision-contract-'));
+  const root = mkdtempSync(join(tmpdir(), 'taurimd-provision-contract-'));
   try {
     mkdirSync(join(root, 'scripts'));
-    for (const name of ['check.mjs', 'run.mjs', 'secrets.mjs'])
+    for (const name of [
+      'check.mjs',
+      'run.mjs',
+      'secrets.mjs',
+      'prepare-package.mjs',
+    ])
       cpSync(join(project, 'scripts', name), join(root, 'scripts', name));
     const mockPackage = join(root, 'node_modules/@playwright/test');
     mkdirSync(mockPackage, { recursive: true });
@@ -26,7 +31,7 @@ function fixture(check) {
     // An owned stand-in records the contract. It cannot install or remove a browser.
     writeFileSync(
       join(mockPackage, 'cli.js'),
-      "const fs=require('node:fs'); fs.writeFileSync('contract.json', JSON.stringify({args:process.argv.slice(2), skip:process.env.PLAYWRIGHT_SKIP_BROWSER_GC, inherited:process.env.MDVIEWERRSX_FIXTURE_MARKER})); if(process.env.MDVIEWERRSX_FIXTURE_FAIL==='1')process.exitCode=9;",
+      "const fs=require('node:fs'); fs.writeFileSync('contract.json', JSON.stringify({args:process.argv.slice(2), skip:process.env.PLAYWRIGHT_SKIP_BROWSER_GC, inherited:process.env.TAURIMD_FIXTURE_MARKER})); if(process.env.TAURIMD_FIXTURE_FAIL==='1')process.exitCode=9;",
     );
     check(root);
   } finally {
@@ -44,8 +49,8 @@ function invoke(root, args = [], fail = false) {
       env: {
         ...process.env,
         PLAYWRIGHT_SKIP_BROWSER_GC: '0',
-        MDVIEWERRSX_FIXTURE_MARKER: 'kept',
-        MDVIEWERRSX_FIXTURE_FAIL: fail ? '1' : '0',
+        TAURIMD_FIXTURE_MARKER: 'kept',
+        TAURIMD_FIXTURE_FAIL: fail ? '1' : '0',
       },
     },
   );

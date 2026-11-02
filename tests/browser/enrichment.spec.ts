@@ -43,9 +43,9 @@ async function capture(
   name: string,
   extra: object = {},
 ) {
-  const path = process.env.MDVIEWERRSX_APPEARANCE_EVIDENCE
+  const path = process.env.TAURIMD_APPEARANCE_EVIDENCE
     ? join(
-        process.env.MDVIEWERRSX_APPEARANCE_EVIDENCE,
+        process.env.TAURIMD_APPEARANCE_EVIDENCE,
         `${info.project.name}-${name}.png`,
       )
     : info.outputPath(`${name}.png`);
@@ -109,7 +109,7 @@ test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.emulateMedia({ colorScheme: 'light' });
   await page.goto(
-    `${process.env.MDVIEWERRSX_TEST_URL ?? ''}/tests/browser/shell.html`,
+    `${process.env.TAURIMD_TEST_URL ?? ''}/tests/browser/shell.html`,
   );
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.listenerCount()))
@@ -434,7 +434,7 @@ test('all real token categories and metadata remain legible in every palette and
     }
   }
   expect(await page.evaluate(() => window.readerFixture.parses())).toBe(2);
-  const destination = process.env.MDVIEWERRSX_APPEARANCE_EVIDENCE;
+  const destination = process.env.TAURIMD_APPEARANCE_EVIDENCE;
   writeFileSync(
     destination
       ? join(destination, `${info.project.name}-rich-computed.json`)

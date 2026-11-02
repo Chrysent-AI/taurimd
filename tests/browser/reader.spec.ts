@@ -8,7 +8,7 @@ test('real worker and sanitizer do not execute or fetch document content', async
       external.push(request.url());
   });
   await page.goto(
-    `${process.env.MDVIEWERRSX_TEST_URL ?? ''}/tests/browser/fixture.html`,
+    `${process.env.TAURIMD_TEST_URL ?? ''}/tests/browser/fixture.html`,
   );
   await page.waitForFunction(() => typeof window.renderDocument === 'function');
   await page.evaluate(async () => {

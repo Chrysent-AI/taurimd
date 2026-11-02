@@ -17,7 +17,7 @@ const git = (...args) =>
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
 export const hookText = (mode) => `#!/bin/sh
-# MDViewerRSX managed dispatcher; resolves the invoking checkout.
+# Repository managed dispatcher; resolves the invoking checkout.
 set -eu
 root=$(git rev-parse --show-toplevel) || exit 1
 cd "$root"
@@ -64,7 +64,12 @@ export function install() {
   for (const entry of entries) {
     try {
       const info = lstatSync(entry.path);
-      if (!info.isFile() || readFileSync(entry.path, 'utf8') !== entry.text)
+      // Only the description line may vary; executable bytes must be identical.
+      const body = (text) => text.replace(/^#[^\n]*\n(?=set -eu\n)/m, '');
+      if (
+        !info.isFile() ||
+        body(readFileSync(entry.path, 'utf8')) !== body(entry.text)
+      )
         throw new Error(
           'Existing protection must not be overwritten. Chain check:local/staged and check:commit through its supported installer.',
         );

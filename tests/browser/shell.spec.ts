@@ -1,6 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import type { Snapshot } from '../../src/types';
+import packageMetadata from '../../package.json' with { type: 'json' };
 const snapshot = (
   name: string,
   documentId = 1,
@@ -48,7 +49,7 @@ async function open(page: Page, doc: Snapshot) {
 }
 test.beforeEach(async ({ page }) => {
   await page.goto(
-    `${process.env.MDVIEWERRSX_TEST_URL ?? ''}/tests/browser/shell.html`,
+    `${process.env.TAURIMD_TEST_URL ?? ''}/tests/browser/shell.html`,
   );
   await expect(page.getByRole('main')).toContainText('File → Open File');
   await expect
@@ -64,6 +65,24 @@ test.afterEach(async ({ page }) => {
   await page.evaluate(() => {
     window.readerFixture.cleanup();
   });
+});
+
+test('renamed About displays tauri.md without reading or replacing a document', async ({
+  page,
+}) => {
+  const before = await page.evaluate(() => window.readerFixture.calls());
+  await page.evaluate(() => window.readerFixture.menu('about'));
+  const about = page.getByRole('dialog', {
+    name: 'About tauri.md',
+    exact: true,
+  });
+  await expect(about).toContainText(`tauri.md ${packageMetadata.version}`);
+  await expect(about).toContainText('MIT licensed');
+  expect(await page.evaluate(() => window.readerFixture.calls())).toEqual(
+    before,
+  );
+  await about.getByRole('button', { name: 'Close' }).click();
+  await expect(page.getByRole('main')).toBeFocused();
 });
 
 test('quiet menu-first shell routes Open, chooser cancel, literal text and empty files through the JS adapter', async ({
@@ -545,7 +564,7 @@ test('bundled Guide is a separate real parsed surface with scoped fragments, com
     .poll(() => page.evaluate(() => window.readerFixture.activeWorkers()))
     .toBe(0);
   await page.evaluate(() => window.readerFixture.menu('about'));
-  const about = page.getByRole('dialog', { name: 'About MDViewerRSX' });
+  const about = page.getByRole('dialog', { name: 'About tauri.md' });
   await expect(about).toContainText('MIT licensed');
   await expect(about).toContainText('remain separate checks');
   await capture(page, info, 'about-empty-reader');
@@ -560,7 +579,7 @@ test('menu subscription transport failure exposes actual direct Open/Settings/Re
   page,
 }) => {
   await page.goto(
-    `${process.env.MDVIEWERRSX_TEST_URL ?? ''}/tests/browser/shell.html?menu-failure`,
+    `${process.env.TAURIMD_TEST_URL ?? ''}/tests/browser/shell.html?menu-failure`,
   );
   await expect(page.getByRole('alert')).toContainText(
     'Menu commands unavailable',

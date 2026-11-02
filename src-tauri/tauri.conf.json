@@ -1,20 +1,21 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "MDViewerRSX",
+  "productName": "tauri.md",
+  "mainBinaryName": "taurimd",
   "version": "0.1.0",
   "identifier": "com.chrysent.mdviewerrsx",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
-    "frontendDist": "../dist"
+    "frontendDist": "frontend-dist"
   },
   "app": {
     "windows": [
       {
         "label": "reader",
         "create": false,
-        "title": "MDViewerRSX",
+        "title": "tauri.md",
         "width": 1000,
         "height": 760,
         "dragDropEnabled": false
@@ -29,13 +30,13 @@
     "active": true,
     "publisher": "Chrysent",
     "license": "MIT",
-    "licenseFile": "../LICENSE",
+    "licenseFile": "package/LICENSE",
     "category": "Utility",
     "icon": ["icons/icon.png", "icons/icon.ico"],
     "fileAssociations": [
       {
         "ext": ["md", "markdown", "mdown", "mkd", "mkdown"],
-        "name": "MDViewerRSX.Markdown",
+        "name": "taurimd.Markdown",
         "description": "Markdown document",
         "role": "Viewer",
         "mimeType": "text/markdown"

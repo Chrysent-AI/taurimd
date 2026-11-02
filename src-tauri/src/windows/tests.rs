@@ -66,9 +66,11 @@ fn native_reservations_readiness_commit_and_route_specific_replacement() {
     assert_eq!(opening.fragment.as_deref(), Some("part"));
     assert!(windows.pending(&destination).unwrap().is_none());
     assert!(windows.accept(&destination, token, 2).is_err());
-    assert!(windows
-        .reserve(b.clone(), Some("later-section".into()), None, false)
-        .is_err());
+    assert!(
+        windows
+            .reserve(b.clone(), Some("later-section".into()), None, false)
+            .is_err()
+    );
     // Acceptance transfers lifetime: closing the source cannot revoke destination work.
     retire(windows.detach(&origin).unwrap()).unwrap();
     assert!(source.lock().unwrap().begin(3).is_err());
@@ -97,10 +99,12 @@ fn native_reservations_readiness_commit_and_route_specific_replacement() {
             .source,
         "# B"
     );
-    assert!(windows
-        .reserve(a.clone(), None, None, true)
-        .unwrap()
-        .is_none());
+    assert!(
+        windows
+            .reserve(a.clone(), None, None, true)
+            .unwrap()
+            .is_none()
+    );
     // Retained sidebar/sibling replacement may display an already-open path.
     let duplicate = windows.enroll(None).unwrap();
     stage(&windows, &duplicate, &b, 1);
@@ -269,16 +273,13 @@ fn same_numeric_ids_do_not_cross_media_root_export_or_presentation_owners() {
     retire(windows.detach(&a).unwrap()).unwrap();
     assert_eq!(media::serve(&one, &a, request(), |r| r.status()), 403);
     assert!(two.lock().unwrap().active(1, 1).is_ok());
-    assert!(!root
-        .path()
-        .join("cache")
-        .read_dir()
-        .unwrap()
-        .any(|entry| entry
+    assert!(!root.path().join("cache").read_dir().unwrap().any(|entry| {
+        entry
             .unwrap()
             .file_name()
             .to_string_lossy()
-            .starts_with("run-")));
+            .starts_with("run-")
+    }));
     cleanup(windows, root);
 }
 #[test]
@@ -331,9 +332,11 @@ fn focus_fragments_bind_displayed_revision_and_reject_actual_native_owners() {
             modal,
             ..Presentation::default()
         };
-        assert!(windows
-            .reserve(path.clone(), Some("heading".into()), None, false)
-            .is_err());
+        assert!(
+            windows
+                .reserve(path.clone(), Some("heading".into()), None, false)
+                .is_err()
+        );
         assert!(windows.reserve(path.clone(), None, None, false).is_ok());
         assert!(windows.readers[&label].pending.is_none());
     }
@@ -439,8 +442,8 @@ fn retirement_reaps_root_worker_and_waits_for_non_cancellable_export_completion(
 }
 
 #[test]
-fn colliding_root_bindings_resolve_only_local_entries_and_root_replacement_rejects_unaccepted_handoffs(
-) {
+fn colliding_root_bindings_resolve_only_local_entries_and_root_replacement_rejects_unaccepted_handoffs()
+ {
     let root = fixture();
     let paths = [root.path().join("one"), root.path().join("two")];
     for (path, source) in paths.iter().zip(["# One", "# Two"]) {
@@ -499,14 +502,16 @@ fn colliding_root_bindings_resolve_only_local_entries_and_root_replacement_rejec
         .start(navigation::root_path(&paths[1]).unwrap(), true, false)
         .unwrap();
     assert!(source.lock().unwrap().current(2).is_ok());
-    assert!(windows
-        .reserve(
-            root.path().join("b.md").canonicalize().unwrap(),
-            None,
-            Some((&source, 2, Some(&stale_scope))),
-            false
-        )
-        .is_err());
+    assert!(
+        windows
+            .reserve(
+                root.path().join("b.md").canonicalize().unwrap(),
+                None,
+                Some((&source, 2, Some(&stale_scope))),
+                false
+            )
+            .is_err()
+    );
     assert_eq!(windows.readers.len(), 2);
     retire(windows.detach(&labels[0]).unwrap()).unwrap();
     scope.live().unwrap();
@@ -519,7 +524,12 @@ fn package_configuration_keeps_viewer_aliases_supported_platforms_and_narrow_del
     let common: serde_json::Value =
         serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
     let bundle = &common["bundle"];
-    assert_eq!(common["productName"], "MDViewerRSX");
+    assert_eq!(common["productName"], "tauri.md");
+    assert_eq!(common["mainBinaryName"], "taurimd");
+    // Preserve existing identifier-derived preferences and single-instance behavior.
+    assert_eq!(common["identifier"], "com.chrysent.mdviewerrsx");
+    assert_eq!(common["build"]["frontendDist"], "frontend-dist");
+    assert_eq!(bundle["fileAssociations"][0]["name"], "taurimd.Markdown");
     assert_eq!(bundle["publisher"], "Chrysent");
     assert_eq!(bundle["license"], "MIT");
     assert_eq!(bundle["fileAssociations"].as_array().unwrap().len(), 1);
@@ -559,7 +569,17 @@ fn package_configuration_keeps_viewer_aliases_supported_platforms_and_narrow_del
             serde_json::from_value(config["bundle"].clone()).unwrap();
         assert_eq!(config["bundle"]["targets"], targets);
     }
-    assert!(include_str!("../../packaging/mdviewerrsx.desktop").contains("Exec={{exec}} %F"));
+    assert!(include_str!("../../packaging/taurimd.desktop").contains("Exec={{exec}} %F"));
+    assert!(
+        include_str!("../../packaging/associations.nsh")
+            .contains("Software\\Classes\\taurimd.Markdown\\shell\\open\\command")
+    );
+    let linux: serde_json::Value =
+        serde_json::from_str(include_str!("../../tauri.linux.conf.json")).unwrap();
+    assert_eq!(
+        linux["bundle"]["linux"]["deb"]["files"]["/usr/share/mime/packages/taurimd.xml"],
+        "packaging/taurimd.xml"
+    );
     assert!(include_str!("../../packaging/associations.nsh").contains("NSIS_HOOK_POSTINSTALL"));
     assert!(include_str!("../../packaging/associations.nsh").contains("$\\\"%1$\\\""));
 }

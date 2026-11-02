@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import type { Snapshot } from '../../src/types';
-const url = `${process.env.MDVIEWERRSX_TEST_URL ?? ''}/tests/browser/shell.html`;
+const url = `${process.env.TAURIMD_TEST_URL ?? ''}/tests/browser/shell.html`;
 const owned = new Set<Page>();
 const snapshot = (name: string, source: string, id = 1): Snapshot => ({
   documentId: id,

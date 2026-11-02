@@ -197,18 +197,22 @@ fn save_failure_keeps_committed_revision_and_owned_temp_is_reaped() {
     fs::rename(&config, &backup).unwrap();
     fs::create_dir(&config).unwrap();
     fs::create_dir(config.join("settings-v1.json")).unwrap();
-    assert!(store
-        .update(1, patch(json!({"pageZoom":200})), |_| panic!(
-            "no failure event"
-        ))
-        .is_err());
+    assert!(
+        store
+            .update(1, patch(json!({"pageZoom":200})), |_| panic!(
+                "no failure event"
+            ))
+            .is_err()
+    );
     assert_eq!(store.get().unwrap(), saved);
     assert_eq!(SettingsStore::load(Some(backup)).get().unwrap(), saved);
     assert_eq!(fs::read_dir(&config).unwrap().count(), 1);
     assert!(config.join("settings-v1.json").is_dir());
-    assert!(SettingsStore::load(None)
-        .update(0, Patch::default(), |_| {})
-        .is_err());
+    assert!(
+        SettingsStore::load(None)
+            .update(0, Patch::default(), |_| {})
+            .is_err()
+    );
 }
 #[test]
 fn concurrent_writers_are_serialized_and_only_one_expected_revision_commits() {
@@ -242,9 +246,11 @@ fn native_validation_and_dtos_match_frontend_wire_without_path_parameters() {
     let fixture = root();
     let store = SettingsStore::load(Some(fixture.path().into()));
     for zoom in [0, 49, 55, 301] {
-        assert!(store
-            .update(0, patch(json!({"pageZoom":zoom})), |_| {})
-            .is_err());
+        assert!(
+            store
+                .update(0, patch(json!({"pageZoom":zoom})), |_| {})
+                .is_err()
+        );
     }
     for invalid in [
         json!({"mode":"auto"}),

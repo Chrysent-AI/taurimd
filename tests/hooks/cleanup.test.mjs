@@ -62,7 +62,7 @@ test(
   'manual Cargo cleanup previews unchanged and cleans only selected host/cross profiles',
   { skip: optionalMake },
   async (t) => {
-    const root = mkdtempSync('/tmp/mdviewerrsx-clean-builds-');
+    const root = mkdtempSync('/tmp/taurimd-clean-builds-');
     const checkout = join(root, 'selected checkout');
     const put = (name, text = `retained ${name}\n`) => {
       mkdirSync(dirname(join(root, name)), { recursive: true });

@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { run } from './run.mjs';
+import { preparePackage } from './prepare-package.mjs';
 import { scan, scannerPreflight } from './secrets.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const node = (path, args = []) =>
@@ -14,7 +15,10 @@ const commands = {
     node('node_modules/eslint/bin/eslint.js', ['.', '--max-warnings', '0']),
   types: () =>
     node('node_modules/typescript/bin/tsc', ['-b', '--pretty', 'false']),
-  build: () => node('node_modules/vite/bin/vite.js', ['build']),
+  build: async () => {
+    await node('node_modules/vite/bin/vite.js', ['build']);
+    preparePackage(root);
+  },
   test: () => node('node_modules/vitest/vitest.mjs', ['run']),
   hooks: () =>
     run(

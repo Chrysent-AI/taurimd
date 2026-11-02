@@ -33,7 +33,7 @@ struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
         let path = std::env::temp_dir().join(format!(
-            "mdviewerrsx-test-{}-{}",
+            "taurimd-test-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -81,11 +81,13 @@ fn strict_reads_and_reload_never_write_sources() {
         Format::Text
     );
     let empty = fixture.file("empty.md", b"");
-    assert!(read_document(&empty, None, 3, 4)
-        .unwrap()
-        .snapshot
-        .source
-        .is_empty());
+    assert!(
+        read_document(&empty, None, 3, 4)
+            .unwrap()
+            .snapshot
+            .source
+            .is_empty()
+    );
 }
 #[test]
 fn explicit_encoding_type_and_missing_failures() {

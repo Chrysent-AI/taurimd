@@ -290,12 +290,14 @@ fn cache_filters_and_explicit_one_directory_traversal_have_distinct_production_c
     assert_eq!(snapshot.status.scans, 1);
     assert_eq!(snapshot.status.traversals, 1);
     let added = PathBuf::from("new").join("added.md");
-    assert!(snapshot
-        .index
-        .unwrap()
-        .entries
-        .iter()
-        .any(|entry| entry.relative == added.to_string_lossy() && entry.parent.is_some()));
+    assert!(
+        snapshot
+            .index
+            .unwrap()
+            .entries
+            .iter()
+            .any(|entry| entry.relative == added.to_string_lossy() && entry.parent.is_some())
+    );
     assert!(!state.lock().unwrap().has_document());
     drop(scope);
     drop(state);

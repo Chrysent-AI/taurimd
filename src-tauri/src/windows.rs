@@ -1,7 +1,7 @@
 use crate::{
+    ReaderState,
     documents::{self, AppError, Session, Snapshot},
     presentation::Presentation,
-    ReaderState,
 };
 use serde::Serialize;
 use std::{
@@ -185,7 +185,10 @@ impl Registry {
                     || reader.presentation.composing
                     || reader.presentation.modal != crate::presentation::Modal::None
                 {
-                    return Err(AppError::new("unavailable", "The existing reader cannot navigate to a section while busy or in a dialog."));
+                    return Err(AppError::new(
+                        "unavailable",
+                        "The existing reader cannot navigate to a section while busy or in a dialog.",
+                    ));
                 }
                 reader.pending = Some(Pending {
                     token,
@@ -210,7 +213,10 @@ impl Registry {
                         .as_ref()
                         .is_some_and(|current| current != &fragment)
                 {
-                    return Err(AppError::new("unavailable", "The receiving reader is still opening this document. Try the section link again after it finishes."));
+                    return Err(AppError::new(
+                        "unavailable",
+                        "The receiving reader is still opening this document. Try the section link again after it finishes.",
+                    ));
                 }
                 pending.fragment = Some(fragment);
             }
@@ -542,10 +548,10 @@ pub fn enqueue(app: &AppHandle, paths: Vec<Result<PathBuf, AppError>>) {
                 .unwrap_or_default();
             for path in paths {
                 let result = path.and_then(|path| route(&app, path, None, None, None));
-                if let Err(error) = result {
-                    if let Err(error) = empty(&app, Some(error)) {
-                        eprintln!("OS open: {}", error.message);
-                    }
+                if let Err(error) = result
+                    && let Err(error) = empty(&app, Some(error))
+                {
+                    eprintln!("OS open: {}", error.message);
                 }
             }
         });

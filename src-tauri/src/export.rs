@@ -6,13 +6,13 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU32, AtomicU8, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU8, AtomicU32, Ordering},
     },
     time::SystemTime,
 };
 use tempfile::TempPath;
-use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
 fn failure(message: impl Into<String>) -> AppError {
     AppError::new("export", message)
@@ -648,11 +648,7 @@ fn validate_payload(mode: Mode, bytes: &[u8]) -> Result<(), AppError> {
                 && complete_png(bytes)
         }
     };
-    if valid {
-        Ok(())
-    } else {
-        Err(invalid())
-    }
+    if valid { Ok(()) } else { Err(invalid()) }
 }
 struct Target {
     identity: Handle,
@@ -732,7 +728,7 @@ struct Stage {
 impl Stage {
     fn create(parent: &Path) -> Result<Self, AppError> {
         let file = tempfile::Builder::new()
-            .prefix(".mdviewerrsx-export-")
+            .prefix(".taurimd-export-")
             .suffix(".zip.part")
             .disable_cleanup(true)
             .tempfile_in(parent)?;

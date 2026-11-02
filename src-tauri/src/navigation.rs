@@ -1,13 +1,13 @@
 pub mod query;
-use crate::documents::{classify, contained_file, AppError, Format, Session};
+use crate::documents::{AppError, Format, Session, classify, contained_file};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::SystemTime,
 };

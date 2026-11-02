@@ -3,9 +3,9 @@
     "targets": ["deb"],
     "linux": {
       "deb": {
-        "desktopTemplate": "packaging/mdviewerrsx.desktop",
+        "desktopTemplate": "packaging/taurimd.desktop",
         "files": {
-          "/usr/share/mime/packages/mdviewerrsx.xml": "packaging/mdviewerrsx.xml"
+          "/usr/share/mime/packages/taurimd.xml": "packaging/taurimd.xml"
         }
       }
     }

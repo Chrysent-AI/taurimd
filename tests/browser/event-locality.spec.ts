@@ -89,7 +89,7 @@ test('shared native emitter keeps commands, index watermarks, requests and notic
   try {
     const other = await context.newPage();
     readers.push(other);
-    const url = `${process.env.MDVIEWERRSX_TEST_URL ?? ''}/tests/browser/shell.html`;
+    const url = `${process.env.TAURIMD_TEST_URL ?? ''}/tests/browser/shell.html`;
     await Promise.all([
       page.goto(`${url}?reader=reader-a`),
       other.goto(`${url}?reader=reader-b`),

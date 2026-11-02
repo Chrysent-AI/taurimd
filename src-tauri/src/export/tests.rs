@@ -60,17 +60,19 @@ fn manifest_binding_shape_and_append_abort_are_native_authority() {
     for ordinals in [vec![], vec![0], vec![1, 1], vec![3, 1]] {
         let (root, mut session, job) = fixture(Mode::Svg, vec![1]);
         session.export = None;
-        assert!(Job::enroll(
-            &mut session,
-            "reader",
-            Begin {
-                document_id: 1,
-                revision: 1,
-                mode: Mode::Svg,
-                ordinals
-            }
-        )
-        .is_err());
+        assert!(
+            Job::enroll(
+                &mut session,
+                "reader",
+                Begin {
+                    document_id: 1,
+                    revision: 1,
+                    mode: Mode::Svg,
+                    ordinals
+                }
+            )
+            .is_err()
+        );
         close(root, session, job);
     }
     for bytes in [
@@ -146,11 +148,12 @@ fn stored_zip_full_svg_ordinal_gaps_atomic_hardlink_replacement() {
             assert_eq!(fs::metadata(&output).unwrap().file_attributes() & 0x100, 0);
         }
         cache_empty(root.path());
-        assert!(!fs::read_dir(root.path()).unwrap().any(|e| e
-            .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .starts_with(".mdviewerrsx-export-")));
+        assert!(!fs::read_dir(root.path()).unwrap().any(|e| {
+            e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".taurimd-export-")
+        }));
     }));
     // Always finish fixture teardown before resuming the original assertion failure.
     let reaped = job.reap();
@@ -174,7 +177,7 @@ fn stored_zip_full_svg_ordinal_gaps_atomic_hardlink_replacement() {
                 entry
                     .file_name()
                     .to_string_lossy()
-                    .starts_with(".mdviewerrsx-export-")
+                    .starts_with(".taurimd-export-")
             })
         });
     session.export = None;
@@ -182,7 +185,11 @@ fn stored_zip_full_svg_ordinal_gaps_atomic_hardlink_replacement() {
     drop(session);
     let removed = root.close();
     let root_absent = root_path.try_exists().is_ok_and(|exists| !exists);
-    eprintln!("Export verification: cleanup reap_ok={} source_unchanged={source_unchanged} resources_empty={resources_empty} cache_empty={cache_empty} stages_empty={stages_empty} root_close_ok={} root_absent={root_absent}", reaped.is_ok(), removed.is_ok());
+    eprintln!(
+        "Export verification: cleanup reap_ok={} source_unchanged={source_unchanged} resources_empty={resources_empty} cache_empty={cache_empty} stages_empty={stages_empty} root_close_ok={} root_absent={root_absent}",
+        reaped.is_ok(),
+        removed.is_ok()
+    );
     if let Err(error) = &reaped {
         eprintln!("Export verification: cleanup_code={}", error.code);
     }
@@ -247,16 +254,19 @@ fn stored_zip_new_and_ordinary_existing_destinations_commit_atomically() {
             use std::os::windows::fs::MetadataExt;
             assert_eq!(fs::metadata(&output).unwrap().file_attributes() & 0x100, 0);
         }
-        assert!(job
-            .io
-            .lock()
-            .is_ok_and(|io| io.archive.is_none() && io.stage.is_none()));
+        assert!(
+            job.io
+                .lock()
+                .is_ok_and(|io| io.archive.is_none() && io.stage.is_none())
+        );
         cache_empty(root.path());
-        assert!(!fs::read_dir(root.path()).unwrap().any(|entry| entry
-            .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .starts_with(".mdviewerrsx-export-")));
+        assert!(!fs::read_dir(root.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".taurimd-export-")
+        }));
         close(root, session, job);
     }
 }
@@ -313,11 +323,12 @@ fn cancel_decline_bad_destination_and_target_changes_preserve_previous_bytes() {
             }
         );
         cache_empty(root.path());
-        assert!(!fs::read_dir(root.path()).unwrap().any(|e| e
-            .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .starts_with(".mdviewerrsx-export-")));
+        assert!(!fs::read_dir(root.path()).unwrap().any(|e| {
+            e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".taurimd-export-")
+        }));
         close(root, session, job);
     }
 }
@@ -488,23 +499,25 @@ fn checked_copy_stops_on_cancel_or_write_failure_without_writing_destination() {
     let cancelled = AtomicBool::new(false);
     let mut output = Vec::new();
     let mut input = SVG;
-    assert!(copy_checked(
-        &mut input,
-        &mut output,
-        || {
-            cancelled.store(true, Ordering::Relaxed);
-            Err(Session::stale())
-        },
-        |_| Ok(())
-    )
-    .is_err());
+    assert!(
+        copy_checked(
+            &mut input,
+            &mut output,
+            || {
+                cancelled.store(true, Ordering::Relaxed);
+                Err(Session::stale())
+            },
+            |_| Ok(())
+        )
+        .is_err()
+    );
     assert!(output.is_empty());
 }
 #[test]
 #[ignore = "requires actual-App browser export evidence directory"]
 fn real_browser_payloads_use_native_stored_archive_path_when_supplied() {
-    let folder = std::env::var("MDVIEWERRSX_EXPORT_PAYLOADS")
-        .expect("set actual-App export evidence directory");
+    let folder =
+        std::env::var("TAURIMD_EXPORT_PAYLOADS").expect("set actual-App export evidence directory");
     for (mode, extension) in [(Mode::Svg, "svg"), (Mode::Png, "png")] {
         let images = [1, 3].map(|ordinal| {
             fs::read(Path::new(&folder).join(format!("diagram-{ordinal:03}.{extension}"))).unwrap()

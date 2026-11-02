@@ -5,6 +5,7 @@ export default defineConfig({
   plugins: [react()],
   clearScreen: false,
   server: { watch: { ignored: ['**/src-tauri/**'] } },
+  build: { outDir: 'src-tauri/frontend-dist' },
   worker: { format: 'es' },
   test: {
     environment: 'jsdom',

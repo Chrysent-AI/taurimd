@@ -1,5 +1,5 @@
 use crate::{
-    documents::{contained_file, AppError, Session},
+    documents::{AppError, Session, contained_file},
     links,
 };
 use serde::Serialize;
@@ -8,8 +8,8 @@ use std::{
     io::{Read, Seek, SeekFrom},
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 use tauri::http::{Request, Response, StatusCode};
@@ -243,7 +243,7 @@ fn representation(
                         0,
                         Vec::new(),
                         Some(format!("bytes */{length}")),
-                    ))
+                    ));
                 }
             }
         }

@@ -1,4 +1,4 @@
-use crate::documents::{contained_file, AppError};
+use crate::documents::{AppError, contained_file};
 use std::path::{Path, PathBuf};
 use tauri::Url;
 

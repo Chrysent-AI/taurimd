@@ -62,7 +62,7 @@ const screenshotting = new WeakSet<Page>();
 const webkitScreenshotDiagnostic =
   "Refused to apply a stylesheet because its hash, its nonce, or 'unsafe-inline' does not appear in the style-src directive of the Content Security Policy.";
 async function capture(page: Page, info: TestInfo, name: string) {
-  const destination = process.env.MDVIEWERRSX_APPEARANCE_EVIDENCE;
+  const destination = process.env.TAURIMD_APPEARANCE_EVIDENCE;
   const path = destination
     ? join(destination, `${info.project.name}-${name}.png`)
     : info.outputPath(`${name}.png`);
@@ -207,7 +207,7 @@ test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.emulateMedia({ colorScheme: 'light' });
   await page.goto(
-    `${process.env.MDVIEWERRSX_TEST_URL ?? ''}/tests/browser/shell.html`,
+    `${process.env.TAURIMD_TEST_URL ?? ''}/tests/browser/shell.html`,
   );
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.listenerCount()))
@@ -328,7 +328,7 @@ for (const mode of ['light', 'dark'] as const) {
       const computed = await assertRoles(page);
       await dialog.getByRole('button', { name: 'Reset to 100%' }).click();
       await saved(page);
-      const evidence = process.env.MDVIEWERRSX_APPEARANCE_EVIDENCE;
+      const evidence = process.env.TAURIMD_APPEARANCE_EVIDENCE;
       if (evidence)
         writeFileSync(
           join(evidence, `${info.project.name}-${mode}-${id}-computed.json`),

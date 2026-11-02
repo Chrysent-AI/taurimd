@@ -1,4 +1,4 @@
-use super::{session, ReaderState};
+use super::{ReaderState, session};
 use crate::{
     documents::{AppError, Session, Snapshot},
     navigation::{self, Binding, Siblings},
@@ -172,10 +172,8 @@ async fn search(
     let home = window.path().home_dir().ok();
     let answer = tauri::async_runtime::spawn_blocking(move || {
         let answer = navigation::query::query(&scope, request, home.as_deref())?;
-        if traverse {
-            if let Some(path) = &answer.missing {
-                navigation::query::validate_directory(&scope, path)?;
-            }
+        if traverse && let Some(path) = &answer.missing {
+            navigation::query::validate_directory(&scope, path)?;
         }
         Ok::<_, AppError>(answer)
     })
@@ -190,15 +188,13 @@ async fn search(
     if current.id != answer.reply.scope || current.revision != answer.reply.revision {
         return Err(Session::stale());
     }
-    if traverse {
-        if let Some(path) = answer.missing {
-            session
-                .navigation
-                .worker
-                .as_ref()
-                .ok_or_else(Session::stale)?
-                .directory(path);
-        }
+    if traverse && let Some(path) = answer.missing {
+        session
+            .navigation
+            .worker
+            .as_ref()
+            .ok_or_else(Session::stale)?
+            .directory(path);
     }
     Ok(answer.reply)
 }
