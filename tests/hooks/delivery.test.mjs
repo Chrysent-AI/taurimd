@@ -787,6 +787,21 @@ test('every workflow action reference is a known pinned commit', () => {
   }
 });
 
+// One Node version runs the gate, the frontend build, the Tauri build and the
+// browser suite. The file fnm reads and the engines field must agree, so the
+// pin cannot drift or disappear.
+test('the Node version file matches the declared engine', () => {
+  const pinned = readFileSync(join(project, '.node-version'), 'utf8').trim();
+  const manifest = JSON.parse(
+    readFileSync(join(project, 'package.json'), 'utf8'),
+  );
+  assert.match(pinned, /^\d+\.\d+\.\d+$/);
+  assert.equal(manifest.engines.node, pinned);
+  const check = readFileSync(join(project, 'scripts/check.mjs'), 'utf8');
+  assert.match(check, /\.node-version/);
+  assert.match(check, /fnm/);
+});
+
 test('package preparation uses authoritative legal/document bytes and clears stale optional notices', (t) => {
   const root = fixture(t);
   preparePackage(root);

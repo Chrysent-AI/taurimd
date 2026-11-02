@@ -136,7 +136,14 @@ The pinned versions are current and supported, not merely working:
   when `packageManager` names npm; the workflows set `package-manager-cache: false`
   and keep the explicit `cache: npm`, so caching behaves exactly as before.
 - **Node** is pinned to 26.13.0, the current LTS line (26.x became LTS on
-  2026-10-28). `.node-version` pins the same version for fnm.
+  2026-10-28). `.node-version` holds that version for fnm, and
+  `scripts/check.mjs` re-runs itself under the pinned Node through fnm when
+  the active Node differs. One version therefore runs everything this
+  repository does: the gate, the frontend build, the Tauri build and the
+  browser suite. The `dev`, `tauri` and `test:browser` scripts go through
+  `scripts/check.mjs`, so no build can happen on a different Node than the
+  checks that guard it. When the pinned version cannot be selected, the
+  command says so and names the remedy.
 - **npm** is pinned to 12.2.1. npm 12 blocks install scripts by default, so the
   optional `fsevents` install script is skipped; fsevents only accelerates
   dev-server file watching on macOS and is not needed to build, test or package.
@@ -144,7 +151,8 @@ The pinned versions are current and supported, not merely working:
   and by CI. The declared `rust-version` matches the toolchain the project
   actually tests.
 - **Playwright** is pinned to 1.64.1; the browser suite runs chromium, firefox and
-  webkit from that release.
+  webkit from that release. A media seek is checked with a frame-sized
+  tolerance because an engine snaps a seek to the nearest decodable frame.
 - **Gitleaks** is pinned to 8.30.1, the current release.
 - **Runner images** are `ubuntu-24.04`, `macos-15` and `windows-2025`. GitHub
   supports the two most recent versions of each OS: the macOS 14 runners were

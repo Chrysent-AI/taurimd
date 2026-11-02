@@ -11,15 +11,15 @@
     "npm": "12.2.1"
   },
   "scripts": {
-    "dev": "vite --port 1420 --strictPort",
+    "dev": "node scripts/check.mjs dev",
     "build": "node scripts/check.mjs build",
-    "tauri": "tauri",
+    "tauri": "node scripts/check.mjs tauri",
     "format:check": "node scripts/check.mjs format",
     "lint": "node scripts/check.mjs lint",
     "typecheck": "node scripts/check.mjs types",
     "test": "node scripts/check.mjs test",
     "test:hooks": "node scripts/check.mjs hooks",
-    "test:browser": "playwright test",
+    "test:browser": "node scripts/check.mjs browser",
     "browsers:install": "node scripts/check.mjs browsers",
     "check:rust": "node scripts/check.mjs rust",
     "check:local": "node scripts/check.mjs local",

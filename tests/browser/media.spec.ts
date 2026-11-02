@@ -202,9 +202,12 @@ test('real decode/controls/seek and visible failures retain nodes, focus and pla
     node.pause();
     node.currentTime = 1;
   });
+  // A media element snaps a seek to the nearest decodable frame, so the
+  // landed position is checked with a frame-sized tolerance (0.05 s), not
+  // exactly.
   await expect
     .poll(() => audio.evaluate((node: HTMLAudioElement) => node.currentTime))
-    .toBe(1);
+    .toBeCloseTo(1, 1);
   const video = page.locator('article video').first();
   await expect
     .poll(() =>
@@ -229,7 +232,7 @@ test('real decode/controls/seek and visible failures retain nodes, focus and pla
     });
     await expect
       .poll(() => video.evaluate((node: HTMLVideoElement) => node.currentTime))
-      .toBe(1);
+      .toBeCloseTo(1, 1);
   } else
     await expect(
       page.locator('[data-reader-media-feedback="2"]'),
@@ -376,9 +379,10 @@ test('real decode/controls/seek and visible failures retain nodes, focus and pla
       (node) => node === document.querySelector('article audio'),
     ),
   ).toBe(true);
-  expect(
-    await audio.evaluate((node: HTMLAudioElement) => node.currentTime),
-  ).toBe(1);
+  const seekedTo = await audio.evaluate(
+    (node: HTMLAudioElement) => node.currentTime,
+  );
+  expect(seekedTo).toBeCloseTo(1, 1);
   await expect(page.locator('article details')).toHaveAttribute('open', '');
   await expect(link).toBeFocused();
   expect(await page.evaluate(() => getSelection()?.toString())).toBe(selected);

@@ -1,6 +1,17 @@
 use super::*;
 use std::time::Duration;
 
+// The operation and retained budgets are process-global semaphores. The tests
+// that observe them exactly, and the test that briefly holds a permit, take
+// this lock so they cannot overlap in the parallel test runner.
+static BUDGET_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn budget_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    BUDGET_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn hosts(list: &[&str]) -> Vec<String> {
     list.iter().map(|host| (*host).to_owned()).collect()
 }
@@ -115,6 +126,9 @@ fn a_removal_between_authorization_and_registration_cancels_the_job() {
 
 #[test]
 fn a_revoked_lease_stops_the_request_before_it_is_issued() {
+    // The operation and retained budgets are process-global semaphores, so
+    // this test and the budget test must not overlap.
+    let _guard = budget_test_lock();
     tauri::async_runtime::block_on(async {
         let policy = Policy::new(&hosts(&["github.com"]));
         let lease = policy.authorize("github.com").unwrap();
@@ -269,6 +283,8 @@ fn compressed_bodies_are_refused() {
 
 #[test]
 fn the_budget_accounting_is_bounded() {
+    // The free permit counts are only exact while no other test holds one.
+    let _guard = budget_test_lock();
     assert!(body_limit(MAX_BODY_BYTES).is_ok());
     assert!(body_limit(MAX_BODY_BYTES + 1).is_err());
     assert_eq!(operations().available_permits(), MAX_ACTIVE_OPERATIONS);
