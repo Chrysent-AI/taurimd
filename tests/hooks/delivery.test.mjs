@@ -379,6 +379,7 @@ test('the publish command needs a registry token, refuses a dirty tree and passe
   assert.equal(calls[0].program, 'cargo');
   assert.ok(calls[0].args.includes('--locked'));
   assert.ok(calls[0].args.includes('crates-io'));
+  assert.ok(calls[0].args.includes('--allow-dirty'));
   assert.ok(calls[0].args.includes('--manifest-path'));
   assert.equal(calls[0].env.CARGO_REGISTRY_TOKEN, 'env-token');
   assert.equal(calls[0].env.CARGO_REGISTRY_CREDENTIAL_PROVIDER, 'cargo:token');

@@ -89,6 +89,13 @@ crate can never package uncommitted bytes. It publishes the version that
 `src-tauri/Cargo.toml` carries, with `--locked`, so the published crate is the
 reviewed lockfile.
 
+It passes `--allow-dirty` to Cargo on purpose. The crate carries generated
+inputs that git ignores — the built frontend, the Tauri schemas, the packaged
+legal documents and the generated permissions — so Cargo always counts them as
+uncommitted. The command's own guard is stricter than that flag: any tracked
+modification or untracked non-ignored file stops the publication before Cargo
+runs.
+
 **Publish after the GitHub release for the same version.** The crate's binstall
 metadata resolves `https://github.com/Chrysent-AI/taurimd/releases/download/v{version}/…`,
 so a crate published before its release exists sends `cargo binstall taurimd` to
