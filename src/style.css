@@ -521,6 +521,24 @@ dialog {
 dialog::backdrop {
   background: #0009;
 }
+/* The guide publishes its parsed content after the dialog has opened. A
+   bounded shell with its own scrolling body keeps the heading and the Close
+   control in one place, so a click aimed at Close still lands on Close
+   instead of on content that moved into the pointer's place. */
+dialog[open].guide-dialog {
+  display: flex;
+  flex-direction: column;
+  height: min(32rem, calc(100% - 2rem));
+  overflow: hidden;
+}
+dialog[open].guide-dialog .guide {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+dialog[open].guide-dialog > button {
+  align-self: flex-start;
+}
 dialog h2 {
   margin-top: 0;
 }

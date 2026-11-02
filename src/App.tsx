@@ -1441,6 +1441,7 @@ export function App({ controller }: { controller: ReaderController }) {
           fallback={focusReading}
           initialControl={surface === 'settings'}
           initialInput={surface === 'quick-open'}
+          className={surface === 'guide' ? 'guide-dialog' : undefined}
         >
           {commandMessage && <p role="status">{commandMessage}</p>}
           {surface === 'quick-open' ? (

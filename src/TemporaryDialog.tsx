@@ -12,6 +12,7 @@ export function TemporaryDialog({
   restoreFocus = true,
   footer,
   dismissDisabled = false,
+  className,
 }: {
   title: string;
   close: () => void;
@@ -24,6 +25,7 @@ export function TemporaryDialog({
   restoreFocus?: boolean;
   footer?: ReactNode;
   dismissDisabled?: boolean;
+  className?: string;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -81,6 +83,7 @@ export function TemporaryDialog({
   return (
     <dialog
       ref={dialog}
+      className={className}
       aria-labelledby="temporary-title"
       onCancel={(event) => {
         event.preventDefault();
