@@ -16,7 +16,7 @@ lock versions. Dependencies and formatting remain unchanged.
 make bump-version                 # default patch
 make bump-version BUMP=minor       # patch, minor or major
 make bump-version VERSION=1.2.3    # stable, strictly increasing version
-make bump-version VERIFY=1         # run the local protection gate first
+make bump-version SKIP_GATE=1      # skip the local protection gate
 ```
 
 On Windows, or without Make:
@@ -35,10 +35,9 @@ branch and the tag are still pushed by the human. If the tag itself fails, the
 release commit stays and the command prints the exact `git tag` command that
 finishes it; nothing is pushed either way.
 
-The release commit does not run the local protection gate by default: it is a
-version change, and the same checks run on the branch push and on the tag push
-in CI. `make bump-version VERIFY=1` runs the gate before the commit instead,
-and a failing gate then aborts the release and restores the version files.
+The local protection gate runs before the release commit: a failing gate aborts
+the release and restores the version files. `SKIP_GATE=1` commits without it;
+the same checks then run on the branch push and on the tag push in CI.
 
 Use only one input. Stop other edits while bumping. The helper stages owned local
 files and restores already-replaced originals on a normal write failure. This is
@@ -69,6 +68,32 @@ installer/archive workflow artifacts. Workflow artifacts are a
 human qualification handoff, not GitHub releases or registry publication. No
 signing, release creation, publication credential or contents-write permission is
 configured. Editing this workflow is not authorization to trigger it.
+
+## Publishing to crates.io
+
+The crate name `taurimd` is unclaimed on crates.io. The `Chrysent-AI` organization
+does not exist there yet, so the human must create it and own the name, or
+publish under a personal account and add the organization later.
+
+The token never enters the repository. Create a crates.io API token under the
+owning account, copy `.env.example` to `.env` (gitignored), and put the token
+there, or export `CARGO_REGISTRY_TOKEN` in the shell.
+
+```sh
+make publish DRY_RUN=1   # rehearsal: packages, verifies and uploads nothing
+make publish              # publishes the version in Cargo.toml
+```
+
+The command refuses without a token and refuses on a dirty working tree, so the
+crate can never package uncommitted bytes. It publishes the version that
+`src-tauri/Cargo.toml` carries, with `--locked`, so the published crate is the
+reviewed lockfile.
+
+**Publish after the GitHub release for the same version.** The crate's binstall
+metadata resolves `https://github.com/Chrysent-AI/taurimd/releases/download/v{version}/…`,
+so a crate published before its release exists sends `cargo binstall taurimd` to
+a URL that 404s until the release is published. The registry carries the source
+crate; the signed, installable candidates come from the GitHub release.
 
 ## Source package
 

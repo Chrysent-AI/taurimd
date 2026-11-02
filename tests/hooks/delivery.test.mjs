@@ -24,6 +24,7 @@ import {
 } from '../../scripts/versions.mjs';
 import { bumpVersion } from '../../scripts/bump-version.mjs';
 import { releaseVersion } from '../../scripts/release.mjs';
+import { publishCrate, resolveToken } from '../../scripts/publish.mjs';
 import { archive, targets } from '../../scripts/archive.mjs';
 import { preparePackage } from '../../scripts/prepare-package.mjs';
 import { command } from './fixture-command.mjs';
@@ -44,6 +45,7 @@ function fixture(t) {
     'DEPENDENCIES.md',
     'Makefile',
     'scripts/bump-version.mjs',
+    'scripts/publish.mjs',
     'scripts/release.mjs',
     'scripts/versions.mjs',
   ]) {
@@ -301,30 +303,14 @@ test('a failed release commit restores the version files and leaves no tag', (t)
   assert.equal(gitText(root, env, ['status', '--porcelain']), '');
   assert.equal(gitText(root, env, ['diff', '--cached', '--name-only']), '');
 });
-test('the release commit does not run the protection hooks unless verification is requested', (t) => {
-  const { root, env } = gitFixture(t);
-  const hook = join(root, '.git', 'hooks', 'pre-commit');
-  writeFileSync(hook, '#!/bin/sh\nexit 1\n');
-  chmodSync(hook, 0o755);
-  const made = command(root, process.execPath, ['scripts/release.mjs'], {
-    env,
-  });
-  assert.equal(made.status, 0, made.output);
-  assert.equal(versions(readAt(root)).version, '0.1.1');
-  assert.equal(
-    gitText(root, env, ['log', '-1', '--format=%s']),
-    'chore(release): taurimd v0.1.1',
-  );
-  assert.equal(gitText(root, env, ['rev-list', '--count', 'HEAD']), '2');
-});
-test('verification runs the protection hooks, and a rejecting hook aborts the release', (t) => {
+test('the release commit runs the protection hooks, and a rejecting hook aborts the release', (t) => {
   const { root, env } = gitFixture(t);
   const hook = join(root, '.git', 'hooks', 'pre-commit');
   writeFileSync(hook, '#!/bin/sh\nexit 1\n');
   chmodSync(hook, 0o755);
   const before = snapshot(root);
   const blocked = command(root, process.execPath, ['scripts/release.mjs'], {
-    env: { ...env, TAURIMD_RELEASE_VERIFY: '1' },
+    env,
   });
   assert.notEqual(blocked.status, 0, blocked.output);
   assert.match(blocked.output, /release commit failed/);
@@ -333,6 +319,26 @@ test('verification runs the protection hooks, and a rejecting hook aborts the re
   assert.equal(gitText(root, env, ['diff', '--cached', '--name-only']), '');
   assert.equal(gitText(root, env, ['rev-list', '--count', 'HEAD']), '1');
   assert.equal(gitText(root, env, ['tag', '--list']), '');
+});
+test('the release commit skips the protection hooks only when the gate is skipped', (t) => {
+  const { root, env } = gitFixture(t);
+  const hook = join(root, '.git', 'hooks', 'pre-commit');
+  writeFileSync(hook, '#!/bin/sh\nexit 1\n');
+  chmodSync(hook, 0o755);
+  const made = command(root, process.execPath, ['scripts/release.mjs'], {
+    env: { ...env, TAURIMD_RELEASE_SKIP_GATE: '1' },
+  });
+  assert.equal(made.status, 0, made.output);
+  assert.equal(versions(readAt(root)).version, '0.1.1');
+  assert.equal(
+    gitText(root, env, ['log', '-1', '--format=%s']),
+    'chore(release): taurimd v0.1.1',
+  );
+  assert.equal(gitText(root, env, ['rev-list', '--count', 'HEAD']), '2');
+  assert.equal(
+    gitText(root, env, ['rev-parse', 'refs/tags/v0.1.1^{commit}']),
+    gitText(root, env, ['rev-parse', 'HEAD']),
+  );
 });
 test('the release command refuses a repository that has no commit yet', (t) => {
   const root = fixture(t);
@@ -345,6 +351,58 @@ test('the release command refuses a repository that has no commit yet', (t) => {
   assert.notEqual(empty.status, 0, empty.output);
   assert.match(empty.output, /needs a commit before a release/);
   assertUnchanged(root, before);
+});
+test('the publish command needs a registry token, refuses a dirty tree and passes the token only to Cargo', (t) => {
+  const root = fixture(t);
+  assert.equal(resolveToken(root, {}), '');
+  writeFileSync(
+    join(root, '.env'),
+    '# comment\nCARGO_REGISTRY_TOKEN="file-token"\n',
+  );
+  assert.equal(resolveToken(root, {}), 'file-token');
+  assert.equal(
+    resolveToken(root, { CARGO_REGISTRY_TOKEN: 'env-token' }),
+    'env-token',
+  );
+  const { root: gitRoot } = gitFixture(t);
+  const calls = [];
+  const run = (program, args, runOptions) => {
+    calls.push({ program, args, env: runOptions.env });
+  };
+  const published = publishCrate(gitRoot, {
+    env: { CARGO_REGISTRY_TOKEN: 'env-token' },
+    run,
+  });
+  assert.equal(published.version, '0.1.0');
+  assert.equal(published.dryRun, false);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].program, 'cargo');
+  assert.ok(calls[0].args.includes('--locked'));
+  assert.ok(calls[0].args.includes('crates-io'));
+  assert.ok(calls[0].args.includes('--manifest-path'));
+  assert.equal(calls[0].env.CARGO_REGISTRY_TOKEN, 'env-token');
+  assert.equal(calls[0].env.CARGO_REGISTRY_CREDENTIAL_PROVIDER, 'cargo:token');
+  const rehearsal = publishCrate(gitRoot, {
+    dryRun: true,
+    env: { CARGO_REGISTRY_TOKEN: 'env-token' },
+    run,
+  });
+  assert.equal(rehearsal.dryRun, true);
+  assert.ok(calls[1].args.includes('--dry-run'));
+  writeFileSync(join(gitRoot, 'README.md'), 'local edit\n');
+  assert.throws(
+    () =>
+      publishCrate(gitRoot, {
+        env: { CARGO_REGISTRY_TOKEN: 'env-token' },
+        run,
+      }),
+    /uncommitted changes/,
+  );
+  assert.throws(
+    () => publishCrate(gitRoot, { env: {}, run }),
+    /CARGO_REGISTRY_TOKEN is not set/,
+  );
+  assert.equal(calls.length, 2);
 });
 test('Make and direct Windows-friendly Node entry points validate data before writes', (t) => {
   const { root, env } = gitFixture(t);

@@ -40,7 +40,7 @@ function samePath(left, right) {
 export function releaseVersion(root, args, options = {}) {
   const readGit = options.readGit ?? defaultGit(root);
   const branch = options.branch ?? releaseBranch;
-  const verify = options.verify === true;
+  const skipGate = options.skipGate === true;
   const git = (...gitArgs) => String(readGit(...gitArgs)).trim();
   const fails = (...gitArgs) => {
     try {
@@ -125,12 +125,12 @@ export function releaseVersion(root, args, options = {}) {
 
   try {
     git('add', '--', ...versionPaths);
-    // The release commit is a version change, not new product code. The local
-    // gate runs on the branch push and on the tag push in CI; `VERIFY=1`
-    // runs it here first when the human wants it before the tag exists.
+    // The local protection gate runs before the release commit unless the
+    // human asks to skip it; the same checks run again on the branch push
+    // and on the tag push in CI.
     git(
       'commit',
-      ...(verify ? [] : ['--no-verify']),
+      ...(skipGate ? ['--no-verify'] : []),
       '-m',
       releaseMessage(plan.next),
     );
@@ -179,7 +179,7 @@ if (
         args.push(`--version=${process.env.TAURIMD_VERSION_VALUE ?? ''}`);
     }
     const result = releaseVersion(root, args, {
-      verify: process.env.TAURIMD_RELEASE_VERIFY === '1',
+      skipGate: process.env.TAURIMD_RELEASE_SKIP_GATE === '1',
     });
     const push = `git push ${result.remote ?? '<remote>'} ${result.branch} ${result.tag}`;
     console.log(
