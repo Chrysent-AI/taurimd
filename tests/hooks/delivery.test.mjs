@@ -666,19 +666,31 @@ test('tag adapter resolves the tag commit and its first parent, with no tag crea
   parents = [];
   assert.equal(validateTag(root, 'v0.1.1', readGit), '0.1.1');
 });
-test('workflow keeps ordinary debug native compilation and validated tag-only release builds', () => {
-  const workflow = load(
+test('branch pushes and tags run separate workflows, and the tag path builds the candidates', () => {
+  const checks = load(
     readFileSync(join(project, '.github/workflows/checks.yml'), 'utf8'),
   );
-  assert.deepEqual(Object.keys(workflow.on).sort(), ['pull_request', 'push']);
-  assert.equal(workflow.permissions.contents, 'read');
-  const jobs = workflow.jobs;
+  const release = load(
+    readFileSync(join(project, '.github/workflows/release.yml'), 'utf8'),
+  );
+  // The branch workflow never runs for a tag, and the tag workflow never
+  // repeats the browser matrix or the debug native builds for the same commit.
+  assert.deepEqual(Object.keys(checks.on).sort(), ['pull_request', 'push']);
+  assert.deepEqual(checks.on.push.branches, ['**']);
+  assert.equal(checks.on.push.tags, undefined);
+  assert.equal(checks.permissions.contents, 'read');
+  const jobs = checks.jobs;
+  assert.deepEqual(Object.keys(jobs).sort(), [
+    'browsers',
+    'native-build',
+    'quality',
+  ]);
   const scripts = (job) =>
     jobs[job].steps.map((step) => step.run ?? '').join('\n');
   assert.match(scripts('quality'), /npm run check:ci/);
   assert.match(scripts('browsers'), /node scripts\/ci-browser-audio.mjs/);
-  const buildCommands = (job) =>
-    jobs[job].steps.flatMap((step) =>
+  const buildCommandsIn = (allJobs, job) =>
+    allJobs[job].steps.flatMap((step) =>
       (step.run ?? '')
         .split('\n')
         .map((line) => line.trim().split(/\s+/))
@@ -686,7 +698,7 @@ test('workflow keeps ordinary debug native compilation and validated tag-only re
           (args) => args.slice(0, 5).join(' ') === 'npm run tauri -- build',
         ),
     );
-  assert.deepEqual(buildCommands('native-build'), [
+  assert.deepEqual(buildCommandsIn(jobs, 'native-build'), [
     [
       'npm',
       'run',
@@ -701,7 +713,33 @@ test('workflow keeps ordinary debug native compilation and validated tag-only re
       '--locked',
     ],
   ]);
-  assert.deepEqual(buildCommands('package-candidates'), [
+  assert.doesNotMatch(
+    scripts('native-build'),
+    /scripts\/archive|build --ci --no-sign/,
+  );
+
+  assert.deepEqual(Object.keys(release.on), ['push']);
+  assert.deepEqual(release.on.push.tags, ['v*']);
+  assert.equal(release.on.push.branches, undefined);
+  assert.equal(release.permissions.contents, 'read');
+  const releaseJobs = release.jobs;
+  assert.deepEqual(Object.keys(releaseJobs).sort(), [
+    'package-candidates',
+    'quality',
+    'release-version',
+  ]);
+  const releaseScripts = (job) =>
+    releaseJobs[job].steps.map((step) => step.run ?? '').join('\n');
+  assert.match(
+    releaseScripts('release-version'),
+    /node scripts\/validate-tag.mjs/,
+  );
+  assert.match(releaseScripts('quality'), /npm run check:ci/);
+  assert.deepEqual(releaseJobs['package-candidates'].needs, [
+    'quality',
+    'release-version',
+  ]);
+  assert.deepEqual(buildCommandsIn(releaseJobs, 'package-candidates'), [
     [
       'npm',
       'run',
@@ -714,30 +752,15 @@ test('workflow keeps ordinary debug native compilation and validated tag-only re
       '--locked',
     ],
   ]);
-  assert.doesNotMatch(
-    scripts('native-build'),
-    /scripts\/archive|build --ci --no-sign/,
-  );
-  assert.deepEqual(jobs['package-candidates'].needs, [
-    'quality',
-    'browsers',
-    'native-build',
-    'release-version',
-  ]);
-  assert.match(
-    jobs['release-version'].if,
-    /github.event_name == 'push'.*refs\/tags\/v/,
-  );
-  assert.match(scripts('release-version'), /node scripts\/validate-tag.mjs/);
   assert.deepEqual(
-    jobs['package-candidates'].strategy.matrix.include.map(
+    releaseJobs['package-candidates'].strategy.matrix.include.map(
       (entry) => entry.target,
     ),
     targets,
   );
-  assert.match(scripts('package-candidates'), /uname -m.*arm64/);
+  assert.match(releaseScripts('package-candidates'), /uname -m.*arm64/);
   assert.doesNotMatch(
-    scripts('package-candidates'),
+    releaseScripts('package-candidates'),
     /cargo publish|gh release|contents: write/,
   );
 });
