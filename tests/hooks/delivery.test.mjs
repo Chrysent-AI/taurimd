@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import {
   copyFileSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -21,6 +23,7 @@ import {
   releaseBoundary,
 } from '../../scripts/versions.mjs';
 import { bumpVersion } from '../../scripts/bump-version.mjs';
+import { releaseVersion } from '../../scripts/release.mjs';
 import { archive, targets } from '../../scripts/archive.mjs';
 import { preparePackage } from '../../scripts/prepare-package.mjs';
 import { command } from './fixture-command.mjs';
@@ -41,6 +44,7 @@ function fixture(t) {
     'DEPENDENCIES.md',
     'Makefile',
     'scripts/bump-version.mjs',
+    'scripts/release.mjs',
     'scripts/versions.mjs',
   ]) {
     mkdirSync(dirname(join(root, path)), { recursive: true });
@@ -162,26 +166,200 @@ test('partial replacement failure restores every already-written file and remove
   assert.equal(replaced, 4);
   assertUnchanged(root, before);
 });
-test('Make and direct Windows-friendly Node entry points validate data before writes', (t) => {
+function gitEnv() {
+  return {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'Release Test',
+    GIT_AUTHOR_EMAIL: 'release@example.invalid',
+    GIT_COMMITTER_NAME: 'Release Test',
+    GIT_COMMITTER_EMAIL: 'release@example.invalid',
+    GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+    GIT_CONFIG_SYSTEM: process.platform === 'win32' ? 'NUL' : '/dev/null',
+  };
+}
+function gitFixture(t) {
   const root = fixture(t);
-  writeFileSync(join(root, 'package.json'), readAt(root)('package.json'));
-  // An isolated copy exercises the CLI's own project-root resolution, not this checkout.
-  const direct = command(root, process.execPath, [
+  const env = gitEnv();
+  for (const args of [
+    ['init'],
+    ['symbolic-ref', 'HEAD', 'refs/heads/main'],
+    ['add', '-A'],
+    ['commit', '-m', 'chore: fixture'],
+  ]) {
+    const result = command(root, 'git', args, { env });
+    assert.equal(result.status, 0, result.output);
+  }
+  return { root, env };
+}
+const gitText = (root, env, args) =>
+  command(root, 'git', args, { env }).output.trim();
+
+test('the version module is a library and the release entry point needs a repository', (t) => {
+  const root = fixture(t);
+  const before = snapshot(root);
+  const library = command(root, process.execPath, [
     'scripts/bump-version.mjs',
     '--version=0.2.0',
   ]);
+  assert.notEqual(library.status, 0, library.output);
+  assert.match(library.output, /make bump-version/);
+  const withoutRepository = command(root, process.execPath, [
+    'scripts/release.mjs',
+    '--version=0.2.0',
+  ]);
+  assert.notEqual(withoutRepository.status, 0, withoutRepository.output);
+  assert.match(withoutRepository.output, /Git repository is required/);
+  assertUnchanged(root, before);
+});
+test('the release command rewrites the six versions, commits them with a fixed message and tags the commit', (t) => {
+  const { root, env } = gitFixture(t);
+  const before = gitText(root, env, ['rev-list', '--count', 'HEAD']);
+  const made = command(
+    root,
+    process.execPath,
+    ['scripts/release.mjs', '--bump=minor'],
+    { env },
+  );
+  assert.equal(made.status, 0, made.output);
+  assert.equal(versions(readAt(root)).version, '0.2.0');
+  assert.equal(
+    gitText(root, env, ['log', '-1', '--format=%s']),
+    'chore(release): taurimd v0.2.0',
+  );
+  const head = gitText(root, env, ['rev-parse', 'HEAD']);
+  assert.equal(
+    gitText(root, env, ['rev-parse', 'refs/tags/v0.2.0^{commit}']),
+    head,
+  );
+  assert.equal(
+    gitText(root, env, ['cat-file', '-t', 'refs/tags/v0.2.0']),
+    'tag',
+  );
+  assert.equal(gitText(root, env, ['status', '--porcelain']), '');
+  assert.equal(gitText(root, env, ['rev-list', '--count', 'HEAD']), '2');
+  assert.notEqual(before, '2');
+  assert.deepEqual(
+    gitText(root, env, ['show', '--name-only', '--format=', 'HEAD'])
+      .split('\n')
+      .filter(Boolean)
+      .sort(),
+    [...versionPaths].sort(),
+  );
+});
+test('the release command refuses a dirty tree, an existing tag and a branch that is not main', (t) => {
+  const { root, env } = gitFixture(t);
+  const readme = join(root, 'README.md');
+  const original = readFileSync(readme, 'utf8');
+  writeFileSync(readme, `${original}\nlocal edit\n`);
+  const dirty = command(root, process.execPath, ['scripts/release.mjs'], {
+    env,
+  });
+  assert.notEqual(dirty.status, 0, dirty.output);
+  assert.match(dirty.output, /uncommitted changes/);
+  writeFileSync(readme, original);
+  assert.equal(gitText(root, env, ['status', '--porcelain']), '');
+
+  assert.equal(command(root, 'git', ['tag', 'v0.1.1'], { env }).status, 0);
+  const tagged = command(root, process.execPath, ['scripts/release.mjs'], {
+    env,
+  });
+  assert.notEqual(tagged.status, 0, tagged.output);
+  assert.match(tagged.output, /Tag v0\.1\.1 already exists/);
+  assert.equal(gitText(root, env, ['rev-list', '--count', 'HEAD']), '1');
+  assert.equal(versions(readAt(root)).version, '0.1.0');
+
+  assert.equal(
+    command(root, 'git', ['checkout', '-b', 'feature/other'], { env }).status,
+    0,
+  );
+  const branched = command(root, process.execPath, ['scripts/release.mjs'], {
+    env,
+  });
+  assert.notEqual(branched.status, 0, branched.output);
+  assert.match(branched.output, /Releases are cut from main/);
+  assert.equal(gitText(root, env, ['rev-list', '--count', 'HEAD']), '1');
+  assert.equal(versions(readAt(root)).version, '0.1.0');
+});
+test('a failed release commit restores the version files and leaves no tag', (t) => {
+  const { root, env } = gitFixture(t);
+  const before = snapshot(root);
+  const readGit = (...args) => {
+    if (args[0] === 'commit') throw new Error('injected commit failure');
+    return execFileSync('git', args, {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  };
+  assert.throws(
+    () => releaseVersion(root, [], { readGit }),
+    /injected commit failure/,
+  );
+  assertUnchanged(root, before);
+  assert.equal(gitText(root, env, ['tag', '--list']), '');
+  assert.equal(gitText(root, env, ['rev-list', '--count', 'HEAD']), '1');
+  assert.equal(gitText(root, env, ['status', '--porcelain']), '');
+  assert.equal(gitText(root, env, ['diff', '--cached', '--name-only']), '');
+});
+test('a protection hook that rejects the commit aborts the release and restores the tree', (t) => {
+  const { root, env } = gitFixture(t);
+  const hook = join(root, '.git', 'hooks', 'pre-commit');
+  writeFileSync(hook, '#!/bin/sh\nexit 1\n');
+  chmodSync(hook, 0o755);
+  const before = snapshot(root);
+  const blocked = command(root, process.execPath, ['scripts/release.mjs'], {
+    env,
+  });
+  assert.notEqual(blocked.status, 0, blocked.output);
+  assert.match(blocked.output, /release commit failed/);
+  assertUnchanged(root, before);
+  assert.equal(gitText(root, env, ['status', '--porcelain']), '');
+  assert.equal(gitText(root, env, ['diff', '--cached', '--name-only']), '');
+  assert.equal(gitText(root, env, ['rev-list', '--count', 'HEAD']), '1');
+  assert.equal(gitText(root, env, ['tag', '--list']), '');
+});
+test('the release command refuses a repository that has no commit yet', (t) => {
+  const root = fixture(t);
+  const env = gitEnv();
+  const before = snapshot(root);
+  assert.equal(command(root, 'git', ['init'], { env }).status, 0);
+  const empty = command(root, process.execPath, ['scripts/release.mjs'], {
+    env,
+  });
+  assert.notEqual(empty.status, 0, empty.output);
+  assert.match(empty.output, /needs a commit before a release/);
+  assertUnchanged(root, before);
+});
+test('Make and direct Windows-friendly Node entry points validate data before writes', (t) => {
+  const { root, env } = gitFixture(t);
+  // An isolated copy exercises the CLI's own project-root resolution, not this checkout.
+  const direct = command(
+    root,
+    process.execPath,
+    ['scripts/release.mjs', '--version=0.2.0'],
+    { env },
+  );
   assert.equal(direct.status, 0, direct.output);
+  assert.equal(versions(readAt(root)).version, '0.2.0');
   if (process.platform !== 'win32') {
-    const made = command(root, 'make', ['bump-version', 'BUMP=minor']);
+    const made = command(root, 'make', ['bump-version', 'BUMP=minor'], { env });
     assert.equal(made.status, 0, made.output);
     assert.equal(versions(readAt(root)).version, '0.3.0');
+    assert.equal(
+      gitText(root, env, ['log', '-1', '--format=%s']),
+      'chore(release): taurimd v0.3.0',
+    );
+    assert.equal(
+      gitText(root, env, ['rev-parse', 'refs/tags/v0.3.0^{commit}']),
+      gitText(root, env, ['rev-parse', 'HEAD']),
+    );
     const before = snapshot(root);
     for (const args of [
       ['BUMP=patch', 'VERSION=0.4.0'],
       ['VERSION='],
       ['BUMP=patch;exit 0'],
     ]) {
-      const result = command(root, 'make', ['bump-version', ...args]);
+      const result = command(root, 'make', ['bump-version', ...args], { env });
       assert.notEqual(result.status, 0, result.output);
       assertUnchanged(root, before);
     }

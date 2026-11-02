@@ -4,7 +4,8 @@ export WORKTREE
 .PHONY: help clean-builds-preview clean-builds bump-version
 help:
 	@printf '%s\n' 'make clean-builds-preview [WORKTREE="path/to/checkout"]' \
-		'make clean-builds [WORKTREE="path/to/checkout"] (cold Cargo rebuild next time)'
+		'make clean-builds [WORKTREE="path/to/checkout"] (cold Cargo rebuild next time)' \
+		'make bump-version [BUMP=patch|minor|major | VERSION=X.Y.Z] (rewrite, commit, tag; never pushes)'
 
 # Explicit human operation only; values pass as data, never shell source.
 bump-version: export TAURIMD_BUMP_VALUE = $(BUMP)
@@ -12,7 +13,7 @@ bump-version: export TAURIMD_VERSION_VALUE = $(VERSION)
 bump-version: export TAURIMD_BUMP_ORIGIN = $(origin BUMP)
 bump-version: export TAURIMD_VERSION_ORIGIN = $(origin VERSION)
 bump-version:
-	node scripts/bump-version.mjs --make-inputs
+	node scripts/release.mjs --make-inputs
 
 # Cargo 1.97 profile clean ignores --target; build-dir scopes each recognized target.
 # Keep target-dir at the tagged Cargo root, and suppress compiler-cache writes in preview.

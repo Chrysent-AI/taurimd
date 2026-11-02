@@ -6,7 +6,7 @@ published on crates.io under this name yet, so registry ownership is not
 established. No download/install
 command here presumes that a public crate, release or asset exists.
 
-## Human version changes
+## Version bump, release commit and tag
 
 Cargo's package version is authoritative. The helper checks all six own-version
 values before writing: Cargo, its own lock entry, Tauri, npm, and the two npm root
@@ -21,17 +21,26 @@ make bump-version VERSION=1.2.3    # stable, strictly increasing version
 On Windows, or without Make:
 
 ```sh
-node scripts/bump-version.mjs --bump=patch
-node scripts/bump-version.mjs --version=1.2.3
+node scripts/release.mjs --bump=patch
+node scripts/release.mjs --version=1.2.3
 ```
+
+One command performs the whole release preparation: it rewrites the six
+own-version values, commits them with the fixed message
+`chore(release): taurimd vX.Y.Z`, and creates the annotated tag `vX.Y.Z` on that
+commit. It refuses to run on a dirty working tree, off `main`, or when the tag
+already exists, and it restores the version files when the commit fails. The
+branch and the tag are still pushed by the human. If the tag itself fails, the
+release commit stays and the command prints the exact `git tag` command that
+finishes it; nothing is pushed either way.
 
 Use only one input. Stop other edits while bumping. The helper stages owned local
 files and restores already-replaced originals on a normal write failure. This is
 not a filesystem-wide atomic transaction: hard process/OS termination can leave
 `.version-bump-*` recovery files. Inspect and restore those originals before
-retrying. It never stages, commits, tags, pushes, installs, reads keys, logs in,
-uses the network or publishes. Normal protection hooks still apply to the human's
-subsequent commit.
+retrying. It never pushes, installs, reads keys, logs in, uses the network or
+publishes. Normal protection hooks still apply to the release commit, so the
+local gate runs before the tag exists.
 
 ## Read-only release validation
 
@@ -154,5 +163,7 @@ on an actual Ubuntu target and still require the authorized native checks in
   compile or QuickInstall fallback hide missing official assets during later
   binstall qualification. No real installation or GUI launch is performed here.
 
-Publication, remote renaming, release tags/pushes, credentials, signing and public
-release operations remain exclusively human-controlled and separately authorized.
+Publication, remote renaming, branch and tag pushes, credentials, signing and
+public release operations remain exclusively human-controlled and separately
+authorized. `make bump-version` prepares a release locally — the version files,
+the commit and the tag — and stops there.

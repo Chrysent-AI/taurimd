@@ -13,7 +13,7 @@ import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { versions, stableVersion, increases } from './versions.mjs';
 
-export function bumpVersion(root, args, replace = renameSync) {
+export function planVersion(root, args) {
   if (args.length > 1)
     throw new Error('Choose only --bump=patch|minor|major OR --version=X.Y.Z.');
   const option = args[0] ?? '--bump=patch';
@@ -47,6 +47,11 @@ export function bumpVersion(root, args, replace = renameSync) {
     replacements.set(path, updated);
   }
   versions((path) => replacements.get(path));
+  return { next, replacements, snapshot };
+}
+
+export function applyVersion(root, plan, replace = renameSync) {
+  const { replacements, snapshot } = plan;
   const scratch = mkdtempSync(join(root, '.version-bump-'));
   const changed = [];
   let keepRecovery = false;
@@ -100,27 +105,20 @@ export function bumpVersion(root, args, replace = renameSync) {
       : error;
   }
   if (failure) throw failure;
-  return next;
 }
+
+export function bumpVersion(root, args, replace = renameSync) {
+  const plan = planVersion(root, args);
+  applyVersion(root, plan, replace);
+  return plan.next;
+}
+
 if (
   process.argv[1] &&
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  try {
-    const root = fileURLToPath(new URL('../', import.meta.url));
-    let args = process.argv.slice(2);
-    if (args.length === 1 && args[0] === '--make-inputs') {
-      args = [];
-      if (process.env.TAURIMD_BUMP_ORIGIN !== 'undefined')
-        args.push(`--bump=${process.env.TAURIMD_BUMP_VALUE ?? ''}`);
-      if (process.env.TAURIMD_VERSION_ORIGIN !== 'undefined')
-        args.push(`--version=${process.env.TAURIMD_VERSION_VALUE ?? ''}`);
-    }
-    console.log(
-      `Version is now ${bumpVersion(root, args)}. No Git, network or publication operation performed.`,
-    );
-  } catch (error) {
-    console.error(`Version bump stopped: ${error.message}`);
-    process.exitCode = 1;
-  }
+  console.error(
+    'This module is a library. Run `make bump-version` or `node scripts/release.mjs` to prepare a release.',
+  );
+  process.exitCode = 1;
 }
