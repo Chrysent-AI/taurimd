@@ -6,6 +6,9 @@ import { palettes } from '../../src/settings/model';
 const text =
   '---\nheading: "# Not an outline"\n---\n# Repeat\n### Interleaved\n## Repeat\n## Last section\n\n```md\n# Not a heading\n```\n\n![Not mounted in a preview](image.png)\n\n```mermaid\ngraph LR\n A-->B\n```';
 const entries: FileEntry[] = [
+  // The native ranks are ascending buckets: a higher dateRank is a later
+  // timestamp and a higher sizeRank is a larger file. Equal values share a
+  // bucket, and a missing value has no rank at all.
   {
     id: 10,
     uiId: 10,
@@ -1501,6 +1504,9 @@ test('a sort-only interaction replaces no reading session', async ({
     selection: window.getSelection()?.toString() ?? '',
     calls: window.readerFixture.calls().length,
     parses: window.readerFixture.parses(),
+    siblingScans: window.readerFixture
+      .navigationCalls()
+      .filter((call) => call.command === 'get_siblings').length,
     playback: (() => {
       const audio = document.querySelector('article audio');
       return audio instanceof HTMLAudioElement
@@ -1523,6 +1529,9 @@ test('a sort-only interaction replaces no reading session', async ({
     selection: window.getSelection()?.toString() ?? '',
     calls: window.readerFixture.calls().length,
     parses: window.readerFixture.parses(),
+    siblingScans: window.readerFixture
+      .navigationCalls()
+      .filter((call) => call.command === 'get_siblings').length,
     playback: (() => {
       const audio = document.querySelector('article audio');
       return audio instanceof HTMLAudioElement
@@ -1532,6 +1541,9 @@ test('a sort-only interaction replaces no reading session', async ({
   }));
   expect(after.calls).toBe(before.calls);
   expect(after.parses).toBe(before.parses);
+  // The applied order is presentation only: the native siblings are not
+  // re-enumerated when the preference changes.
+  expect(after.siblingScans).toBe(before.siblingScans);
   expect(after.scroll).toBe(before.scroll);
   expect(after.selection).toBe(before.selection);
   expect(after.playback).toEqual(before.playback);

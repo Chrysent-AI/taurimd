@@ -196,10 +196,12 @@ fn metadata_ranks_cover_sizes_times_and_directory_totals() {
             .clone()
     };
     // Size is the file byte size, never a recursive folder total.
+    // The relative path is the platform's own path, not a fixed separator.
+    let inner = Path::new("folder").join("inner.md");
     assert_eq!(entry("empty.md").size_rank, Some(1));
     assert_eq!(entry("one.md").size_rank, Some(2));
     assert_eq!(entry("two.md").size_rank, Some(3));
-    assert_eq!(entry("folder/inner.md").size_rank, Some(4));
+    assert_eq!(entry(&inner.to_string_lossy()).size_rank, Some(4));
     assert_eq!(entry("folder").size_rank, None);
     // The oldest known timestamp ranks first and keeps a rank.
     let empty = entry("empty.md");
