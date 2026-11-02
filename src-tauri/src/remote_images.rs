@@ -310,6 +310,14 @@ impl HostLease {
         let Ok(mut jobs) = self.jobs.lock() else {
             return;
         };
+        // A removal between the authorization and this registration must
+        // still cancel the job. The check and the registration happen under
+        // the same lock a removal takes, so a revocation cannot slip between
+        // them and leave an unregistered job running.
+        if !self.live() {
+            job.cancel();
+            return;
+        }
         jobs.retain(|weak| weak.strong_count() > 0);
         jobs.push(Arc::downgrade(job));
     }
@@ -779,6 +787,11 @@ pub async fn fetch(
                 return Err(RemoteError::new(RemoteErrorKind::Stale, None));
             }
             let host = hosts.last().cloned().unwrap_or_default();
+            // The lease must still be live at admission: a removal between
+            // the authorization and this request must stop it.
+            if !leases.last().is_some_and(|lease| lease.live()) {
+                return Err(RemoteError::new(RemoteErrorKind::BlockedHost, Some(host)));
+            }
             let response = client
                 .get(current.clone())
                 .header(reqwest::header::ACCEPT, IMAGE_ACCEPT)
@@ -814,10 +827,17 @@ pub async fn fetch(
             {
                 return Err(RemoteError::new(RemoteErrorKind::Budget, Some(host)));
             }
-            let (bytes, permits) = read_body(response).await?;
+            let (bytes, mut permits) = read_body(response).await?;
             if !envelope_matches(mime, &bytes) {
                 return Err(RemoteError::new(RemoteErrorKind::Unsupported, Some(host)));
             }
+            // The served representation is an owned copy of the retained body,
+            // so the copy is charged against the same aggregate budget.
+            let copy = retained()
+                .clone()
+                .try_acquire_many_owned(u32::try_from(bytes.len()).unwrap_or(u32::MAX))
+                .map_err(|_| RemoteError::new(RemoteErrorKind::Budget, Some(host)))?;
+            permits.merge(copy);
             return Ok(Fetched {
                 bytes: Arc::new(bytes),
                 mime,

@@ -98,6 +98,42 @@ fn removal_revokes_permanently_and_reinclusion_creates_a_new_lease() {
 }
 
 #[test]
+fn a_removal_between_authorization_and_registration_cancels_the_job() {
+    let policy = Policy::new(&hosts(&["github.com"]));
+    let lease = policy.authorize("github.com").unwrap();
+    let signal = JobSignal::new();
+    // The host is removed after the authorization but before the pending
+    // work is registered. The job must still be cancelled.
+    {
+        let mut committed = policy.guard();
+        committed.replace_hosts(&[]);
+    }
+    lease.register(&signal);
+    assert!(signal.cancelled());
+    assert!(!lease.live());
+}
+
+#[test]
+fn a_revoked_lease_stops_the_request_before_it_is_issued() {
+    tauri::async_runtime::block_on(async {
+        let policy = Policy::new(&hosts(&["github.com"]));
+        let lease = policy.authorize("github.com").unwrap();
+        let target = parse_image_url("https://github.com/a/b.png").unwrap();
+        let signal = JobSignal::new();
+        {
+            let mut committed = policy.guard();
+            committed.replace_hosts(&[]);
+        }
+        let outcome = fetch(&policy, &target, lease, signal).await;
+        let error = match outcome {
+            Ok(_) => panic!("a revoked lease must stop the request"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), "blockedHost");
+    });
+}
+
+#[test]
 fn removing_a_host_cancels_its_pending_work() {
     let policy = Policy::new(&hosts(&["github.com"]));
     let lease = policy.authorize("github.com").unwrap();
