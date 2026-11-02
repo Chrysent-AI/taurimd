@@ -561,7 +561,7 @@ fn package_configuration_keeps_viewer_aliases_supported_platforms_and_narrow_del
         ),
         (
             include_str!("../../tauri.linux.conf.json"),
-            serde_json::json!(["deb"]),
+            serde_json::json!(["deb", "appimage"]),
         ),
     ] {
         let config: serde_json::Value = serde_json::from_str(text).unwrap();

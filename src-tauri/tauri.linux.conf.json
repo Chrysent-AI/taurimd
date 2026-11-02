@@ -1,6 +1,6 @@
 {
   "bundle": {
-    "targets": ["deb"],
+    "targets": ["deb", "appimage"],
     "linux": {
       "deb": {
         "desktopTemplate": "packaging/taurimd.desktop",
