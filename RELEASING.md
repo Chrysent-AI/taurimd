@@ -98,6 +98,13 @@ A `.sha256` sidecar checks corruption, not publisher authenticity. The tgz archi
 suffix is `.tgz`, not `.tar.gz`. Header checks reject obvious wrong-target inputs;
 they do not demonstrate native GUI operation.
 
+`Cargo.toml` carries `[package.metadata.binstall]` so `cargo binstall taurimd`
+resolves that exact archive name and finds the binary inside its versioned
+directory — but only once the human attaches the retained archive to a published
+GitHub release for the validated tag. binstall copies only the executable; it
+does not install the `.app`, NSIS or DEB candidates, the MIME icon or a system
+webview, and it does not verify the archive's publisher.
+
 Binstall copies only the manifest executable. It does **not** install a macOS
 `.app`, run NSIS/DEB, preserve companion resources, register file associations or
 provision system webviews. Keep the existing `.app`/DMG, NSIS, DEB and AppImage

@@ -596,4 +596,17 @@ fn package_configuration_keeps_viewer_aliases_supported_platforms_and_narrow_del
     );
     assert!(include_str!("../../packaging/associations.nsh").contains("NSIS_HOOK_POSTINSTALL"));
     assert!(include_str!("../../packaging/associations.nsh").contains("$\\\"%1$\\\""));
+    // The binstall metadata resolves the archived candidate that the
+    // validated tag-only package-candidates job retains, and names the
+    // versioned directory the binary sits inside.
+    let cargo = include_str!("../../Cargo.toml");
+    assert!(cargo.contains("repository = \"https://github.com/Chrysent-AI/taurimd\""));
+    assert!(cargo.contains("[package.metadata.binstall]"));
+    assert!(cargo.contains(
+        "pkg-url = \"{ repo }/releases/download/v{ version }/{ name }-{ target }-v{ version }.tgz\"",
+    ));
+    assert!(
+        cargo.contains("bin-dir = \"{ name }-{ target }-v{ version }/{ bin }{ binary-ext }\"",)
+    );
+    assert!(cargo.contains("pkg-fmt = \"tgz\""));
 }

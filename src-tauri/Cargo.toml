@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "A read-only, cross-platform Markdown viewer GUI built with Tauri for Windows, macOS, and Linux."
 authors = ["Chrysent"]
 license = "MIT"
+repository = "https://github.com/Chrysent-AI/taurimd"
 edition = "2024"
 rust-version = "1.97.1"
 
@@ -25,6 +26,14 @@ custom-protocol = ["tauri/custom-protocol"]
 [lib]
 name = "taurimd_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+# Resolves `cargo binstall taurimd` to the archived candidate that the
+# validated tag-only package-candidates job produces. The binary sits inside
+# the archive's versioned directory, so the bin-dir names that path.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }-v{ version }.tgz"
+bin-dir = "{ name }-{ target }-v{ version }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
 
 [build-dependencies]
 tauri-build = { version = "=2.7.3", features = [] }
