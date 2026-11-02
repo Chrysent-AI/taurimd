@@ -100,10 +100,29 @@ they do not demonstrate native GUI operation.
 
 Binstall copies only the manifest executable. It does **not** install a macOS
 `.app`, run NSIS/DEB, preserve companion resources, register file associations or
-provision system webviews. Keep the existing `.app`/DMG, NSIS and DEB routes.
+provision system webviews. Keep the existing `.app`/DMG, NSIS, DEB and AppImage
+routes.
 Support remains macOS 14+ Apple Silicon, Windows 11 x64 with Evergreen WebView2,
 and Ubuntu 24.04 x86_64 with WebKitGTK 4.1, desktop/session D-Bus and X11/Wayland.
 There is no Intel macOS, Windows ARM, musl or all-distro claim.
+
+## Linux AppImage candidate
+
+The Ubuntu build target now produces an AppImage beside the DEB. The Tauri
+bundler names it `taurimd_<version>_<arch>.AppImage` — `taurimd_0.1.0_amd64.AppImage`
+at version 0.1.0 — and writes it to
+`src-tauri/target/release/bundle/appimage/`. The `package-candidates` workflow job
+retains it with the other unsigned candidates as a workflow artifact: an unsigned
+human qualification handoff, not a GitHub release and not a registry publication.
+The DEB target is unchanged and still produced.
+
+The AppImage was not built, run, installed or desktop-integrated by this
+repository's local checks; the Linux CI job builds it on an Ubuntu runner.
+Running an AppImage needs FUSE, or `--appimage-extract-and-run` on a system
+without FUSE. Installation, desktop entry integration, `.md`/`.markdown`/`.mdown`/
+`.mkd`/`.mkdown` file associations and in-AppImage media playback are unverified
+on an actual Ubuntu target and still require the authorized native checks in
+"Outstanding qualification and identity".
 
 ## Outstanding qualification and identity
 
@@ -122,6 +141,8 @@ There is no Intel macOS, Windows ARM, musl or all-distro claim.
 - Relocated native executable launch, offline reading, menus, settings restart,
   export, loader/runtime prerequisites and ordinary installer association and
   uninstall behavior still require authorized checks on every supported target.
+  AppImage launch on Linux additionally needs FUSE or
+  `--appimage-extract-and-run`, and that route is unverified.
   Browser mocks, headers and source builds are not those checks. Do not let
   compile or QuickInstall fallback hide missing official assets during later
   binstall qualification. No real installation or GUI launch is performed here.
