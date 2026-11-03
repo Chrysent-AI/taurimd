@@ -15,7 +15,7 @@ import {
   documentRequests,
   navigation as navigationBridge,
 } from './native';
-import { NavigationController } from './navigation/model';
+import { NavigationController, quickOpenScope } from './navigation/model';
 import { Navigation } from './navigation/Navigation';
 import { QuickOpen } from './navigation/QuickOpen';
 import { QuickOpenController } from './navigation/quick-open';
@@ -91,6 +91,12 @@ export function App({ controller }: { controller: ReaderController }) {
     () =>
       new QuickOpenController(navigationBridge, () => {
         void navigation.recover();
+        // The derived Quick Open scope has no watcher: recovery re-fetches
+        // it so a directory traversal or a failed query refreshes the
+        // overlay's scope instead of leaving it stale. reuse adopts the
+        // scope a traversal just republished rather than rescanning it.
+        if (!navigation.state.root)
+          void navigation.openQuickScope(controller.state.displayed, true);
       }),
   );
   const readerMounted = useRef(true);
@@ -98,20 +104,10 @@ export function App({ controller }: { controller: ReaderController }) {
   const pickerHandoff = useRef(false);
   const [pickerNative, setPickerNative] = useState(false);
   useEffect(() => navigation.connect(), [navigation]);
+  const pickerScope = quickOpenScope(navigationState);
   useLayoutEffect(() => {
-    picker.update(
-      navigationState.root,
-      navigationState.rootBusy ||
-        navigationState.choosing ||
-        navigationState.rootStatus === 'unavailable',
-    );
-  }, [
-    picker,
-    navigationState.root,
-    navigationState.rootBusy,
-    navigationState.rootStatus,
-    navigationState.choosing,
-  ]);
+    picker.update(pickerScope.index, pickerScope.busy);
+  }, [picker, pickerScope.index, pickerScope.busy]);
   const sidebar = useRef<HTMLElement | null>(null);
   const siblingGroup = useRef<HTMLDivElement>(null);
   const siblingGroupRef = useCallback((node: HTMLDivElement | null) => {
@@ -448,20 +444,19 @@ export function App({ controller }: { controller: ReaderController }) {
   const acceptPickerFile = useCallback(
     (intent: EntryIntent) => {
       const reply = picker.currentReply();
-      const root = navigation.state.root;
+      const scope = quickOpenScope(navigation.state);
       if (
         modalOpen.current !== 'quick-open' ||
         pickerHandoff.current ||
         composing.current ||
-        navigation.state.choosing ||
-        navigation.state.rootBusy ||
+        scope.busy ||
         ['loading', 'parsing', 'committing'].includes(controller.state.phase) ||
         !reply ||
-        !root ||
-        reply.scope !== root.scope ||
-        reply.revision !== root.revision ||
-        intent.binding.scope !== root.scope ||
-        intent.binding.revision !== root.revision ||
+        !scope.index ||
+        reply.scope !== scope.index.scope ||
+        reply.revision !== scope.index.revision ||
+        intent.binding.scope !== scope.index.scope ||
+        intent.binding.revision !== scope.index.revision ||
         !reply.results.some(
           ({ entry }) =>
             entry.id === intent.binding.entry && entry.kind !== 'directory',
@@ -517,11 +512,8 @@ export function App({ controller }: { controller: ReaderController }) {
       pickerHandoff.current = false;
       setPickerNative(false);
       if (outcome === 'cancelled' || kind === 'folder') {
-        picker.open(
-          navigation.state.root,
-          navigation.state.rootBusy ||
-            navigation.state.rootStatus === 'unavailable',
-        );
+        const scope = quickOpenScope(navigation.state);
+        picker.open(scope.index, scope.busy);
         if (outcome === 'failed') picker.notice(navigation.state.message);
         setSurface('quick-open');
       } else modalOpen.current = null;
@@ -650,11 +642,14 @@ export function App({ controller }: { controller: ReaderController }) {
             : null;
         setOrigin(surfaceOrigin.current);
         modalOpen.current = 'quick-open';
-        picker.open(
-          navigation.state.root,
-          navigation.state.rootBusy ||
-            navigation.state.rootStatus === 'unavailable',
-        );
+        // Without a folder root the overlay derives its scope from the
+        // displayed file's folder; refresh it before opening so the scope
+        // always follows the displayed document. openQuickScope clears the
+        // old scope synchronously, so the overlay never shows stale entries.
+        if (!navigation.state.root)
+          void navigation.openQuickScope(controller.state.displayed);
+        const scope = quickOpenScope(navigation.state);
+        picker.open(scope.index, scope.busy);
         setSurface('quick-open');
       } else if (payload === 'open-folder') {
         if (!navigation.state.rootBusy) {
@@ -1545,6 +1540,7 @@ export function App({ controller }: { controller: ReaderController }) {
             <QuickOpen
               model={picker}
               navigation={navigation}
+              hasDocument={!!state.displayed}
               composing={composing}
               input={pickerInput}
               accept={acceptPickerFile}

@@ -46,6 +46,7 @@ type Command =
   | 'select_root'
   | 'refresh_index'
   | 'get_siblings'
+  | 'get_quick_index'
   | 'read_preview'
   | 'cancel_preview'
   | 'open_index_entry'
@@ -103,13 +104,25 @@ function indexSnapshot(
   };
 }
 let cachedIndex = indexSnapshot(null);
+// Quick Open's derived scope: served to get_quick_index callers and matched
+// by scope id in query doubles, mirroring how native queries resolve the
+// scope their request names.
+let quickIndex: FileIndex = {
+  scope: 2,
+  revision: 1,
+  name: 'fixture',
+  entries: [],
+  issues: [],
+};
 function queryReply(request: QueryRequest): QueryReply {
   // Matching here is only a transport double; native policy is tested in Rust.
   const outside =
     request.text.startsWith('/') ||
     request.text.startsWith('~') ||
     request.text.startsWith('..');
-  const results = (cachedIndex.index?.entries ?? [])
+  const source =
+    request.scope === quickIndex.scope ? quickIndex : cachedIndex.index;
+  const results = (source?.entries ?? [])
     .flatMap((entry) => {
       const characters = Array.from(entry.relative);
       const positions: number[] = [];
@@ -339,6 +352,7 @@ mockIPC(async (command, payload) => {
       'select_root',
       'refresh_index',
       'get_siblings',
+      'get_quick_index',
       'read_preview',
       'cancel_preview',
       'open_index_entry',
@@ -429,6 +443,8 @@ mockIPC(async (command, payload) => {
       if (!reply && received) return structuredClone(received);
     }
     if (!reply && name === 'get_index') return structuredClone(cachedIndex);
+    if (!reply && name === 'get_quick_index')
+      return structuredClone(quickIndex);
     if (!reply && (name === 'query_index' || name === 'complete_path'))
       return queryReply((payload as { request: QueryRequest }).request);
     if (!reply && name === 'get_siblings') return structuredClone(siblingReply);
@@ -608,6 +624,9 @@ const fixture = {
   setSiblings: (value: Siblings) => {
     siblingReply = structuredClone(value);
   },
+  quickIndex: (value: FileIndex) => {
+    quickIndex = structuredClone(value);
+  },
   workerParses: () => workerParses,
   enqueue(command: Command, reply: Reply) {
     const queue = replies.get(command) ?? [];
@@ -630,6 +649,7 @@ const fixture = {
           'select_root',
           'refresh_index',
           'get_siblings',
+          'get_quick_index',
           'read_preview',
           'cancel_preview',
           'open_index_entry',
@@ -644,6 +664,7 @@ const fixture = {
           call.command !== 'pending_document' &&
           call.command !== 'get_index' &&
           call.command !== 'get_siblings' &&
+          call.command !== 'get_quick_index' &&
           call.command !== 'get_settings' &&
           call.command !== 'update_settings' &&
           call.command !== 'present_reader',

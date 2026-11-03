@@ -68,6 +68,23 @@ pub struct Record {
     byte_size: Option<u64>,
     pub entry: Entry,
 }
+
+/// Quick Open indexes the derived scope subtree down to this entry depth
+/// relative to the scope root; deeper levels stay reachable through explicit
+/// directory traversal (Tab / "Read this directory").
+pub const QUICK_DEPTH: usize = 4;
+
+/// Which single-slot home a scope occupies. Each slot retires its previous
+/// occupant; slots are independent of each other.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Slot {
+    /// The watched folder root.
+    Root,
+    /// The displayed file's directory for sibling navigation.
+    Siblings,
+    /// The Quick Open subtree derived from the displayed file's directory.
+    Quick,
+}
 #[derive(Clone)]
 pub struct Scope {
     pub id: u32,
@@ -145,6 +162,7 @@ impl Scope {
 pub struct Navigation {
     pub root: Option<Scope>,
     pub siblings: Option<Scope>,
+    pub quick: Option<Scope>,
     pub worker: Option<crate::navigation_cache::RootWorker>,
     pub status: crate::navigation_cache::Status,
     next: u32,
@@ -162,9 +180,28 @@ impl Navigation {
         })?;
         Ok(self.next)
     }
-    pub fn retire_siblings(&mut self) {
-        if let Some(scope) = self.siblings.take() {
-            scope.cancel.store(true, Ordering::Release);
+    /// Retire the scopes derived from the displayed document: sibling
+    /// navigation and the Quick Open subtree both follow the document and
+    /// die with it.
+    pub fn retire_derived(&mut self) {
+        for slot in [Slot::Siblings, Slot::Quick] {
+            if let Some(scope) = self.take_slot(slot) {
+                scope.cancel.store(true, Ordering::Release);
+            }
+        }
+    }
+    fn slot(&self, slot: Slot) -> Option<&Scope> {
+        match slot {
+            Slot::Root => self.root.as_ref(),
+            Slot::Siblings => self.siblings.as_ref(),
+            Slot::Quick => self.quick.as_ref(),
+        }
+    }
+    fn take_slot(&mut self, slot: Slot) -> Option<Scope> {
+        match slot {
+            Slot::Root => self.root.take(),
+            Slot::Siblings => self.siblings.take(),
+            Slot::Quick => self.quick.take(),
         }
     }
     pub fn root_siblings(&self, path: &Path) -> Option<Siblings> {
@@ -225,11 +262,19 @@ impl Navigation {
         }
     }
     pub fn start(&mut self, path: PathBuf, root: bool, refresh: bool) -> Result<Scope, AppError> {
-        let old = if root {
-            self.root.as_ref()
-        } else {
-            self.siblings.as_ref()
-        };
+        self.open_slot(
+            path,
+            if root { Slot::Root } else { Slot::Siblings },
+            refresh,
+        )
+    }
+    /// Start the Quick Open subtree scope at `path`, retiring the previous
+    /// derived scope so the overlay follows the displayed document's folder.
+    pub fn start_quick(&mut self, path: PathBuf, refresh: bool) -> Result<Scope, AppError> {
+        self.open_slot(path, Slot::Quick, refresh)
+    }
+    fn open_slot(&mut self, path: PathBuf, slot: Slot, refresh: bool) -> Result<Scope, AppError> {
+        let old = self.slot(slot);
         let retained = old.filter(|s| s.path == path).cloned();
         if let Some(old) = old {
             old.cancel.store(true, Ordering::Release);
@@ -274,20 +319,39 @@ impl Navigation {
             records: retained.map(|s| s.records).unwrap_or_default(),
             issues: Vec::new(),
         };
-        if root {
-            self.root = Some(scope.clone());
-        } else {
-            self.siblings = Some(scope.clone());
+        match slot {
+            Slot::Root => self.root = Some(scope.clone()),
+            Slot::Siblings => self.siblings = Some(scope.clone()),
+            Slot::Quick => self.quick = Some(scope.clone()),
         }
         Ok(scope)
     }
     pub fn scope(&self, id: u32) -> Result<Scope, AppError> {
+        [Slot::Root, Slot::Siblings, Slot::Quick]
+            .into_iter()
+            .find_map(|slot| self.slot(slot).filter(|s| s.id == id).cloned())
+            .ok_or_else(Session::stale)
+    }
+    /// The scope a Quick Open query may address: the watched folder root, or
+    /// the derived Quick Open subtree scope. Sibling navigation scopes are
+    /// never queryable.
+    pub fn query_scope(&self, id: u32) -> Result<Scope, AppError> {
         self.root
-            .iter()
-            .chain(self.siblings.iter())
-            .find(|s| s.id == id)
+            .as_ref()
+            .filter(|scope| scope.id == id)
+            .or_else(|| self.quick.as_ref().filter(|scope| scope.id == id))
             .cloned()
             .ok_or_else(Session::stale)
+    }
+    /// The recovery path adopts the current derived scope for `path` without
+    /// rescanning, so a directory read published by a traversal keeps its
+    /// records. `None` when no live published scope matches the path and the
+    /// caller must fall back to a fresh scan.
+    pub fn adopt_quick(&self, path: &Path) -> Option<Index> {
+        self.quick
+            .as_ref()
+            .filter(|scope| scope.path == path && scope.published && scope.live().is_ok())
+            .map(|scope| scope.index())
     }
     pub fn publish(&mut self, mut scope: Scope) -> Result<Index, AppError> {
         let current = self.scope(scope.id)?;
@@ -321,10 +385,17 @@ impl Navigation {
         }
         scope.published = true;
         let index = scope.index();
-        if self.root.as_ref().is_some_and(|s| s.id == scope.id) {
-            self.root = Some(scope);
-        } else {
-            self.siblings = Some(scope);
+        let slot = [Slot::Root, Slot::Siblings, Slot::Quick]
+            .into_iter()
+            .find(|slot| {
+                self.slot(*slot)
+                    .is_some_and(|current| current.id == scope.id)
+            })
+            .ok_or_else(Session::stale)?;
+        match slot {
+            Slot::Root => self.root = Some(scope),
+            Slot::Siblings => self.siblings = Some(scope),
+            Slot::Quick => self.quick = Some(scope),
         }
         Ok(index)
     }
@@ -343,9 +414,11 @@ impl Navigation {
         Ok((scope, record, cancel))
     }
     pub fn stop(&self) {
-        for scope in self.root.iter().chain(self.siblings.iter()) {
-            scope.cancel.store(true, Ordering::Release);
-            scope.lifetime.store(true, Ordering::Release);
+        for slot in [Slot::Root, Slot::Siblings, Slot::Quick] {
+            if let Some(scope) = self.slot(slot) {
+                scope.cancel.store(true, Ordering::Release);
+                scope.lifetime.store(true, Ordering::Release);
+            }
         }
         for (_, cancel) in self.previews.values() {
             cancel.store(true, Ordering::Release);
@@ -366,6 +439,27 @@ impl Drop for Navigation {
     }
 }
 
+/// True when a directory listing holds at least one entry the scan would
+/// admit: not hidden, not a directory link, and a supported file or a plain
+/// directory. query() probes this to distinguish a genuinely empty cached
+/// directory from a depth-capped boundary whose contents were never read.
+pub fn listable_contents(path: &Path) -> bool {
+    fs::read_dir(path)
+        .map(|entries| {
+            entries.filter_map(|entry| entry.ok()).any(|entry| {
+                let path = entry.path();
+                match fs::symlink_metadata(&path) {
+                    Ok(metadata) => {
+                        !hidden(&path, &metadata)
+                            && !directory_link(&metadata)
+                            && (metadata.is_dir() || classify(&path).is_ok())
+                    }
+                    Err(_) => false,
+                }
+            })
+        })
+        .unwrap_or(false)
+}
 fn hidden(path: &Path, metadata: &fs::Metadata) -> bool {
     if path
         .file_name()
@@ -458,14 +552,27 @@ pub fn scan(scope: Scope, recursive: bool) -> Result<Scope, AppError> {
     scan_progress(scope, recursive, |_| {})
 }
 pub fn scan_progress(
-    mut scope: Scope,
+    scope: Scope,
     recursive: bool,
+    progress: impl FnMut(usize),
+) -> Result<Scope, AppError> {
+    // An unbounded cap keeps the watched root's full recursion; `Some(0)`
+    // lists only the scope directory itself.
+    scan_capped(scope, if recursive { None } else { Some(0) }, progress)
+}
+/// Quick Open's bounded prefetch: the scope subtree down to [`QUICK_DEPTH`].
+pub fn scan_subtree(scope: Scope) -> Result<Scope, AppError> {
+    scan_capped(scope, Some(QUICK_DEPTH), |_| {})
+}
+fn scan_capped(
+    mut scope: Scope,
+    cap: Option<usize>,
     progress: impl FnMut(usize),
 ) -> Result<Scope, AppError> {
     let directory = scope.path.clone();
     scan_listing(
         &mut scope,
-        recursive,
+        cap,
         directory,
         true,
         |path| {
@@ -489,7 +596,7 @@ pub fn scan_directory(mut scope: Scope, directory: PathBuf) -> Result<Scope, App
     }
     scan_listing(
         &mut scope,
-        false,
+        Some(0),
         directory,
         false,
         |path| {
@@ -502,14 +609,14 @@ pub fn scan_directory(mut scope: Scope, directory: PathBuf) -> Result<Scope, App
 #[cfg(test)]
 fn scan_with<I: IntoIterator<Item = std::io::Result<PathBuf>>>(
     scope: &mut Scope,
-    recursive: bool,
+    cap: Option<usize>,
     read_dir: impl Fn(&Path) -> std::io::Result<I>,
 ) -> Result<(), AppError> {
-    scan_listing(scope, recursive, scope.path.clone(), true, read_dir, |_| {})
+    scan_listing(scope, cap, scope.path.clone(), true, read_dir, |_| {})
 }
 fn scan_listing<I: IntoIterator<Item = std::io::Result<PathBuf>>>(
     scope: &mut Scope,
-    recursive: bool,
+    cap: Option<usize>,
     directory: PathBuf,
     reset: bool,
     read_dir: impl Fn(&Path) -> std::io::Result<I>,
@@ -522,8 +629,11 @@ fn scan_listing<I: IntoIterator<Item = std::io::Result<PathBuf>>>(
         Arc::make_mut(&mut scope.records)
             .retain(|record| record.lexical.parent() != Some(&directory));
     }
-    let mut stack = vec![directory];
-    while let Some(directory) = stack.pop() {
+    // `depth` counts directory hops from the scope root: entries directly
+    // inside the root sit at depth 1. A directory at `depth + 1 == cap` is
+    // listed but not descended, so entry depth never exceeds the cap.
+    let mut stack = vec![(directory, 0usize)];
+    while let Some((directory, depth)) = stack.pop() {
         scope.live()?;
         let listing = candidate(&scope.path, &directory, true)
             .and_then(|_| read_dir(&directory).map_err(AppError::from));
@@ -570,8 +680,8 @@ fn scan_listing<I: IntoIterator<Item = std::io::Result<PathBuf>>>(
                     continue;
                 }
             };
-            if directory && recursive {
-                stack.push(path.clone());
+            if directory && cap.is_none_or(|limit| depth + 1 < limit) {
+                stack.push((path.clone(), depth + 1));
             }
             add_record(scope, path, canonical, directory)?;
             if scope.records.len().is_multiple_of(128) {

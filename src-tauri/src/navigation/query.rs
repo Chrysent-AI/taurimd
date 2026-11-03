@@ -327,6 +327,20 @@ pub fn query(scope: &Scope, request: Query, home: Option<&Path>) -> Result<Answe
             Some((record, score, positions))
         })
         .collect();
+    // A depth-capped scope lists boundary directories without descending:
+    // an empty cached result can mean unread children rather than an empty
+    // folder. The directory was validated above, so probe it once and hand
+    // the existing Read-this-directory flow the path when it holds content.
+    if let Some(parent) = &parent
+        && matches.is_empty()
+        && super::listable_contents(parent)
+    {
+        reply.status = "missing";
+        return Ok(Answer {
+            reply,
+            missing: Some(parent.clone()),
+        });
+    }
     matches.sort_by(|(a, sa, _), (b, sb, _)| {
         (a.entry.kind != "directory")
             .cmp(&(b.entry.kind != "directory"))

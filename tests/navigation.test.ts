@@ -84,6 +84,7 @@ function setup() {
       .fn<NavigationBridge['refresh']>()
       .mockResolvedValue(cache(index(3))),
     siblings: vi.fn<NavigationBridge['siblings']>(),
+    quickScope: vi.fn<NavigationBridge['quickScope']>(),
     preview: vi.fn<NavigationBridge['preview']>().mockResolvedValue(snapshot()),
     cancelPreview: vi
       .fn<NavigationBridge['cancelPreview']>()
@@ -292,6 +293,65 @@ describe('production navigation state and shared native adapter DTO projection',
     };
     expect(siblingTargets(siblings, 'name', 'asc').next).toBeUndefined();
     expect(siblingTargets(siblings, 'name', 'asc').previous?.id).toBe(2);
+  });
+  it('derives the Quick Open scope from the displayed file and drops it when a root is chosen', async () => {
+    const { controller, bridge } = setup();
+    const derived = { ...index(), scope: 30, revision: 2, name: 'fixture/sub' };
+    const held = deferred<FileIndex>();
+    bridge.quickScope.mockReturnValueOnce(held.promise);
+    const doc = { snapshot: snapshot(), html: '', metadata: null };
+    const first = controller.openQuickScope(doc);
+    expect(controller.state.quickBusy).toBe(true);
+    // One fetch at a time: a second open while pending never re-requests.
+    await controller.openQuickScope(doc);
+    expect(bridge.quickScope).toHaveBeenCalledOnce();
+    held.resolve(derived);
+    await first;
+    expect(controller.state.quickBusy).toBe(false);
+    expect(controller.state.quick?.scope).toBe(30);
+    // The recovery path reuses: it adopts the traversal-published scope.
+    bridge.quickScope.mockResolvedValueOnce({ ...derived, revision: 3 });
+    await controller.openQuickScope(doc, true);
+    expect(bridge.quickScope).toHaveBeenNthCalledWith(2, doc.snapshot, true);
+    expect(controller.state.quick?.revision).toBe(3);
+    // Overlay opens stay plain rescans and drop the old scope synchronously.
+    bridge.quickScope.mockResolvedValueOnce({ ...derived, revision: 4 });
+    const rescan = controller.openQuickScope(doc);
+    expect(controller.state.quick).toBeNull();
+    await rescan;
+    expect(bridge.quickScope).toHaveBeenNthCalledWith(3, doc.snapshot, false);
+    expect(controller.state.quick?.revision).toBe(4);
+    // Without a displayed document there is nothing to derive from.
+    await controller.openQuickScope(null);
+    expect(bridge.quickScope).toHaveBeenCalledTimes(3);
+    await controller.choose();
+    expect(controller.state.root?.scope).toBe(7);
+    expect(controller.state.quick).toBeNull();
+    // With a root present the derived scope is never fetched again.
+    await controller.openQuickScope(doc);
+    expect(bridge.quickScope).toHaveBeenCalledTimes(3);
+    controller.dispose();
+  });
+  it('reports a failed derived-scope fetch and discards a fetch that lands after a root is chosen', async () => {
+    const { controller, bridge } = setup();
+    const doc = { snapshot: snapshot(), html: '', metadata: null };
+    bridge.quickScope.mockRejectedValue({ message: 'folder vanished' });
+    await controller.openQuickScope(doc);
+    expect(controller.state.quick).toBeNull();
+    expect(controller.state.quickBusy).toBe(false);
+    expect(controller.state.quickMessage).toContain('folder vanished');
+    const held = deferred<FileIndex>();
+    bridge.quickScope.mockReturnValueOnce(held.promise);
+    const pending = controller.openQuickScope(doc);
+    await controller.choose();
+    expect(controller.state.quick).toBeNull();
+    expect(controller.state.quickBusy).toBe(false);
+    held.resolve({ ...index(), scope: 31 });
+    await pending;
+    // The landed fetch is discarded: the chosen root owns the scope now.
+    expect(controller.state.quick).toBeNull();
+    expect(controller.state.quickBusy).toBe(false);
+    controller.dispose();
   });
 });
 describe('shared file order and the four sibling endpoints', () => {

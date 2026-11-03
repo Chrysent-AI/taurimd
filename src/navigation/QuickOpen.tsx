@@ -5,11 +5,13 @@ import {
   useSyncExternalStore,
 } from 'react';
 import type { NavigationController } from './model';
+import { quickOpenScope } from './model';
 import type { QuickOpenController } from './quick-open';
 import { binding, type EntryIntent } from './types';
 export function QuickOpen({
   model,
   navigation,
+  hasDocument,
   composing,
   input,
   accept,
@@ -17,6 +19,7 @@ export function QuickOpen({
 }: {
   model: QuickOpenController;
   navigation: NavigationController;
+  hasDocument: boolean;
   composing: { current: boolean };
   input: { current: HTMLInputElement | null };
   accept: (intent: EntryIntent) => void;
@@ -24,6 +27,11 @@ export function QuickOpen({
 }) {
   const state = useSyncExternalStore(model.subscribe, model.getState);
   const nav = useSyncExternalStore(navigation.subscribe, navigation.getState);
+  const scope = quickOpenScope(nav);
+  const index = scope.index;
+  const partial = nav.root
+    ? nav.rootStatus === 'partial'
+    : (nav.quick?.issues.length ?? 0) > 0;
   const selectedOption = useRef<HTMLLIElement | null>(null);
   const optionRef = useCallback(
     (node: HTMLLIElement | null) => {
@@ -35,10 +43,9 @@ export function QuickOpen({
   );
   const candidate = model.currentReply();
   const reply =
-    candidate?.scope === nav.root?.scope &&
-    candidate?.revision === nav.root?.revision &&
-    !nav.rootBusy &&
-    !nav.choosing
+    candidate?.scope === index?.scope &&
+    candidate?.revision === index?.revision &&
+    !scope.busy
       ? candidate
       : null;
   const results = reply?.results ?? [];
@@ -47,21 +54,20 @@ export function QuickOpen({
     `quick-${String(reply?.scope)}-${String(reply?.revision)}-${String(reply?.queryId)}-${String(id)}`;
   const isCurrent = () =>
     !!reply &&
+    !!index &&
     model.currentReply() === reply &&
-    reply.scope === navigation.state.root?.scope &&
-    reply.revision === navigation.state.root.revision &&
-    !navigation.state.rootBusy &&
-    !navigation.state.choosing;
+    reply.scope === index.scope &&
+    reply.revision === index.revision &&
+    !scope.busy;
   const activate = (position: number) => {
     if (composing.current || !isCurrent()) return;
-    const root = navigation.state.root;
     const row = reply?.results.at(position);
-    if (!row || !root) return;
+    if (!row || !index) return;
     if (row.entry.kind === 'directory')
       model.enterDirectory(row.entry.relative, row.entry.id, row.entry.uiId);
     else
       accept({
-        binding: binding(root, row.entry),
+        binding: binding(index, row.entry),
         name: row.entry.name,
         focus: 'start',
       });
@@ -70,8 +76,13 @@ export function QuickOpen({
     selectedOption.current?.scrollIntoView({ block: 'nearest' });
   }, [state.selected, reply]);
   const summary = (() => {
-    if (!nav.root) return 'Choose a folder to search its files.';
-    if (nav.rootStatus === 'unavailable' || nav.rootBusy)
+    if (!index) {
+      if (!hasDocument || nav.root)
+        return 'Choose a folder to search its files.';
+      if (nav.quickMessage) return nav.quickMessage;
+      return 'Indexing this folder…';
+    }
+    if (nav.root && (nav.rootStatus === 'unavailable' || nav.rootBusy))
       return nav.rootMessage;
     if (state.phase === 'filtering') return 'Filtering…';
     if (state.phase === 'error') return state.message;
@@ -90,17 +101,17 @@ export function QuickOpen({
       return `Showing first 100 results of ${String(reply.total)}.`;
     if (reply.total) return `${String(reply.total)} results.`;
     if (state.text)
-      return `No files match ${state.text}${nav.rootStatus === 'partial' || nav.cache?.degraded ? ' in known results' : ''}.`;
-    return nav.root.entries.length
+      return `No files match ${state.text}${partial || (nav.root && nav.cache?.degraded) ? ' in known results' : ''}.`;
+    return index.entries.length
       ? 'No supported files at this location.'
-      : nav.rootStatus === 'partial'
+      : partial
         ? 'No supported files in known results; some folders could not be read.'
         : 'No supported files in this folder.';
   })();
   return (
     <section className="quick-open" aria-label="File lookup">
       <p className="quick-scope">
-        <strong>Scope:</strong> {nav.root?.name ?? 'No folder selected'}
+        <strong>Scope:</strong> {index?.name ?? 'No folder selected'}
         <br />
         <strong>Location:</strong> {reply?.location || '.'}
       </p>
@@ -177,7 +188,7 @@ export function QuickOpen({
       <p role="status" aria-live="polite">
         {summary}
       </p>
-      {nav.rootStatus === 'partial' && (
+      {index && partial && (
         <p>Some folders could not be read; results are incomplete.</p>
       )}
       {nav.watcherMessage && <p>{nav.watcherMessage}</p>}
@@ -185,7 +196,10 @@ export function QuickOpen({
         id="quick-results"
         role="listbox"
         aria-label="Files and folders"
-        aria-busy={state.phase === 'filtering' || nav.rootBusy}
+        aria-busy={
+          state.phase === 'filtering' ||
+          (nav.root ? nav.rootBusy : nav.quickBusy)
+        }
       >
         {results.map(({ entry, positions }, position) => (
           <li
@@ -216,9 +230,9 @@ export function QuickOpen({
             }}
           >
             <span className="quick-path">
-              {Array.from(entry.relative).map((character, index) =>
-                positions.includes(index) ? (
-                  <strong className="quick-match" key={index}>
+              {Array.from(entry.relative).map((character, at) =>
+                positions.includes(at) ? (
+                  <strong className="quick-match" key={at}>
                     {character}
                   </strong>
                 ) : (

@@ -1,7 +1,7 @@
 use super::{ReaderState, session};
 use crate::{
     documents::{AppError, Session, Snapshot},
-    navigation::{self, Binding, Siblings},
+    navigation::{self, Binding, Index, Siblings},
     navigation_cache::{self, RootWorker, Snapshot as CacheSnapshot, Status},
     windows::reader,
 };
@@ -161,16 +161,10 @@ async fn search(
     let state = reader(&window)?;
     let scope = {
         let session = session(&window, &state)?;
-        session
-            .navigation
-            .root
-            .as_ref()
-            .filter(|root| root.id == request.scope)
-            .cloned()
-            .ok_or_else(Session::stale)?
+        session.navigation.query_scope(request.scope)?
     };
     let home = window.path().home_dir().ok();
-    let answer = tauri::async_runtime::spawn_blocking(move || {
+    let mut answer = tauri::async_runtime::spawn_blocking(move || {
         let answer = navigation::query::query(&scope, request, home.as_deref())?;
         if traverse && let Some(path) = &answer.missing {
             navigation::query::validate_directory(&scope, path)?;
@@ -179,22 +173,46 @@ async fn search(
     })
     .await
     .map_err(|_| AppError::new("resourceFailure", "File filtering was interrupted."))??;
-    let session = session(&window, &state)?;
-    let current = session
-        .navigation
-        .root
-        .as_ref()
-        .ok_or_else(Session::stale)?;
-    if current.id != answer.reply.scope || current.revision != answer.reply.revision {
-        return Err(Session::stale());
-    }
-    if traverse && let Some(path) = answer.missing {
-        session
-            .navigation
-            .worker
-            .as_ref()
-            .ok_or_else(Session::stale)?
-            .directory(path);
+    let follow_up = {
+        let session = session(&window, &state)?;
+        let nav = &session.navigation;
+        let current = nav.query_scope(answer.reply.scope)?;
+        if current.revision != answer.reply.revision {
+            return Err(Session::stale());
+        }
+        let rooted = nav.root.as_ref().is_some_and(|root| root.id == current.id);
+        if traverse {
+            answer
+                .missing
+                .take()
+                .map(|path| (rooted, current.path.clone(), path))
+        } else {
+            None
+        }
+    };
+    if let Some((rooted, scope_path, path)) = follow_up {
+        if rooted {
+            let session = session(&window, &state)?;
+            session
+                .navigation
+                .worker
+                .as_ref()
+                .ok_or_else(Session::stale)?
+                .directory(path);
+        } else {
+            // The derived scope has no worker or watcher: read the requested
+            // directory into it now so the retried query can answer.
+            let draft = {
+                let mut session = session(&window, &state)?;
+                session.navigation.start_quick(scope_path, true)?
+            };
+            let scanned = tauri::async_runtime::spawn_blocking(move || {
+                navigation::scan_directory(draft, path)
+            })
+            .await
+            .map_err(|_| AppError::new("resourceFailure", "File filtering was interrupted."))??;
+            session(&window, &state)?.navigation.publish(scanned)?;
+        }
     }
     Ok(answer.reply)
 }
@@ -257,6 +275,58 @@ pub async fn get_siblings(
     })
     .await
     .map_err(|_| AppError::new("resourceFailure", "Sibling enumeration was interrupted."))?
+}
+/// Materialize the Quick Open scope from the displayed document's folder:
+/// a depth-capped recursive prefetch that feeds the existing query scoring.
+/// The scope follows the displayed document and is re-scanned each time the
+/// overlay opens without a folder root. It has no watcher, so while the
+/// overlay stays open results are refreshed by a directory traversal plus a
+/// recovery fetch: the traversal reads the directory into the published
+/// scope under a new revision, and `reuse` adopts that scope instead of
+/// rescanning it away. Without `reuse` the fetch always rescans.
+#[tauri::command]
+pub async fn get_quick_index(
+    window: WebviewWindow,
+    document_id: u32,
+    revision: u32,
+    reuse: Option<bool>,
+) -> Result<Index, AppError> {
+    let state = reader(&window)?;
+    let parent = {
+        let session = session(&window, &state)?;
+        let document = session.active(document_id, revision)?;
+        document.parent.clone()
+    };
+    let handle = window.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut adopted = None;
+        if reuse == Some(true) {
+            let session = session(&handle, &state)?;
+            session.active(document_id, revision)?;
+            adopted = session.navigation.adopt_quick(&parent);
+        }
+        let index = match adopted {
+            Some(index) => index,
+            // No live published scope to adopt (first open, the document
+            // moved, or a plain open): scan a fresh depth-capped draft.
+            None => {
+                let draft = {
+                    let mut session = session(&window, &state)?;
+                    let document = session.active(document_id, revision)?;
+                    session
+                        .navigation
+                        .start_quick(document.parent.clone(), false)?
+                };
+                let scope = navigation::scan_subtree(draft)?;
+                let mut session = session(&handle, &state)?;
+                session.active(document_id, revision)?;
+                session.navigation.publish(scope)?
+            }
+        };
+        Ok::<_, AppError>(index)
+    })
+    .await
+    .map_err(|_| AppError::new("resourceFailure", "Quick Open indexing was interrupted."))?
 }
 #[tauri::command]
 pub async fn read_preview(

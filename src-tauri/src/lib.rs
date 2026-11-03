@@ -6,8 +6,8 @@ mod navigation;
 mod navigation_cache;
 mod navigation_commands;
 use navigation_commands::{
-    cancel_preview, complete_path, get_index, get_siblings, open_index_entry, query_index,
-    read_preview, refresh_index, reveal_document, select_root,
+    cancel_preview, complete_path, get_index, get_quick_index, get_siblings, open_index_entry,
+    query_index, read_preview, refresh_index, reveal_document, select_root,
 };
 mod presentation;
 mod remote_images;
@@ -166,7 +166,7 @@ async fn reload_document(
     let (granted, cancel) = {
         let mut session = session(&window, &state)?;
         let granted = session.active(document_id, revision)?;
-        session.navigation.retire_siblings();
+        session.navigation.retire_derived();
         if session
             .navigation
             .root
@@ -698,6 +698,7 @@ pub fn run() {
             complete_path,
             refresh_index,
             get_siblings,
+            get_quick_index,
             read_preview,
             cancel_preview,
             open_index_entry,

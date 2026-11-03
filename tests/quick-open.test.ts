@@ -61,6 +61,7 @@ function bridge() {
       .mockResolvedValue({ status: 'cancelled' }),
     refresh: vi.fn<NavigationBridge['refresh']>().mockResolvedValue(snapshot()),
     siblings: vi.fn<NavigationBridge['siblings']>(),
+    quickScope: vi.fn<NavigationBridge['quickScope']>(),
     preview: vi.fn<NavigationBridge['preview']>(),
     cancelPreview: vi
       .fn<NavigationBridge['cancelPreview']>()
@@ -224,6 +225,101 @@ describe('production Quick Open debounce and immutable query ownership', () => {
     model.close();
     model.open(root(), false);
     expect(model.state.text).toBe('sub/');
+    model.close();
+  });
+});
+describe('derived Quick Open scope from the displayed file', () => {
+  const derived = (): FileIndex => ({
+    scope: 30,
+    revision: 4,
+    name: 'fixture/displayed-folder',
+    entries: [],
+    issues: [],
+  });
+  it('debounces while the derived scope is pending and searches once it lands', async () => {
+    vi.useFakeTimers();
+    const native = bridge();
+    const model = new QuickOpenController(native, vi.fn());
+    model.open(null, true);
+    model.text('deep');
+    await vi.advanceTimersByTimeAsync(300);
+    expect(native.query).not.toHaveBeenCalled();
+    expect(model.state.phase).toBe('idle');
+    model.update(derived(), false);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(native.query).toHaveBeenCalledOnce();
+    expect(native.query.mock.calls[0][0]).toMatchObject({
+      scope: 30,
+      revision: 4,
+      text: 'deep',
+    });
+    expect(model.currentReply()?.scope).toBe(30);
+    model.close();
+  });
+  it('traverse recovery adopts the traversal-published scope instead of rescanning it away', async () => {
+    vi.useFakeTimers();
+    const native = bridge();
+    const recover = vi.fn();
+    const model = new QuickOpenController(native, recover);
+    const derived = {
+      ...root(),
+      scope: 30,
+      revision: 4,
+      name: 'fixture/displayed-folder',
+    };
+    model.open(derived, false);
+    // A hollow boundary directory probes as missing (native query policy).
+    native.query.mockImplementationOnce((request) =>
+      Promise.resolve({ ...reply(request), status: 'missing' }),
+    );
+    await vi.advanceTimersByTimeAsync(200);
+    expect(model.currentReply()?.status).toBe('missing');
+    // The native traverse reads the directory, republishes the scope under
+    // revision 5, and returns the request-built pre-traversal reply: still
+    // revision 4 and missing. Convergence comes from the recovery fetch
+    // adopting the republished scope, not from the reply's revision.
+    native.complete.mockImplementationOnce((request) =>
+      Promise.resolve({ ...reply(request), status: 'missing' }),
+    );
+    await model.complete();
+    expect(native.complete).toHaveBeenCalledOnce();
+    expect(recover).toHaveBeenCalledOnce();
+    // The pre-traversal missing reply stays visible as "Reading folder…"
+    // while the recovery fetch runs.
+    expect(model.currentReply()).toMatchObject({
+      revision: 4,
+      status: 'missing',
+    });
+    expect(model.state.message).toBe('Reading folder…');
+    // The recovery fetch adopts the published scope: revision 5 survives
+    // with the just-read directory, and the re-search is ready with it.
+    const child = {
+      id: 41,
+      uiId: 41,
+      parent: 12,
+      name: 'child.md',
+      relative: 'four/child.md',
+      kind: 'markdown' as const,
+      context: 41,
+      alphaRank: 1,
+      dateRank: 1,
+      sizeRank: 1,
+    };
+    native.query.mockImplementationOnce((request) =>
+      Promise.resolve({
+        ...reply(request),
+        total: 1,
+        results: [{ entry: child, positions: [] }],
+      }),
+    );
+    model.update({ ...derived, revision: 5, entries: [child] }, false);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(native.query).toHaveBeenCalledTimes(2);
+    expect(native.query.mock.calls[1][0]).toMatchObject({
+      scope: 30,
+      revision: 5,
+    });
+    expect(model.currentReply()).toMatchObject({ revision: 5, total: 1 });
     model.close();
   });
 });

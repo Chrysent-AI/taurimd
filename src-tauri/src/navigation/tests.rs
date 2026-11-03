@@ -250,7 +250,7 @@ fn initial_iterator_and_nested_denial_are_not_false_empty_success() {
         .unwrap();
     let denied = || io::Error::new(io::ErrorKind::PermissionDenied, "fixture denial");
     assert_eq!(
-        scan_with(&mut scope, true, |_| Err::<Vec<io::Result<PathBuf>>, _>(
+        scan_with(&mut scope, None, |_| Err::<Vec<io::Result<PathBuf>>, _>(
             denied()
         ))
         .err()
@@ -258,7 +258,7 @@ fn initial_iterator_and_nested_denial_are_not_false_empty_success() {
         .code,
         "denied"
     );
-    scan_with(&mut scope, true, |path| {
+    scan_with(&mut scope, None, |path| {
         if path.ends_with("denied") {
             return Err(denied());
         }
@@ -562,5 +562,269 @@ fn reveal_uses_only_current_active_grant_is_off_lock_and_failure_preserves_reade
         "notFound"
     );
     drop(state);
+    reap(dir);
+}
+#[test]
+fn quick_subtree_caps_depth_four_while_the_watched_root_stays_recursive() {
+    let dir = root();
+    let deep: [&[&str]; 5] = [
+        &["top.md"],
+        &["one", "deep.md"],
+        &["one", "two", "deeper.md"],
+        &["one", "two", "three", "four.md"],
+        &["one", "two", "three", "four", "beyond.md"],
+    ];
+    for parts in deep.iter() {
+        let mut path = dir.path().to_owned();
+        for part in parts.iter() {
+            path.push(part);
+        }
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "# Depth").unwrap();
+    }
+    let relative = |parts: &[&str]| {
+        let mut path = dir.path().to_owned();
+        for part in parts {
+            path.push(part);
+        }
+        path.strip_prefix(dir.path())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+    };
+    let mut nav = Navigation::default();
+    let scope = nav
+        .start_quick(root_path(dir.path()).unwrap(), false)
+        .unwrap();
+    let quick = nav.publish(scan_subtree(scope).unwrap()).unwrap();
+    let present = |parts: &[&str], kind: &str| {
+        quick
+            .entries
+            .iter()
+            .any(|e| e.relative == relative(parts) && e.kind == kind)
+    };
+    // Depth four appears; depth five does not. The depth-4 directory is
+    // listed without its contents being scanned; query() reports such
+    // unread contents as missing so the directory-read flow populates them.
+    assert!(present(&["top.md"], "markdown"));
+    assert!(present(&["one", "deep.md"], "markdown"));
+    assert!(present(&["one", "two", "deeper.md"], "markdown"));
+    assert!(present(&["one", "two", "three", "four.md"], "markdown"));
+    assert!(present(&["one", "two", "three", "four"], "directory"));
+    assert!(!present(
+        &["one", "two", "three", "four", "beyond.md"],
+        "markdown"
+    ));
+    assert!(quick.issues.is_empty());
+    // The shared fuzzy scoring answers the derived scope, and a record
+    // binding resolves through the quick slot.
+    let found = query::query(
+        &nav.query_scope(quick.scope).unwrap(),
+        query::Query {
+            scope: quick.scope,
+            revision: quick.revision,
+            query_id: 1,
+            text: "four.md".into(),
+            directory: None,
+        },
+        None,
+    )
+    .unwrap()
+    .reply;
+    assert_eq!(found.total, 1);
+    assert_eq!(
+        found.results[0].entry.relative,
+        relative(&["one", "two", "three", "four.md"])
+    );
+    let binding = Binding {
+        scope: quick.scope,
+        revision: quick.revision,
+        entry: found.results[0].entry.id,
+    };
+    let record = nav.scope(binding.scope).unwrap().entry(binding).unwrap();
+    assert!(record.canonical.ends_with("four.md"));
+    // The derived scope follows the displayed document to another folder;
+    // the retired scope and its bindings die with the slot.
+    let retired = quick.scope;
+    let other = root();
+    fs::write(other.path().join("elsewhere.md"), "# Elsewhere").unwrap();
+    let next = nav
+        .start_quick(root_path(other.path()).unwrap(), false)
+        .unwrap();
+    let next = nav.publish(scan_subtree(next).unwrap()).unwrap();
+    assert_ne!(next.scope, retired);
+    assert!(nav.scope(retired).is_err());
+    assert_eq!(nav.query_scope(retired).err().unwrap().code, "stale");
+    // A traversal refresh keeps the slot identity under a new revision.
+    let refreshed = nav
+        .start_quick(root_path(other.path()).unwrap(), true)
+        .unwrap();
+    assert_eq!(refreshed.id, next.scope);
+    assert_ne!(refreshed.revision, next.revision);
+    // Sibling navigation scopes stay private to sibling navigation.
+    let sibling = nav
+        .start(root_path(dir.path()).unwrap(), false, false)
+        .unwrap();
+    let sibling = nav.publish(scan(sibling, false).unwrap()).unwrap();
+    assert!(nav.query_scope(sibling.scope).is_err());
+    assert!(nav.scope(sibling.scope).is_ok());
+    // The watched root keeps its unbounded recursion regardless of the cap.
+    let root_index = {
+        let scope = nav
+            .start(root_path(dir.path()).unwrap(), true, false)
+            .unwrap();
+        nav.publish(scan(scope, true).unwrap()).unwrap()
+    };
+    for parts in deep.iter() {
+        assert!(
+            root_index
+                .entries
+                .iter()
+                .any(|e| e.relative == relative(parts) && e.kind != "directory")
+        );
+    }
+    drop(nav);
+    reap(dir);
+    reap(other);
+}
+#[test]
+fn capped_scan_degrades_unreadable_subdirectories_to_partial_results() {
+    let dir = root();
+    fs::create_dir(dir.path().join("denied")).unwrap();
+    fs::create_dir_all(dir.path().join("one/two")).unwrap();
+    fs::write(dir.path().join("good.md"), "# Good").unwrap();
+    fs::write(dir.path().join("one/two/nested.md"), "# Nested").unwrap();
+    let mut nav = Navigation::default();
+    let mut scope = nav
+        .start_quick(root_path(dir.path()).unwrap(), false)
+        .unwrap();
+    let denied = || io::Error::new(io::ErrorKind::PermissionDenied, "fixture denial");
+    scan_with(&mut scope, Some(QUICK_DEPTH), |path| {
+        if path.ends_with("denied") {
+            return Err(denied());
+        }
+        entries(path)
+    })
+    .unwrap();
+    assert!(scope.records.iter().any(|r| r.entry.name == "good.md"));
+    assert!(scope.records.iter().any(|r| r.entry.name == "nested.md"));
+    assert!(
+        scope
+            .issues
+            .iter()
+            .any(|e| e.code == "denied" && e.relative == "denied")
+    );
+    drop(nav);
+    reap(dir);
+}
+#[test]
+fn traversal_adoption_preserves_read_directories_and_the_cap_probe_engages_missing() {
+    let dir = root();
+    let four = dir.path().join("one/two/three/four");
+    fs::create_dir_all(&four).unwrap();
+    fs::create_dir_all(dir.path().join("one/two/three/empty")).unwrap();
+    fs::create_dir_all(dir.path().join("one/two/three/blocked")).unwrap();
+    fs::write(four.join("child.md"), "# Child").unwrap();
+    fs::write(
+        dir.path().join("one/two/three/blocked/unsupported.mdx"),
+        "bad",
+    )
+    .unwrap();
+    let mut nav = Navigation::default();
+    let scope = nav
+        .start_quick(root_path(dir.path()).unwrap(), false)
+        .unwrap();
+    let scope_path = scope.path.clone();
+    let quick = nav.publish(scan_subtree(scope).unwrap()).unwrap();
+    let four_relative = Path::new("one/two/three/four")
+        .to_string_lossy()
+        .into_owned();
+    let child_relative = Path::new("one/two/three/four")
+        .join("child.md")
+        .to_string_lossy()
+        .into_owned();
+    let answer = |text: &str| {
+        let scope = nav.query_scope(quick.scope).unwrap();
+        query::query(
+            &scope,
+            query::Query {
+                scope: quick.scope,
+                revision: quick.revision,
+                query_id: 1,
+                text: text.into(),
+                directory: None,
+            },
+            None,
+        )
+        .unwrap()
+    };
+    // A listed depth-4 directory holding visible content reports missing so
+    // the Read-this-directory flow engages; genuinely empty and
+    // unsupported-only boundaries stay ready with zero results.
+    let hollow = answer("one/two/three/four/");
+    assert_eq!(hollow.reply.status, "missing");
+    assert_eq!(
+        hollow.missing.as_deref(),
+        Some(scope_path.join(&four_relative).as_path())
+    );
+    let vacant = answer("one/two/three/empty/");
+    assert_eq!(vacant.reply.status, "ready");
+    assert_eq!(vacant.reply.total, 0);
+    let unsupported = answer("one/two/three/blocked/");
+    assert_eq!(unsupported.reply.status, "ready");
+    assert_eq!(unsupported.reply.total, 0);
+    // The traversal seam (search(traverse=true)): a refresh draft reads the
+    // directory under a new revision and republishes the slot.
+    let draft = nav.start_quick(scope_path.clone(), true).unwrap();
+    assert_eq!(draft.id, quick.scope);
+    assert_ne!(draft.revision, quick.revision);
+    let republished = nav
+        .publish(scan_directory(draft, scope_path.join(&four_relative)).unwrap())
+        .unwrap();
+    assert!(
+        republished
+            .entries
+            .iter()
+            .any(|e| e.relative == child_relative)
+    );
+    // With reuse the recovery fetch adopts that published scope: the read
+    // directory survives under the same identity and the retried query is
+    // ready, so the Read-this-directory flow converges.
+    let adopted = nav.adopt_quick(&scope_path).unwrap();
+    assert_eq!(adopted.scope, quick.scope);
+    assert_eq!(adopted.revision, republished.revision);
+    assert!(adopted.entries.iter().any(|e| e.relative == child_relative));
+    let settled = {
+        let scope = nav.query_scope(republished.scope).unwrap();
+        query::query(
+            &scope,
+            query::Query {
+                scope: republished.scope,
+                revision: republished.revision,
+                query_id: 2,
+                text: "one/two/three/four/".into(),
+                directory: None,
+            },
+            None,
+        )
+        .unwrap()
+        .reply
+    };
+    assert_eq!(settled.status, "ready");
+    assert_eq!(settled.total, 1);
+    assert_eq!(settled.results[0].entry.name, "child.md");
+    // Adoption is exact: a foreign path never adopts.
+    assert!(nav.adopt_quick(&dir.path().join("elsewhere")).is_none());
+    // A plain (overlay-open) fetch rescans from scratch and wipes the read
+    // directory again, as the accepted re-read-on-open lifecycle requires.
+    let wiped_scope = nav.start_quick(scope_path.clone(), false).unwrap();
+    let wiped = nav.publish(scan_subtree(wiped_scope).unwrap()).unwrap();
+    assert_ne!(wiped.scope, quick.scope);
+    assert!(!wiped.entries.iter().any(|e| e.relative == child_relative));
+    // An unpublished draft in the slot never adopts.
+    let draft = nav.start_quick(scope_path.clone(), true).unwrap();
+    assert!(nav.adopt_quick(&scope_path).is_none());
+    draft.cancel.store(true, Ordering::Release);
+    drop(nav);
     reap(dir);
 }

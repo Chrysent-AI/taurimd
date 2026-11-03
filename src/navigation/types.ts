@@ -32,6 +32,10 @@ export interface Siblings {
   inRoot: boolean;
   rootActive: number | null;
 }
+export interface PickerScope {
+  index: FileIndex | null;
+  busy: boolean;
+}
 export interface EntryIntent {
   binding: EntryBinding;
   name: string;
@@ -91,6 +95,9 @@ export interface NavigationBridge {
   >;
   refresh(scopeId: number): Promise<IndexSnapshot>;
   siblings(document: Snapshot): Promise<Siblings>;
+  // `reuse` adopts the native scope already published by a directory
+  // traversal instead of rescanning it away; overlay opens omit it.
+  quickScope(document: Snapshot, reuse?: boolean): Promise<FileIndex>;
   preview(binding: EntryBinding, requestId: number): Promise<Snapshot>;
   cancelPreview(requestId: number): Promise<unknown>;
   reveal(document: Snapshot): Promise<unknown>;

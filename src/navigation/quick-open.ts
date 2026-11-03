@@ -35,7 +35,10 @@ export class QuickOpenController {
   private listeners = new Set<() => void>();
   private timer: ReturnType<typeof setTimeout> | undefined;
   private sequence = 0;
-  private root: FileIndex | null = null;
+  // The searched index: the watched folder root, or the derived scope from
+  // the displayed file's folder when no root is open. Only the scope and
+  // revision identity matter here; provenance stays in NavigationController.
+  private scope: FileIndex | null = null;
   private busy = false;
   private active = false;
   constructor(
@@ -79,19 +82,19 @@ export class QuickOpenController {
   notice(feedback: string) {
     this.publish({ feedback });
   }
-  open(root: FileIndex | null, busy: boolean) {
+  open(scope: FileIndex | null, busy: boolean) {
     this.publish({ feedback: '' });
     this.active = false;
-    this.update(root, busy);
+    this.update(scope, busy);
     this.active = true;
     this.search();
   }
-  update(root: FileIndex | null, busy: boolean) {
-    if (this.root === root && this.busy === busy) return;
+  update(scope: FileIndex | null, busy: boolean) {
+    if (this.scope === scope && this.busy === busy) return;
     if (this.directory) {
-      if (!root || this.directory.scope !== root.scope) this.directory = null;
+      if (!scope || this.directory.scope !== scope.scope) this.directory = null;
       else {
-        const current = root.entries.find(
+        const current = scope.entries.find(
           (entry) =>
             entry.uiId === this.directory?.uiId && entry.kind === 'directory',
         );
@@ -101,7 +104,7 @@ export class QuickOpenController {
         };
       }
     }
-    this.root = root;
+    this.scope = scope;
     this.busy = busy;
     if (this.active) this.search();
   }
@@ -121,12 +124,12 @@ export class QuickOpenController {
       selected: 0,
       message: '',
       feedback: '',
-      phase: this.root && !this.busy ? 'filtering' : 'idle',
+      phase: this.scope && !this.busy ? 'filtering' : 'idle',
     });
-    if (!this.active || !this.root || this.busy) return;
+    if (!this.active || !this.scope || this.busy) return;
     const request: QueryRequest = {
-      scope: this.root.scope,
-      revision: this.root.revision,
+      scope: this.scope.scope,
+      revision: this.scope.revision,
       queryId: this.sequence,
       text: this.state.text,
       ...(this.directory ? { directory: this.directory.id } : {}),
@@ -141,8 +144,8 @@ export class QuickOpenController {
       !this.busy &&
       request.queryId === this.sequence &&
       request.text === this.state.text &&
-      request.scope === this.root?.scope &&
-      request.revision === this.root.revision &&
+      request.scope === this.scope?.scope &&
+      request.revision === this.scope.revision &&
       request.directory === this.directory?.id
     );
   }
@@ -157,7 +160,12 @@ export class QuickOpenController {
       const reply = await (traverse
         ? this.bridge.complete(request)
         : this.bridge.query(request));
-      if (!this.current(request) || !this.current(reply)) return;
+      if (!this.current(request)) return;
+      // A traversal may republish the scope under a new revision (the
+      // derived scope is read synchronously, the watched root through its
+      // worker). Recovery refreshes the scope before the stale reply check.
+      if (traverse) this.recover();
+      if (!this.current(reply)) return;
       const remembered = this.remembered;
       const selected =
         remembered &&
@@ -179,7 +187,6 @@ export class QuickOpenController {
         message:
           traverse && reply.status === 'missing' ? 'Reading folder…' : '',
       });
-      if (traverse) this.recover();
     } catch {
       if (!this.current(request)) return;
       this.publish({
@@ -204,8 +211,8 @@ export class QuickOpenController {
     )
       return false;
     this.directory =
-      id !== undefined && uiId !== undefined && this.root
-        ? { scope: this.root.scope, id, uiId, prefix: text }
+      id !== undefined && uiId !== undefined && this.scope
+        ? { scope: this.scope.scope, id, uiId, prefix: text }
         : null;
     this.text(text);
     return true;

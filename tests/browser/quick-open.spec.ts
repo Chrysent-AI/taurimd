@@ -34,6 +34,20 @@ const index = (revision = 1): FileIndex => ({
   ],
   issues: [],
 });
+// The derived Quick Open scope fixture: the displayed file's folder subtree
+// with supported files at every depth through four.
+const subtree = (): FileIndex => ({
+  scope: 20,
+  revision: 3,
+  name: 'fixture/displayed-folder',
+  entries: [
+    entry(11, 'top.md'),
+    entry(12, 'subjects/nested.md'),
+    entry(13, 'subjects/deeper/wide.md'),
+    entry(14, 'subjects/deeper/wider/four-leaf.md'),
+  ],
+  issues: [],
+});
 async function choose(page: Page, root = index()) {
   await page.evaluate((root) => {
     window.readerFixture.enqueue('select_root', {
@@ -388,6 +402,79 @@ test('no-root and outside typing grant nothing; native chooser cancellation reta
       (call) => !call.dialog,
     ),
   ).toBe(true);
+});
+test('with only a file open the overlay derives its scope from the displayed folder subtree and Enter opens a nested match', async ({
+  page,
+}) => {
+  await open(page);
+  await page.evaluate((tree) => {
+    window.readerFixture.quickIndex(tree);
+  }, subtree());
+  const input = await picker(page);
+  await expect(page.getByRole('dialog')).toContainText(
+    'fixture/displayed-folder',
+  );
+  const quick = (
+    await page.evaluate(() => window.readerFixture.navigationCalls())
+  ).filter((call) => call.command === 'get_quick_index');
+  expect(quick).toHaveLength(1);
+  expect(quick[0].payload).toMatchObject({ documentId: 1, revision: 1 });
+  await input.fill('four');
+  await tick(page);
+  const leaf = options(page).filter({ hasText: 'four-leaf.md' });
+  await expect(leaf).toHaveCount(1);
+  await expect(leaf).toContainText('Markdown file');
+  await page.evaluate(() => {
+    window.readerFixture.enqueue('open_index_entry', {
+      value: {
+        status: 'ready',
+        snapshot: {
+          documentId: 2,
+          revision: 1,
+          name: 'four-leaf.md',
+          location:
+            'fixture/displayed-folder/subjects/deeper/wider/four-leaf.md',
+          format: 'markdown',
+          source: '# Four',
+        },
+      },
+    });
+  });
+  await input.press('Enter');
+  await expect(
+    page.getByRole('article', { name: 'four-leaf.md' }),
+  ).toBeFocused();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(
+    (await page.evaluate(() => window.readerFixture.calls())).find(
+      (call) => call.command === 'open_index_entry',
+    )?.payload,
+  ).toMatchObject({ binding: { scope: 20, revision: 3 } });
+});
+test('with a folder root open the overlay covers the root subtree to depth four without deriving a scope', async ({
+  page,
+}) => {
+  await choose(page, {
+    ...index(),
+    entries: [
+      entry(1, 'folder', 'directory'),
+      entry(2, 'alpha.md'),
+      entry(3, 'folder/beta.log', 'text'),
+      entry(9, 'one/two/three/four/deep-leaf.md'),
+    ],
+  });
+  const input = await picker(page);
+  await input.fill('deep-leaf');
+  await tick(page);
+  await expect(
+    options(page).filter({ hasText: 'one/two/three/four/deep-leaf.md' }),
+  ).toHaveCount(1);
+  await expect(page.getByRole('dialog')).toContainText('fixture/authorized');
+  expect(
+    (await page.evaluate(() => window.readerFixture.navigationCalls())).filter(
+      (call) => call.command === 'get_quick_index',
+    ),
+  ).toHaveLength(0);
 });
 test('folder chooser cancellation keeps query; success replaces scope without reading a document', async ({
   page,

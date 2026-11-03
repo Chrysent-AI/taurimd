@@ -78,6 +78,12 @@ export const navigation: NavigationBridge = {
       documentId: document.documentId,
       revision: document.revision,
     }),
+  quickScope: (document, reuse) =>
+    invoke('get_quick_index', {
+      documentId: document.documentId,
+      revision: document.revision,
+      reuse,
+    }),
   preview: (binding, requestId) =>
     invoke('read_preview', { binding, requestId }),
   cancelPreview: (requestId) => invoke('cancel_preview', { requestId }),
