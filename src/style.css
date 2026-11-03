@@ -361,9 +361,14 @@ article :not(pre) > code {
   background: var(--code);
   padding: 0.1em 0.2em;
 }
+/* max-content keeps the table at its natural width when it fits the column
+   (narrow tables are not stretched); max-width caps it at the column so wide
+   content wraps in the cells instead. The display:block shell's overflow-x
+   stays only as a pathological net for content that cannot wrap small
+   enough (e.g. extreme zoom in a tiny column). */
 article table {
-  overflow-wrap: normal;
   display: block;
+  width: max-content;
   max-width: 100%;
   overflow-x: auto;
   border-collapse: collapse;
@@ -373,7 +378,8 @@ article th {
 }
 article th,
 article td {
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   border: 1px solid var(--border);
   padding: 0.4em 0.7em;
 }

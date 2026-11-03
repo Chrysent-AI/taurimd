@@ -845,13 +845,36 @@ test('content-only 50–300 zoom has real reflow/scroll geometry while chrome an
         .last()
         .evaluate((element) => element.scrollWidth > element.clientWidth),
     ).toBe(true);
-    expect(
-      await article
-        .locator('table')
-        .last()
-        .evaluate((element) => element.scrollWidth > element.clientWidth),
-    ).toBe(true);
-    // Prose wraps; wide tabular data stays compact and scrolls locally.
+    if (width === 1280) {
+      // Long cells wrap instead of scrolling the table locally, and the
+      // wrapped table still fills exactly the article content width; the
+      // small tolerance absorbs engine rounding (no exact-pixel pins).
+      expect(
+        await article
+          .locator('table')
+          .last()
+          .evaluate((element) => element.scrollWidth > element.clientWidth),
+      ).toBe(false);
+      const contentWidth = await article.evaluate(
+        (node) => node.getBoundingClientRect().width,
+      );
+      expect(
+        Math.abs(
+          (await article
+            .locator('table')
+            .last()
+            .locator('tr')
+            .last()
+            .evaluate((row) => row.getBoundingClientRect().width)) -
+            contentWidth,
+        ),
+      ).toBeLessThanOrEqual(2);
+    }
+    // At 640 the open navigation and outline panes leave the reader a
+    // ~140px column where, at 300% zoom, the cells' padding floor keeps the
+    // table's min-content above the column width, so the documented
+    // overflow-x shell net engages locally while the page itself stays put.
+    // Either way the long-token row wraps instead of staying compact.
     expect(
       await article
         .locator('table')
@@ -863,7 +886,7 @@ test('content-only 50–300 zoom has real reflow/scroll geometry while chrome an
             row.getBoundingClientRect().height /
             Number.parseFloat(getComputedStyle(row).fontSize),
         ),
-    ).toBeLessThan(4);
+    ).toBeGreaterThan(4);
     await page.getByLabel('Displayed document').scrollIntoViewIfNeeded();
     const placement = await page.evaluate(() => {
       const main = document.querySelector('main')?.getBoundingClientRect();
@@ -917,4 +940,97 @@ test('content-only 50–300 zoom has real reflow/scroll geometry while chrome an
   await expect(article).toHaveCSS('font-size', '16px');
   await saved(page);
   expect(await page.evaluate(() => window.readerFixture.parses())).toBe(1);
+});
+
+test('tables wrap long cells, fill the article width only when content warrants, and keep narrow tables natural', async ({
+  page,
+}) => {
+  const geometry = () =>
+    page.evaluate(() => {
+      const article = document.querySelector('article');
+      if (!(article instanceof HTMLElement)) throw new Error('Reader missing');
+      const tables = article.querySelectorAll('table');
+      const narrow = tables[0];
+      const wide = tables[tables.length - 1];
+      if (
+        !(narrow instanceof HTMLTableElement) ||
+        !(wide instanceof HTMLTableElement)
+      )
+        throw new Error('Fixture tables missing');
+      const contentWidth = article.getBoundingClientRect().width;
+      const row = (table: HTMLTableElement) => {
+        const rows = table.querySelectorAll('tr');
+        const last = rows[rows.length - 1];
+        if (!(last instanceof HTMLElement)) throw new Error('Row missing');
+        return last.getBoundingClientRect();
+      };
+      return {
+        contentWidth,
+        narrowRowWidth: row(narrow).width,
+        wideRowWidth: row(wide).width,
+        wideRowHeightEm:
+          row(wide).height / Number.parseFloat(getComputedStyle(wide).fontSize),
+        wideScrolls: wide.scrollWidth > wide.clientWidth,
+      };
+    });
+  for (const width of [1280, 640]) {
+    await page.setViewportSize({ width, height: 800 });
+    const g = await geometry();
+    // The wide-token table wraps and fills exactly the article content
+    // width; the tolerance absorbs engine rounding (no exact-pixel pins).
+    expect(Math.abs(g.wideRowWidth - g.contentWidth)).toBeLessThanOrEqual(2);
+    // Wrapping removes the local horizontal scroll.
+    expect(g.wideScrolls).toBe(false);
+    // One padded line is ≈2.6em, so >4em proves the long-token row wraps.
+    expect(g.wideRowHeightEm).toBeGreaterThan(4);
+    if (width === 1280) {
+      // At the centered measure the two-column Format/Presentation table
+      // keeps its natural width instead of stretching. At 640 the open
+      // navigation and outline panes leave the reader a ~140px column —
+      // narrower than this table's natural width — so it legitimately
+      // fills the column there and must not be pinned as narrow.
+      expect(g.narrowRowWidth).toBeLessThanOrEqual(g.contentWidth * 0.75);
+    }
+    // Page-level: no horizontal overflow anywhere.
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+  }
+  // The centered 76ch measure only leaves real gutters on a wide window;
+  // below that the side panes squeeze the reader under the cap.
+  await page.setViewportSize({ width: 1680, height: 900 });
+  const measured = await geometry();
+  // The narrow table keeps its natural width in both measures.
+  expect(measured.narrowRowWidth).toBeLessThanOrEqual(
+    measured.contentWidth * 0.75,
+  );
+  expect(
+    Math.abs(measured.wideRowWidth - measured.contentWidth),
+  ).toBeLessThanOrEqual(2);
+  expect(measured.wideScrolls).toBe(false);
+  expect(measured.wideRowHeightEm).toBeGreaterThan(4);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  // Fit to View widens the same column; narrow stays natural, wide fills
+  // exactly the wider content width and still wraps without scrolling.
+  await page.evaluate(() => window.readerFixture.menu('fit-view'));
+  await expect(page.locator('main')).toHaveAttribute('data-fit-view', 'true');
+  const filled = await geometry();
+  expect(filled.contentWidth).toBeGreaterThan(measured.contentWidth + 48);
+  expect(filled.narrowRowWidth).toBeLessThanOrEqual(filled.contentWidth * 0.75);
+  expect(
+    Math.abs(filled.wideRowWidth - filled.contentWidth),
+  ).toBeLessThanOrEqual(2);
+  expect(filled.wideScrolls).toBe(false);
+  expect(filled.wideRowHeightEm).toBeGreaterThan(4);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
 });
