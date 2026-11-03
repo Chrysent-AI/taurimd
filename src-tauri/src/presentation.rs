@@ -26,6 +26,8 @@ pub struct Presentation {
     #[serde(default = "sidebar_default")]
     pub toc_visible: bool,
     #[serde(default)]
+    pub fit_to_view: bool,
+    #[serde(default)]
     pub has_root: bool,
     #[serde(default)]
     pub previous: bool,
@@ -72,6 +74,7 @@ impl Default for Presentation {
             status_visible: true,
             sidebar_visible: true,
             toc_visible: true,
+            fit_to_view: false,
             has_root: false,
             previous: false,
             next: false,
@@ -106,6 +109,7 @@ impl Presentation {
         match id {
             "sidebar" => self.sidebar_visible,
             "toc" => self.toc_visible,
+            "fit-view" => self.fit_to_view,
             "sort-name" => self.file_sort_key == FileSortKey::Name,
             "sort-modified" => self.file_sort_key == FileSortKey::Modified,
             "sort-size" => self.file_sort_key == FileSortKey::Size,
@@ -143,11 +147,10 @@ impl Presentation {
             "reload" | "information" | "reveal" | "export-svg" | "export-png" => {
                 free && self.modal == Modal::None && has_document
             }
-            "open" | "sidebar" | "toc" | "sort-name" | "sort-modified" | "sort-size"
-            | "sort-asc" | "sort-desc" | "settings" | "guide" | "about" | "status-bar"
-            | "appearance-system" | "appearance-light" | "appearance-dark" | "fit-diagrams" => {
-                free && self.modal == Modal::None
-            }
+            "open" | "sidebar" | "toc" | "fit-view" | "sort-name" | "sort-modified"
+            | "sort-size" | "sort-asc" | "sort-desc" | "settings" | "guide" | "about"
+            | "status-bar" | "appearance-system" | "appearance-light" | "appearance-dark"
+            | "fit-diagrams" => free && self.modal == Modal::None,
             _ => false,
         }
     }
@@ -261,16 +264,22 @@ mod tests {
         // remembered visibility and stay available outside modals.
         assert!(applied.checked("sidebar"));
         assert!(applied.checked("toc"));
+        assert!(!applied.checked("fit-view"));
+        applied.fit_to_view = true;
+        assert!(applied.checked("fit-view"));
         applied.toc_visible = false;
         assert!(applied.checked("sidebar"));
         assert!(!applied.checked("toc"));
+        assert!(applied.checked("fit-view"));
         for modal in [Modal::Settings, Modal::QuickOpen, Modal::Other] {
             applied.modal = modal;
             assert!(!applied.enabled("toc", true));
             assert!(!applied.enabled("sidebar", true));
+            assert!(!applied.enabled("fit-view", true));
         }
         applied.modal = Modal::None;
         assert!(applied.enabled("toc", true));
+        assert!(applied.enabled("fit-view", true));
         assert!(!applied.enabled("open-folder", true));
         let wire: Presentation = serde_json::from_value(serde_json::json!({
             "sequence":3,"statusVisible":true,"busy":false,"modal":"none","composing":false,

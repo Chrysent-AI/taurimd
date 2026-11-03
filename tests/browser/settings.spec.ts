@@ -625,6 +625,134 @@ test('stale native revisions and late replies preserve newer local intent and un
   expect(await page.evaluate(() => window.readerFixture.parses())).toBe(1);
 });
 
+test('Fit to View fills the reader width, persists across reload, and syncs the menu check and dialog mirror', async ({
+  page,
+}) => {
+  // A wide window is where the centered measure leaves real gutters; the
+  // narrow default viewport would hide the difference between the states.
+  await page.setViewportSize({ width: 1680, height: 900 });
+  const measure = () =>
+    page.evaluate(() => {
+      const main = document.querySelector('main');
+      const article = document.querySelector('article');
+      const feedback = document.querySelector('.link-feedback');
+      if (!(main instanceof HTMLElement) || !(article instanceof HTMLElement))
+        throw new Error('Reader shell missing');
+      const mainStyle = getComputedStyle(main);
+      const padding =
+        Number.parseFloat(mainStyle.paddingLeft) +
+        Number.parseFloat(mainStyle.paddingRight);
+      const box = article.getBoundingClientRect();
+      return {
+        attribute: main.hasAttribute('data-fit-view'),
+        maxWidth: getComputedStyle(article).maxWidth,
+        feedbackMaxWidth:
+          feedback instanceof HTMLElement
+            ? getComputedStyle(feedback).maxWidth
+            : null,
+        width: Math.round(box.width),
+        available: Math.round(main.clientWidth - padding),
+        rightGutter: Math.round(main.getBoundingClientRect().right - box.right),
+        // Horizontal space the vertical scrollbar consumes (zero on overlay
+        // scrollbar platforms, ~15px on classic ones); the reader hands this
+        // space back to the viewport without changing the fill.
+        scrollbar: main.offsetWidth - main.clientWidth,
+        codeScroll: getComputedStyle(article.querySelector('pre') ?? article)
+          .overflowX,
+      };
+    });
+  // The default reading measure is centered and capped below the width the
+  // reader column offers, so real gutters sit on both sides.
+  const measured = await measure();
+  expect(measured.attribute).toBe(false);
+  expect(measured.maxWidth).not.toBe('none');
+  expect(measured.feedbackMaxWidth).not.toBe('none');
+  expect(measured.width).toBeLessThan(measured.available);
+  expect(measured.rightGutter).toBeGreaterThan(48);
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.readerFixture.presentation()?.fitToView),
+    )
+    .toBe(false);
+  // View → Fit to View fills the reader column with normal padding only and
+  // persists the same field the check item and the dialog mirror write.
+  await page.evaluate(() => window.readerFixture.menu('fit-view'));
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.readerFixture.settings().settings.fitToView),
+    )
+    .toBe(true);
+  expect(
+    (await page.evaluate(() => window.readerFixture.settingsCalls())).at(-1),
+  ).toEqual({
+    command: 'update_settings',
+    payload: { expectedRevision: 0, patch: { fitToView: true } },
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.readerFixture.presentation()?.fitToView),
+    )
+    .toBe(true);
+  const filled = await measure();
+  expect(filled.attribute).toBe(true);
+  expect(filled.maxWidth).toBe('none');
+  expect(filled.feedbackMaxWidth).toBe('none');
+  // Relative geometry, not exact pixels: the filled column is meaningfully
+  // wider than the centered measure at the same viewport, and its right edge
+  // reaches the reader's content edge within normal padding. The tolerance
+  // absorbs classic (non-overlay) scrollbars, whose width the reader gives
+  // back to the viewport without changing the fill.
+  expect(filled.width).toBeGreaterThan(measured.width + 48);
+  expect(filled.rightGutter).toBeLessThanOrEqual(filled.scrollbar + 25);
+  // Code blocks keep their overflow behavior inside the wider column.
+  expect(measured.codeScroll).toBe('auto');
+  expect(filled.codeScroll).toBe('auto');
+  // The Settings dialog mirrors the same remembered choice.
+  const dialog = await settings(page);
+  await expect(dialog.getByLabel('Fit reader to window width')).toBeChecked();
+  await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+  // A reload restores the filled column from the retained record.
+  await page.reload();
+  await saved(page);
+  await page.evaluate((source) => {
+    window.readerFixture.enqueue('select_document', {
+      value: {
+        status: 'ready',
+        snapshot: {
+          documentId: 1,
+          revision: 1,
+          name: 'reading.md',
+          location: 'fixture/reading.md',
+          format: 'markdown',
+          source,
+        },
+      },
+    });
+    return window.readerFixture.menu('open');
+  }, rich);
+  await expect(
+    page.getByRole('article').getByRole('heading', { name: 'End of document' }),
+  ).toBeAttached();
+  expect(await measure()).toEqual(filled);
+  // Disabling restores the centered measured layout exactly.
+  await page.evaluate(() => window.readerFixture.menu('fit-view'));
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.readerFixture.settings().settings.fitToView),
+    )
+    .toBe(false);
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.readerFixture.presentation()?.fitToView),
+    )
+    .toBe(false);
+  expect(await measure()).toEqual(measured);
+  const again = await settings(page);
+  await expect(
+    again.getByLabel('Fit reader to window width'),
+  ).not.toBeChecked();
+});
+
 test('real modal keyboard containment/restoration, IME guards and feature menu event routing', async ({
   page,
 }) => {

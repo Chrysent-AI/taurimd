@@ -62,6 +62,9 @@ pub struct SettingsV1 {
     pub navigation_depth: u8,
     /// Whether the right-hand "On this page" pane starts visible.
     pub toc_visible: bool,
+    /// Whether the reading column fills the available reader width instead
+    /// of staying on the centered measure.
+    pub fit_to_view: bool,
 }
 /// The explorer indexing depth is a whole number of directory levels between
 /// 1 and `NAVIGATION_DEPTH_MAX`, defaulting to `NAVIGATION_DEPTH_DEFAULT`.
@@ -85,6 +88,7 @@ impl Default for SettingsV1 {
             remote_image_hosts: remote_images::starter_host_list(),
             navigation_depth: NAVIGATION_DEPTH_DEFAULT,
             toc_visible: true,
+            fit_to_view: false,
         }
     }
 }
@@ -111,6 +115,7 @@ pub struct Patch {
     pub remote_image_hosts: Option<Vec<String>>,
     pub navigation_depth: Option<u8>,
     pub toc_visible: Option<bool>,
+    pub fit_to_view: Option<bool>,
 }
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
@@ -173,6 +178,7 @@ impl SettingsStore {
                                     | "fileSortDirection"
                                     | "navigationDepth"
                                     | "tocVisible"
+                                    | "fitToView"
                             ) && value["settings"].get(key).is_none()
                             {
                                 continue;
@@ -326,6 +332,9 @@ impl SettingsStore {
         }
         if let Some(value) = patch.toc_visible {
             next.settings.toc_visible = value;
+        }
+        if let Some(value) = patch.fit_to_view {
+            next.settings.fit_to_view = value;
         }
         next.revision = next.revision.checked_add(1).ok_or_else(unavailable)?;
         next.notice = None;

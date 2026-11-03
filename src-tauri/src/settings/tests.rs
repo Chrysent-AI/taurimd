@@ -459,6 +459,7 @@ fn native_validation_and_dtos_match_frontend_wire_without_path_parameters() {
         json!({"statusVisible":"yes"}),
         json!({"fileSortKey":"mtime"}),
         json!({"fileSortDirection":"sideways"}),
+        json!({"fitToView":"yes"}),
     ] {
         assert!(serde_json::from_value::<Patch>(invalid).is_err());
     }
@@ -466,7 +467,7 @@ fn native_validation_and_dtos_match_frontend_wire_without_path_parameters() {
         serde_json::to_value(store.get().unwrap()).unwrap(),
         json!({
             "version":1,"revision":0,"settings":{"mode":"system","lightPalette":"githubLight","darkPalette":"githubDark","pageZoom":100,"fitDiagrams":true,"sidebarDefault":true,"statusVisible":true,"fileSortKey":"name","fileSortDirection":"asc",
-            "remoteImageHosts":["camo.githubusercontent.com","github.com","raw.githubusercontent.com","user-images.githubusercontent.com"],"navigationDepth":4,"tocVisible":true},"notice":null
+            "remoteImageHosts":["camo.githubusercontent.com","github.com","raw.githubusercontent.com","user-images.githubusercontent.com"],"navigationDepth":4,"tocVisible":true,"fitToView":false},"notice":null
         })
     );
     let result = store
@@ -536,6 +537,53 @@ fn explorer_depth_and_toc_visibility_migrate_per_field_and_reject_out_of_range_d
     assert_eq!(saved.revision, 4);
     assert_eq!(saved.settings.navigation_depth, NAVIGATION_DEPTH_MAX);
     assert!(!saved.settings.toc_visible);
+    assert_eq!(
+        SettingsStore::load(Some(fixture.path().into()))
+            .get()
+            .unwrap(),
+        saved
+    );
+}
+#[test]
+fn fit_to_view_migrates_per_field_and_persists() {
+    let fixture = root();
+    let file = fixture.path().join("settings-v1.json");
+    // A valid older record without the field is not corruption.
+    let mut legacy = serde_json::to_value(Record {
+        version: 1,
+        revision: 5,
+        settings: SettingsV1::default(),
+        notice: None,
+    })
+    .unwrap();
+    legacy["settings"]
+        .as_object_mut()
+        .unwrap()
+        .remove("fitToView");
+    fs::write(&file, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let old = SettingsStore::load(Some(fixture.path().into()))
+        .get()
+        .unwrap();
+    assert_eq!(old.revision, 5);
+    assert!(!old.settings.fit_to_view);
+    assert!(old.notice.is_none());
+    // An invalid present value falls back for that field only.
+    legacy["settings"]["fitToView"] = json!("wide");
+    fs::write(&file, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let invalid = SettingsStore::load(Some(fixture.path().into()))
+        .get()
+        .unwrap();
+    assert!(!invalid.settings.fit_to_view);
+    assert!(invalid.notice.is_some());
+    // A valid patch commits and survives a restart.
+    let store = SettingsStore::load(Some(fixture.path().into()));
+    let saved = committed(
+        store
+            .update(5, patch(json!({"fitToView": true})), |_| {})
+            .unwrap(),
+    );
+    assert_eq!(saved.revision, 6);
+    assert!(saved.settings.fit_to_view);
     assert_eq!(
         SettingsStore::load(Some(fixture.path().into()))
             .get()

@@ -677,6 +677,10 @@ export function App({ controller }: { controller: ReaderController }) {
         settingsController.change({
           fitDiagrams: !settingsController.getState().settings.fitDiagrams,
         });
+      } else if (payload === 'fit-view') {
+        settingsController.change({
+          fitToView: !settingsController.getState().settings.fitToView,
+        });
       } else if (
         payload === 'appearance-system' ||
         payload === 'appearance-light' ||
@@ -778,6 +782,7 @@ export function App({ controller }: { controller: ReaderController }) {
       statusVisible: settings.statusVisible,
       sidebarVisible: settings.sidebarDefault,
       tocVisible: settings.tocVisible,
+      fitToView: settings.fitToView,
       hasRoot: !!navigationState.root && !navigationState.rootBusy,
       previous: !!targets.previous,
       next: !!targets.next,
@@ -819,6 +824,7 @@ export function App({ controller }: { controller: ReaderController }) {
     settings.statusVisible,
     settings.sidebarDefault,
     settings.tocVisible,
+    settings.fitToView,
     settings.fileSortKey,
     settings.fileSortDirection,
     navigationState,
@@ -1619,7 +1625,17 @@ export function App({ controller }: { controller: ReaderController }) {
               }}
             />
           )}
-          <main ref={main} tabIndex={-1} aria-busy={busy}>
+          <main
+            ref={main}
+            tabIndex={-1}
+            aria-busy={busy}
+            // Fit to View (View menu): the attribute lands on the reader
+            // container so the article, the empty-state hint and the link
+            // feedback share one width seam. It is present only while the
+            // persisted choice is on, so the disabled state keeps the
+            // centered measure.
+            data-fit-view={settings.fitToView || undefined}
+          >
             {!document ? (
               <p className="empty hint">
                 Open a document with File → Open File… (

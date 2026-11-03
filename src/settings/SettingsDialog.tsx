@@ -273,10 +273,21 @@ export function SettingsDialog({
         />
         Show Table of Contents by default
       </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={settings.fitToView}
+          onChange={(event) => {
+            controller.change({ fitToView: event.target.checked });
+          }}
+        />
+        Fit reader to window width
+      </label>
       <p className="hint">
         Fit updates current diagrams without rerendering them. Pane visibility
-        applies immediately and is remembered; View → Show File Explorer and
-        View → Show Table of Contents use the same remembered choices.
+        and reader width apply immediately and are remembered; View → Show File
+        Explorer, View → Show Table of Contents and View → Fit to View use the
+        same remembered choices.
       </p>
       <fieldset>
         <legend>File Explorer</legend>

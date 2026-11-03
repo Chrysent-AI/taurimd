@@ -782,6 +782,8 @@ pub fn run() {
                 true,
                 None::<&str>,
             )?;
+            let fit_view =
+                CheckMenuItem::with_id(app, "fit-view", "Fit to View", true, false, None::<&str>)?;
             let appearance_system = CheckMenuItem::with_id(
                 app,
                 "appearance-system",
@@ -919,6 +921,7 @@ pub fn run() {
                     &status,
                     &sidebar,
                     &toc,
+                    &fit_view,
                     &Submenu::with_items(
                         app,
                         "Appearance",
@@ -1032,6 +1035,7 @@ pub fn run() {
                 navigation_checks: vec![
                     ("sidebar", sidebar),
                     ("toc", toc),
+                    ("fit-view", fit_view),
                     ("sort-name", sort_name),
                     ("sort-modified", sort_modified),
                     ("sort-size", sort_size),

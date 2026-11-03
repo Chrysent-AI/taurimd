@@ -25,6 +25,8 @@ export interface SettingsV1 {
   navigationDepth: number;
   /** Whether the right-hand "On this page" pane starts visible. */
   tocVisible: boolean;
+  /** Whether the reading column fills the available reader width. */
+  fitToView: boolean;
 }
 // Mirrors the native owner's accepted range; one documented home per side.
 export const navigationDepthMin = 1;
@@ -88,6 +90,7 @@ export const defaults: SettingsV1 = {
   remoteImageHosts: [...remoteImageHosts],
   navigationDepth: 4,
   tocVisible: true,
+  fitToView: false,
 };
 export interface SettingsRecord {
   version: 1;

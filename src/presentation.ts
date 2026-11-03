@@ -7,6 +7,7 @@ export interface MenuPresentation {
   statusVisible: boolean;
   sidebarVisible: boolean;
   tocVisible: boolean;
+  fitToView: boolean;
   hasRoot: boolean;
   previous: boolean;
   next: boolean;

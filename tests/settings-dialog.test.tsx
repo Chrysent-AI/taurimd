@@ -378,6 +378,7 @@ it('restores appearance defaults in one revisioned change and leaves unrelated p
     remoteImageHosts: ['github.com'],
     navigationDepth: 4,
     tocVisible: true,
+    fitToView: false,
   });
   expect(screen.getByLabelText<HTMLSelectElement>('Appearance').value).toBe(
     'system',
@@ -432,6 +433,7 @@ it('keeps a failed appearance reset truthful and retries only the appearance fie
     remoteImageHosts: ['github.com'],
     navigationDepth: 4,
     tocVisible: true,
+    fitToView: false,
   });
 });
 
@@ -516,4 +518,39 @@ it('changes the remembered file order from the dialog without touching unrelated
   });
   expect(model.getState().settings.fileSortKey).toBe('modified');
   expect(model.getState().settings.fileSortDirection).toBe('desc');
+});
+it('mirrors the remembered Fit to View choice and syncs with the View menu toggle', async () => {
+  const { model, bridge, event } = await setup({
+    ...defaults,
+    fitToView: true,
+  });
+  bridge.update.mockImplementation((revision, patch) => {
+    const next = { ...model.getState().settings, ...patch };
+    return Promise.resolve({
+      status: 'committed',
+      record: record(revision + 1, next),
+    });
+  });
+  render(<SettingsHarness model={model} />);
+  // A remembered enabled choice arrives checked from the store.
+  const mirror = screen.getByLabelText<HTMLInputElement>(
+    'Fit reader to window width',
+  );
+  expect(mirror.checked).toBe(true);
+  // Unchecking saves the same field the View menu check item writes.
+  fireEvent.click(mirror);
+  await waitFor(() => {
+    expect(model.getState().status).toBe('saved');
+  });
+  expect(bridge.update).toHaveBeenLastCalledWith(0, { fitToView: false });
+  expect(mirror.checked).toBe(false);
+  // An event from another surface (the menu payload) re-syncs the mirror.
+  event(record(2, { ...defaults, fitToView: true }));
+  await waitFor(() => {
+    expect(model.getState().settings.fitToView).toBe(true);
+  });
+  expect(
+    screen.getByLabelText<HTMLInputElement>('Fit reader to window width')
+      .checked,
+  ).toBe(true);
 });

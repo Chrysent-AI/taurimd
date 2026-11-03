@@ -698,6 +698,7 @@ const fixture = {
       | 'appearance-light'
       | 'appearance-dark'
       | 'fit-diagrams'
+      | 'fit-view'
       | 'find'
       | 'find-next'
       | 'find-previous'

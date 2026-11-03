@@ -297,6 +297,16 @@ article {
   max-width: 76ch;
   margin: 1.2em auto;
 }
+/* Fit to View (View → Fit to View): the reader column fills the available
+   width with normal padding only. Scoping to main lets the article, the
+   empty-state hint and the link feedback drop the same measure through one
+   attribute; the attribute is absent when disabled, so the centered
+   measured layout is untouched. */
+main[data-fit-view] .empty,
+main[data-fit-view] article,
+main[data-fit-view] .link-feedback {
+  max-width: none;
+}
 article img,
 article video {
   max-inline-size: 100%;
