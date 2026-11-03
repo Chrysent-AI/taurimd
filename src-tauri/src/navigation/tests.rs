@@ -720,13 +720,22 @@ fn capped_scan_degrades_unreadable_subdirectories_to_partial_results() {
 #[test]
 fn traversal_adoption_preserves_read_directories_and_the_cap_probe_engages_missing() {
     let dir = root();
-    let four = dir.path().join("one/two/three/four");
+    // Address every path the way production does: component-wise joins. A
+    // forward-slash string pushed onto the canonicalized (verbatim on
+    // Windows) scope root embeds separators the OS never normalizes there,
+    // which is a shape no traversal receives.
+    let join_parts = |base: &Path, parts: &[&str]| {
+        parts
+            .iter()
+            .fold(base.to_path_buf(), |path, part| path.join(part))
+    };
+    let four = join_parts(dir.path(), &["one", "two", "three", "four"]);
     fs::create_dir_all(&four).unwrap();
-    fs::create_dir_all(dir.path().join("one/two/three/empty")).unwrap();
-    fs::create_dir_all(dir.path().join("one/two/three/blocked")).unwrap();
+    fs::create_dir_all(join_parts(dir.path(), &["one", "two", "three", "empty"])).unwrap();
+    fs::create_dir_all(join_parts(dir.path(), &["one", "two", "three", "blocked"])).unwrap();
     fs::write(four.join("child.md"), "# Child").unwrap();
     fs::write(
-        dir.path().join("one/two/three/blocked/unsupported.mdx"),
+        join_parts(dir.path(), &["one", "two", "three", "blocked"]).join("unsupported.mdx"),
         "bad",
     )
     .unwrap();
@@ -736,10 +745,13 @@ fn traversal_adoption_preserves_read_directories_and_the_cap_probe_engages_missi
         .unwrap();
     let scope_path = scope.path.clone();
     let quick = nav.publish(scan_subtree(scope).unwrap()).unwrap();
-    let four_relative = Path::new("one/two/three/four")
-        .to_string_lossy()
-        .into_owned();
-    let child_relative = Path::new("one/two/three/four")
+    let four_dir = join_parts(&scope_path, &["one", "two", "three", "four"]);
+    // Derive the expected relative from the scan-addressed directory via
+    // strip_prefix so string comparisons inherit exactly the separator style
+    // the scan records on every platform.
+    let child_relative = four_dir
+        .strip_prefix(&scope_path)
+        .unwrap()
         .join("child.md")
         .to_string_lossy()
         .into_owned();
@@ -763,10 +775,7 @@ fn traversal_adoption_preserves_read_directories_and_the_cap_probe_engages_missi
     // unsupported-only boundaries stay ready with zero results.
     let hollow = answer("one/two/three/four/");
     assert_eq!(hollow.reply.status, "missing");
-    assert_eq!(
-        hollow.missing.as_deref(),
-        Some(scope_path.join(&four_relative).as_path())
-    );
+    assert_eq!(hollow.missing.as_deref(), Some(four_dir.as_path()));
     let vacant = answer("one/two/three/empty/");
     assert_eq!(vacant.reply.status, "ready");
     assert_eq!(vacant.reply.total, 0);
@@ -779,7 +788,7 @@ fn traversal_adoption_preserves_read_directories_and_the_cap_probe_engages_missi
     assert_eq!(draft.id, quick.scope);
     assert_ne!(draft.revision, quick.revision);
     let republished = nav
-        .publish(scan_directory(draft, scope_path.join(&four_relative)).unwrap())
+        .publish(scan_directory(draft, four_dir.clone()).unwrap())
         .unwrap();
     assert!(
         republished
