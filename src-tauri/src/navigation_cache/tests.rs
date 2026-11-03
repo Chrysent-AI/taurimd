@@ -317,6 +317,9 @@ fn a_depth_change_takes_effect_on_the_next_worker_scan_without_restarting() {
         .unwrap()
         .lifetime
         .clone();
+    // The lifetime handle outlives the worker's ownership so the test can
+    // prove the worker was never retired across the depth change.
+    let lifetime_handle = lifetime.clone();
     // The host closure reads the depth at scan time exactly like production:
     // a settings change writes the new value and the next scan honors it.
     let depth = Arc::new(std::sync::atomic::AtomicUsize::new(1));
@@ -350,6 +353,7 @@ fn a_depth_change_takes_effect_on_the_next_worker_scan_without_restarting() {
                 .iter()
                 .any(|entry| entry.name == "top.md")
     });
+    let revision_before = state.lock().unwrap().navigation.status.revision;
     // The settings commit writes the new depth and refreshes the worker.
     depth.store(4, Ordering::SeqCst);
     worker.refresh();
@@ -364,8 +368,19 @@ fn a_depth_change_takes_effect_on_the_next_worker_scan_without_restarting() {
                 .iter()
                 .any(|entry| entry.relative == deep.to_string_lossy())
     });
-    // One initial scan and one manual rescan, on the same owner.
-    assert_eq!(state.lock().unwrap().navigation.status.scans, 2);
+    // The depth change took effect on the same worker owner — no restart:
+    // the root scope identity is unchanged, its lifetime was never set (a
+    // restart would have retired the old scope), and the status still tracks
+    // that identity under a newer revision from the rescan. Platform watcher
+    // events legitimately coalesce extra rescans, so the scan count pins a
+    // floor (the initial scan plus the refresh rescan), never an exact value.
+    let session = state.lock().unwrap();
+    assert_eq!(session.navigation.root.as_ref().unwrap().id, id);
+    assert!(!lifetime_handle.load(Ordering::Acquire));
+    assert_eq!(session.navigation.status.scope, id);
+    assert!(session.navigation.status.revision > revision_before);
+    assert!(session.navigation.status.scans >= 2);
+    drop(session);
     worker.retire();
     drop(state);
     reap(dir);
