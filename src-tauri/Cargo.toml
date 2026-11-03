@@ -1,6 +1,6 @@
 [package]
 name = "taurimd"
-version = "0.1.7"
+version = "0.1.8"
 description = "A read-only, cross-platform Markdown viewer GUI built with Tauri for Windows, macOS, and Linux."
 authors = ["Chrysent"]
 license = "MIT"
