@@ -1036,20 +1036,45 @@ pub fn run() {
                 .webview_windows()
                 .into_values()
                 .find(|window| window.is_focused().unwrap_or(false));
-            if let Some(window) = focused {
-                let delivery = app.state::<Windows>().lock().ok().and_then(|mut windows| {
-                    let reader = windows.readers.get_mut(window.label())?;
-                    reader.menu_sequence = reader.menu_sequence.checked_add(1)?;
-                    Some((reader.presentation, reader.menu_sequence))
-                });
-                if let Some((presentation, sequence)) = delivery {
-                    let _ = app.state::<ReaderMenu>().restore_checks(&presentation);
-                    let _ = window.emit_to(
-                        EventTarget::webview_window(window.label()),
-                        "menu_action",
-                        serde_json::json!({"actionId": event.id().as_ref(), "sequence": sequence}),
-                    );
+            // GNOME/Wayland: the window reports itself unfocused while its
+            // own menubar holds the GTK grab, so requiring focus drops every
+            // clicked menu while accelerators (pressed with the window
+            // focused) keep working. Fall back deterministically: the single
+            // reader window, else the lowest-labeled reader window. muda's
+            // MenuEvent carries only the item id, so a no-focus delivery in
+            // a multi-window session cannot be attributed to one window;
+            // lowest label keeps the outcome deterministic.
+            let window = match focused {
+                Some(window) => window,
+                None => {
+                    let mut labels: Vec<String> = app
+                        .state::<Windows>()
+                        .lock()
+                        .ok()
+                        .map(|windows| windows.readers.keys().cloned().collect())
+                        .unwrap_or_default();
+                    labels.sort();
+                    let Some(label) = labels.first().cloned() else {
+                        return;
+                    };
+                    match app.get_webview_window(&label) {
+                        Some(window) => window,
+                        None => return,
+                    }
                 }
+            };
+            let delivery = app.state::<Windows>().lock().ok().and_then(|mut windows| {
+                let reader = windows.readers.get_mut(window.label())?;
+                reader.menu_sequence = reader.menu_sequence.checked_add(1)?;
+                Some((reader.presentation, reader.menu_sequence))
+            });
+            if let Some((presentation, sequence)) = delivery {
+                let _ = app.state::<ReaderMenu>().restore_checks(&presentation);
+                let _ = window.emit_to(
+                    EventTarget::webview_window(window.label()),
+                    "menu_action",
+                    serde_json::json!({"actionId": event.id().as_ref(), "sequence": sequence}),
+                );
             }
         })
         .on_window_event(|window, event| {
