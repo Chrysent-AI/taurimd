@@ -468,3 +468,47 @@ it('adds, refuses and removes permitted remote image hosts', async () => {
   expect(bridge.update).toHaveBeenLastCalledWith(1, { remoteImageHosts: [] });
   expect(screen.getByText(/No host is permitted/)).toBeTruthy();
 });
+it('changes the remembered file order from the dialog without touching unrelated preferences', async () => {
+  const { model, bridge } = await setup();
+  bridge.update.mockImplementation((revision, patch) => {
+    const next = { ...model.getState().settings, ...patch };
+    return Promise.resolve({
+      status: 'committed',
+      record: record(revision + 1, next),
+    });
+  });
+  render(<SettingsHarness model={model} />);
+  expect(screen.getByLabelText<HTMLSelectElement>('Sort files by').value).toBe(
+    'name',
+  );
+  expect(screen.getByLabelText<HTMLSelectElement>('Direction').value).toBe(
+    'asc',
+  );
+  fireEvent.change(screen.getByLabelText('Sort files by'), {
+    target: { value: 'modified' },
+  });
+  await waitFor(() => {
+    expect(model.getState().status).toBe('saved');
+  });
+  expect(bridge.update).toHaveBeenLastCalledWith(0, {
+    fileSortKey: 'modified',
+  });
+  expect(screen.getByLabelText<HTMLSelectElement>('Sort files by').value).toBe(
+    'modified',
+  );
+  expect(model.getState().settings.mode).toBe('system');
+  expect(model.getState().settings.remoteImageHosts).toEqual(
+    defaults.remoteImageHosts,
+  );
+  fireEvent.change(screen.getByLabelText('Direction'), {
+    target: { value: 'desc' },
+  });
+  await waitFor(() => {
+    expect(model.getState().status).toBe('saved');
+  });
+  expect(bridge.update).toHaveBeenLastCalledWith(1, {
+    fileSortDirection: 'desc',
+  });
+  expect(model.getState().settings.fileSortKey).toBe('modified');
+  expect(model.getState().settings.fileSortDirection).toBe('desc');
+});

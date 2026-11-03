@@ -264,6 +264,43 @@ export function SettingsDialog({
         Fit updates current diagrams without rerendering them. Sidebar
         visibility applies immediately and is remembered.
       </p>
+      <fieldset>
+        <legend>File order</legend>
+        <div className="setting-field">
+          <label htmlFor="file-sort-key">Sort files by</label>
+          <select
+            id="file-sort-key"
+            value={settings.fileSortKey}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (value === 'name' || value === 'modified' || value === 'size')
+                controller.change({ fileSortKey: value });
+            }}
+          >
+            <option value="name">Name</option>
+            <option value="modified">Date modified</option>
+            <option value="size">Size (bytes)</option>
+          </select>
+        </div>
+        <div className="setting-field">
+          <label htmlFor="file-sort-direction">Direction</label>
+          <select
+            id="file-sort-direction"
+            value={settings.fileSortDirection}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (value === 'asc' || value === 'desc')
+                controller.change({ fileSortDirection: value });
+            }}
+          >
+            <option value="asc">Ascending</option>
+            <option value="desc">Descending</option>
+          </select>
+        </div>
+        <p className="hint">
+          Remembered for file lists and sibling navigation.
+        </p>
+      </fieldset>
       <RemoteImageHosts controller={controller} settings={settings} />
       {children}
     </>

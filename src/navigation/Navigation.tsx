@@ -61,11 +61,6 @@ interface Props {
   section: number | null;
   sortKey: FileSortKey;
   sortDirection: FileSortDirection;
-  changeSort: (
-    change:
-      | { fileSortKey: FileSortKey }
-      | { fileSortDirection: FileSortDirection },
-  ) => void;
 }
 export function Navigation(props: Props) {
   const { controller, document, disabled, allow, open, siblingGroupRef } =
@@ -87,41 +82,6 @@ export function Navigation(props: Props) {
         <h2 ref={rootHeading} tabIndex={-1}>
           Files
         </h2>
-        <div className="file-order" role="group" aria-label="File order">
-          <label htmlFor="file-sort-key">Sort files by</label>
-          <select
-            id="file-sort-key"
-            disabled={disabled}
-            value={props.sortKey}
-            onChange={(event) => {
-              const value = event.target.value;
-              if (value !== 'name' && value !== 'modified' && value !== 'size')
-                return;
-              if (allow()) props.changeSort({ fileSortKey: value });
-            }}
-          >
-            <option value="name">Name</option>
-            <option value="modified">Date modified</option>
-            <option value="size">Size (bytes)</option>
-          </select>
-          <label htmlFor="file-sort-direction">Direction</label>
-          <select
-            id="file-sort-direction"
-            disabled={disabled}
-            value={props.sortDirection}
-            onChange={(event) => {
-              const value = event.target.value;
-              if (value !== 'asc' && value !== 'desc') return;
-              if (allow()) props.changeSort({ fileSortDirection: value });
-            }}
-          >
-            <option value="asc">Ascending</option>
-            <option value="desc">Descending</option>
-          </select>
-          <p className="hint">
-            Remembered for file lists and sibling navigation.
-          </p>
-        </div>
         <p>{state.message}</p>
         {!state.root ? (
           <p className="hint">Choose a folder with File → Open Folder…</p>

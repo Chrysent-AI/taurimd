@@ -1639,9 +1639,6 @@ export function App({ controller }: { controller: ReaderController }) {
             siblingGroupRef={siblingGroupRef}
             sortKey={settings.fileSortKey}
             sortDirection={settings.fileSortDirection}
-            changeSort={(change) => {
-              settingsController.change(change);
-            }}
             section={section}
           />
         </aside>

@@ -166,19 +166,6 @@ body {
   flex-direction: column;
   gap: 0.35rem;
 }
-.file-order {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  margin-block-end: 0.6rem;
-}
-.file-order select {
-  max-inline-size: 100%;
-  min-inline-size: 0;
-}
-.file-order .hint {
-  margin: 0;
-}
 .sibling-controls {
   border-top: 1px solid var(--border);
   padding-block: 0.7rem;

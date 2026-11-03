@@ -869,13 +869,17 @@ test('diagram recoloring and temporary dialogs preserve scrolled playing media s
     ).toBeVisible({ visible });
   }
   await page.evaluate(() => window.readerFixture.menu('sort-modified'));
-  await expect(page.getByLabel('Sort files by', { exact: true })).toHaveValue(
-    'modified',
-  );
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.readerFixture.settings().settings.fileSortKey),
+    )
+    .toBe('modified');
   await page.evaluate(() => window.readerFixture.menu('sort-name'));
-  await expect(page.getByLabel('Sort files by', { exact: true })).toHaveValue(
-    'name',
-  );
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.readerFixture.settings().settings.fileSortKey),
+    )
+    .toBe('name');
   for (const surface of [
     'settings',
     'guide',

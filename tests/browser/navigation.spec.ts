@@ -506,9 +506,7 @@ test('native-ranked immediate siblings stop at endpoints and retain persistent c
   await expect(
     page.getByRole('navigation', { name: 'On this page' }),
   ).toContainText('Outline unavailable for plain text');
-  await page
-    .getByLabel('Sort files by', { exact: true })
-    .selectOption('modified');
+  await page.evaluate(() => window.readerFixture.menu('sort-modified'));
   await expect(next).toBeEnabled();
   await siblings(page, 10);
   await page.evaluate(
@@ -1362,9 +1360,9 @@ test('opening a Markdown file expands its own heading group once and a deliberat
       exact: true,
     }),
   ).toHaveAttribute('aria-expanded', 'false');
-  await page
-    .getByLabel('Sort files by', { exact: true })
-    .selectOption('modified');
+  // The reorder arrives through the Navigate menu path now that the sidebar
+  // carries no sort controls of its own.
+  await page.evaluate(() => window.readerFixture.menu('sort-modified'));
   await expect(
     page.getByRole('button', {
       name: 'Show headings for alpha.md',
@@ -1520,16 +1518,62 @@ test('a sort-only interaction replaces no reading session', async ({
         : null;
     })(),
   }));
-  await page
+  // The Files pane renders no sort controls; they live in the Settings
+  // dialog and the Navigate menu only.
+  await expect(page.locator('nav[aria-label="Files"] select')).toHaveCount(0);
+  await expect(page.locator('#file-sort-key')).toHaveCount(0);
+  await expect(page.locator('#file-sort-direction')).toHaveCount(0);
+  await page.evaluate(() => window.readerFixture.menu('settings'));
+  const dialog = page.getByRole('dialog', { name: 'Settings', exact: true });
+  await expect(dialog).toBeVisible();
+  const fileOrder = () =>
+    page.evaluate(() =>
+      [
+        ...document.querySelectorAll(
+          'nav[aria-label="Files"] .file-row button',
+        ),
+      ].flatMap((button) => {
+        const label = button.getAttribute('aria-label');
+        return label && label.startsWith('Open ') ? [label] : [];
+      }),
+    );
+  // Folder rows sort before files, so the nested child's row precedes the
+  // root files in tree order.
+  await expect
+    .poll(fileOrder)
+    .toEqual([
+      'Open nested/deep.md',
+      'Open alpha.md',
+      'Open beta.MKDOWN',
+      'Open literal.log',
+    ]);
+  await dialog
     .getByLabel('Sort files by', { exact: true })
     .selectOption('modified');
-  await expect(page.getByLabel('Sort files by', { exact: true })).toHaveValue(
+  await expect(dialog.getByLabel('Sort files by', { exact: true })).toHaveValue(
     'modified',
   );
+  // The dialog change reorders the file tree in place.
+  await expect
+    .poll(fileOrder)
+    .toEqual([
+      'Open nested/deep.md',
+      'Open beta.MKDOWN',
+      'Open literal.log',
+      'Open alpha.md',
+    ]);
+  await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  // With the dialog closed, the Navigate menu writes the same preference,
+  // and a reopened dialog renders it.
   await page.evaluate(() => window.readerFixture.menu('sort-size'));
-  await expect(page.getByLabel('Sort files by', { exact: true })).toHaveValue(
+  await page.evaluate(() => window.readerFixture.menu('settings'));
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel('Sort files by', { exact: true })).toHaveValue(
     'size',
   );
+  await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(dialog).toBeHidden();
   const after = await page.evaluate(() => ({
     scroll: document.querySelector('main')?.scrollTop ?? 0,
     selection: window.getSelection()?.toString() ?? '',
