@@ -1582,3 +1582,79 @@ test('a sort-only interaction replaces no reading session', async ({
   await media.dispose();
   await figure.dispose();
 });
+
+test('Cmd/Ctrl+Arrow keys open the first and last sibling on overfilled documents without scrolling', async ({
+  page,
+}) => {
+  const overflow = Array.from(
+    { length: 40 },
+    (_, section) =>
+      `## Overflow section ${String(section)}\n\n${'Filler paragraph for document overflow. '.repeat(24)}\n`,
+  ).join('\n');
+  // Active beta.MKDOWN (20): alpha.md (10) is first, literal.log (30) is last.
+  await siblings(page, 20);
+  await open(page, snapshot('beta.MKDOWN', 20, overflow));
+  // The settled sibling projection enables both neighbors, so first and last
+  // targets exist; they stay disabled until the projection lands.
+  await expect(
+    page.getByRole('button', { name: 'Previous File', exact: true }),
+  ).toBeEnabled();
+  await expect(
+    page.getByRole('button', { name: 'Next File', exact: true }),
+  ).toBeEnabled();
+  // A mid-document scroll position proves the document overflows the scroller;
+  // a short document would clamp the assignment to 0.
+  const scrolled = await page.evaluate(() => {
+    const scroller = document.querySelector('main');
+    if (!scroller) throw new Error('Missing reading scroller');
+    scroller.scrollTop = 200;
+    return scroller.scrollTop;
+  });
+  expect(scrolled).toBeGreaterThan(100);
+  // The primary modifier follows the platform, mirroring the accelerators the
+  // native menu no longer claims for these items.
+  const primary = await page.evaluate(() =>
+    /Mac/.test(navigator.platform) ? 'Meta' : 'Control',
+  );
+  await page.evaluate(
+    (doc) => {
+      window.readerFixture.enqueue('open_index_entry', { value: doc });
+    },
+    snapshot('alpha.md', 10, overflow),
+  );
+  await page.keyboard.press(`${primary}+ArrowUp`);
+  await expect(page.getByRole('article', { name: 'alpha.md' })).toBeVisible();
+  // The key was consumed: neither the WebKit scroll-to-top default nor any
+  // engine scroll moved the reading position while the sibling opened.
+  expect(
+    Math.abs(
+      scrolled -
+        (await page.evaluate(
+          () => document.querySelector('main')?.scrollTop ?? -1,
+        )),
+    ),
+  ).toBeLessThanOrEqual(1);
+  await page.evaluate(
+    (doc) => {
+      window.readerFixture.enqueue('open_index_entry', { value: doc });
+    },
+    snapshot('literal.log', 30, overflow),
+  );
+  await page.keyboard.press(`${primary}+ArrowDown`);
+  await expect(
+    page.getByRole('article', { name: 'literal.log' }),
+  ).toBeVisible();
+  expect(
+    Math.abs(
+      scrolled -
+        (await page.evaluate(
+          () => document.querySelector('main')?.scrollTop ?? -1,
+        )),
+    ),
+  ).toBeLessThanOrEqual(1);
+  // One keypress, one navigation: the frontend owns the keys alone.
+  const calls = await page.evaluate(() => window.readerFixture.calls());
+  expect(
+    calls.filter((call) => call.command === 'open_index_entry'),
+  ).toHaveLength(2);
+});

@@ -822,8 +822,12 @@ pub fn run() {
                 Some("CmdOrCtrl+Left"),
             )?;
             let next = MenuItem::with_id(app, "next", "Next File", false, Some("CmdOrCtrl+Right"))?;
-            let first = MenuItem::with_id(app, "first", "First File", false, Some("CmdOrCtrl+Up"))?;
-            let last = MenuItem::with_id(app, "last", "Last File", false, Some("CmdOrCtrl+Down"))?;
+            // Cmd/Ctrl+Up/Down stay unaccelerated: WebKit claims those key
+            // equivalents for scrolling an overfilled document, so the
+            // frontend owns first/last navigation from the keyboard and the
+            // menu items remain reachable by pointer alone.
+            let first = MenuItem::with_id(app, "first", "First File", false, None::<&str>)?;
+            let last = MenuItem::with_id(app, "last", "Last File", false, None::<&str>)?;
             let refresh =
                 MenuItem::with_id(app, "refresh-folder", "Refresh Folder", false, None::<&str>)?;
             let quick_open =

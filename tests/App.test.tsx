@@ -13,12 +13,20 @@ import type { Snapshot } from '../src/types';
 import { parseMarkdown } from '../src/reader/parse';
 import { sanitizeReading } from '../src/reader/sanitize';
 import { defaults } from '../src/settings/model';
-const events = vi.hoisted(() => ({
-  receive: (_event: { payload: { actionId: string; sequence: number } }) => {
-    void _event;
-  },
-  fail: false,
-}));
+import type { FileEntry, Siblings } from '../src/navigation/types';
+const events = vi.hoisted(() => {
+  let siblingsReply: unknown = null;
+  return {
+    receive: (_event: { payload: { actionId: string; sequence: number } }) => {
+      void _event;
+    },
+    fail: false,
+    setSiblings(reply: unknown) {
+      siblingsReply = reply;
+    },
+    siblings: (): unknown => siblingsReply,
+  };
+});
 vi.mock('@tauri-apps/api/webviewWindow', () => ({
   getCurrentWebviewWindow: () => ({
     listen: (
@@ -60,18 +68,20 @@ vi.mock('../src/native', () => ({
     query: vi.fn(),
     complete: vi.fn(),
     siblings: () =>
-      Promise.resolve({
-        index: {
-          scope: 1,
-          revision: 1,
-          name: 'fixture',
-          entries: [],
-          issues: [],
+      Promise.resolve(
+        (events.siblings() as Siblings | null) ?? {
+          index: {
+            scope: 1,
+            revision: 1,
+            name: 'fixture',
+            entries: [],
+            issues: [],
+          },
+          active: null,
+          rootActive: null,
+          inRoot: false,
         },
-        active: null,
-        rootActive: null,
-        inRoot: false,
-      }),
+      ),
     choose: () => Promise.resolve({ status: 'cancelled' }),
     refresh: vi.fn(),
     preview: vi.fn(),
@@ -105,6 +115,7 @@ vi.mock('../src/presentation', () => ({
 afterEach(() => {
   cleanup();
   events.fail = false;
+  events.setSiblings(null);
 });
 Element.prototype.scrollIntoView = vi.fn();
 vi.stubGlobal('matchMedia', () => ({
@@ -234,4 +245,137 @@ it('menu subscription failure exposes exceptional direct actions instead of refe
   await screen.findByRole('article');
   expect(screen.getByRole('button', { name: 'Settings…' })).toBeTruthy();
   expect(screen.getByRole('button', { name: 'Reload' })).toBeTruthy();
+});
+
+function siblingEntry(id: number, name: string, alphaRank: number): FileEntry {
+  return {
+    id,
+    uiId: id,
+    parent: null,
+    name,
+    relative: name,
+    kind: 'markdown',
+    context: id,
+    alphaRank,
+    dateRank: 0,
+    sizeRank: 0,
+  };
+}
+
+// Window-level key presses as the keydown owner receives them; the event
+// reference exposes defaultPrevented for ownership assertions.
+async function pressKey(init: KeyboardEventInit): Promise<KeyboardEvent> {
+  const event = new KeyboardEvent('keydown', { cancelable: true, ...init });
+  await act(async () => {
+    window.dispatchEvent(event);
+    await Promise.resolve();
+  });
+  return event;
+}
+
+// The keydown owner reads navigator.platform; jsdom's own value is
+// environment-dependent, so each scenario pins one explicitly.
+async function withPlatform(platform: string, run: () => Promise<void>) {
+  Object.defineProperty(window.navigator, 'platform', {
+    value: platform,
+    configurable: true,
+  });
+  try {
+    await run();
+  } finally {
+    delete (window.navigator as unknown as Record<string, unknown>).platform;
+  }
+}
+
+it('app keys own Cmd/Ctrl+Arrow first/last navigation only with exact modifiers and never inside editable controls', async () => {
+  const { bridge } = reader('# Body\n\nSentinel paragraph.');
+  await menu('open');
+  await screen.findByRole('article', { name: 'metadata.md' });
+  // Non-macOS: Ctrl is the only primary modifier and excludes the rest.
+  await withPlatform('Linux x86_64', async () => {
+    expect((await pressKey({ key: 'ArrowUp' })).defaultPrevented).toBe(false);
+    expect(
+      (await pressKey({ key: 'ArrowDown', ctrlKey: true, shiftKey: true }))
+        .defaultPrevented,
+    ).toBe(false);
+    expect(
+      (await pressKey({ key: 'ArrowDown', metaKey: true })).defaultPrevented,
+    ).toBe(false);
+    // Exact modifiers are consumed and routed through dispatch even when the
+    // sibling projection has no target; the navigation refuses without one.
+    expect(
+      (await pressKey({ key: 'ArrowUp', ctrlKey: true })).defaultPrevented,
+    ).toBe(true);
+  });
+  // macOS: Cmd is primary and Ctrl never matches.
+  await withPlatform('MacIntel', async () => {
+    expect(
+      (await pressKey({ key: 'ArrowDown', ctrlKey: true })).defaultPrevented,
+    ).toBe(false);
+    expect(
+      (await pressKey({ key: 'ArrowUp', metaKey: true })).defaultPrevented,
+    ).toBe(true);
+  });
+  expect(bridge.openEntry).not.toHaveBeenCalled();
+  // An editable control keeps the keys for text cursor movement.
+  await menu('find');
+  const input = await screen.findByRole('textbox', {
+    name: 'Find in document',
+  });
+  expect(document.activeElement).toBe(input);
+  await withPlatform('MacIntel', async () => {
+    expect(
+      (await pressKey({ key: 'ArrowDown', metaKey: true })).defaultPrevented,
+    ).toBe(false);
+  });
+  expect(bridge.openEntry).not.toHaveBeenCalled();
+});
+
+it('Cmd/Ctrl+Arrow keys open the first and last sibling through the same dispatch path as the Navigate menu', async () => {
+  events.setSiblings({
+    index: {
+      scope: 1,
+      revision: 1,
+      name: 'fixture',
+      entries: [
+        siblingEntry(10, 'alpha.md', 0),
+        siblingEntry(20, 'beta.md', 1),
+        siblingEntry(30, 'gamma.md', 2),
+      ],
+      issues: [],
+    },
+    active: 20,
+    rootActive: null,
+    inRoot: true,
+  });
+  const { bridge } = reader('# Body\n\nSentinel paragraph.');
+  await menu('open');
+  await screen.findByRole('article', { name: 'metadata.md' });
+  bridge.openEntry.mockImplementation(
+    (_request: number, binding: { entry: number }) => {
+      const name = binding.entry === 10 ? 'alpha.md' : 'gamma.md';
+      return Promise.resolve({
+        documentId: binding.entry,
+        revision: 1,
+        name,
+        location: `fixture/${name}`,
+        format: 'markdown' as const,
+        source: `# ${name}\n\nBody.`,
+      } satisfies Snapshot);
+    },
+  );
+  await withPlatform('MacIntel', async () => {
+    expect(
+      (await pressKey({ key: 'ArrowUp', metaKey: true })).defaultPrevented,
+    ).toBe(true);
+  });
+  expect(await screen.findByRole('article', { name: 'alpha.md' })).toBeTruthy();
+  await withPlatform('Linux x86_64', async () => {
+    expect(
+      (await pressKey({ key: 'ArrowDown', ctrlKey: true })).defaultPrevented,
+    ).toBe(true);
+  });
+  expect(await screen.findByRole('article', { name: 'gamma.md' })).toBeTruthy();
+  // One keypress, one navigation: no duplicated or wrapped outcomes.
+  expect(bridge.openEntry).toHaveBeenCalledTimes(2);
 });

@@ -880,6 +880,38 @@ export function App({ controller }: { controller: ReaderController }) {
   useLayoutEffect(() => {
     dispatchLatest.current = dispatch;
   }, [dispatch]);
+  // Cmd/Ctrl+Up and Cmd/Ctrl+Down must own first/last sibling navigation from
+  // the frontend: WebKit claims those key equivalents for scroll to the
+  // document's top or bottom whenever content overflows, so a native menu
+  // accelerator loses them on scrollable documents. One capture-phase listener
+  // consumes the key and routes it through the same dispatch path as the
+  // Navigate menu items, so each keypress has exactly one owner and outcome.
+  // While composing or when an editable control owns the keyboard, the key is
+  // left untouched for text cursor movement and IME handling.
+  useEffect(() => {
+    const onKeydown = (event: KeyboardEvent) => {
+      const primary = /Mac/.test(navigator.platform)
+        ? event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+        : event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
+      if (!primary) return;
+      const action =
+        event.key === 'ArrowUp'
+          ? 'first'
+          : event.key === 'ArrowDown'
+            ? 'last'
+            : null;
+      if (!action) return;
+      if (composing.current || ownsEditingKeys(window.document.activeElement))
+        return;
+      event.preventDefault();
+      event.stopPropagation();
+      dispatchLatest.current(action);
+    };
+    window.addEventListener('keydown', onKeydown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeydown, true);
+    };
+  }, []);
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
