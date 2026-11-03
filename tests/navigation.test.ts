@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { NavigationController } from '../src/navigation/model';
+import { NavigationController, quickOpenScope } from '../src/navigation/model';
 import {
   binding,
   compareEntries,
@@ -77,14 +77,10 @@ function setup() {
     listen: vi.fn<NavigationBridge['listen']>().mockResolvedValue(() => {}),
     query: vi.fn<NavigationBridge['query']>(),
     complete: vi.fn<NavigationBridge['complete']>(),
-    choose: vi
-      .fn<NavigationBridge['choose']>()
-      .mockResolvedValue({ status: 'ready', snapshot: cache(index(2)) }),
     refresh: vi
       .fn<NavigationBridge['refresh']>()
       .mockResolvedValue(cache(index(3))),
     siblings: vi.fn<NavigationBridge['siblings']>(),
-    quickScope: vi.fn<NavigationBridge['quickScope']>(),
     preview: vi.fn<NavigationBridge['preview']>().mockResolvedValue(snapshot()),
     cancelPreview: vi
       .fn<NavigationBridge['cancelPreview']>()
@@ -101,17 +97,24 @@ function setup() {
   );
   return { bridge, parse, controller: new NavigationController(bridge, parse) };
 }
+// The controller learns about the working folder through its recovery getter;
+// the native side adopts it at the document's commit.
+async function adoptRoot(
+  bridge: ReturnType<typeof setup>['bridge'],
+  controller: NavigationController,
+  snap: IndexSnapshot,
+) {
+  bridge.get.mockResolvedValueOnce(snap);
+  await controller.recover();
+}
 describe('production navigation state and shared native adapter DTO projection', () => {
-  it('does not read document bodies on choosing, retains cancelled roots, and labels failed refresh last known', async () => {
+  it('does not read document bodies when a root is accepted and labels a failed refresh last known', async () => {
     const { controller, bridge, parse } = setup();
-    await controller.choose();
+    await adoptRoot(bridge, controller, cache(index(2)));
     const root = controller.state.root;
     expect(root?.revision).toBe(2);
     expect(bridge.preview).not.toHaveBeenCalled();
     expect(parse).not.toHaveBeenCalled();
-    bridge.choose.mockResolvedValueOnce({ status: 'cancelled' });
-    await controller.choose();
-    expect(controller.state.root).toBe(root);
     bridge.refresh.mockRejectedValueOnce({ message: 'Access denied' });
     await controller.refresh();
     expect(controller.state.root).toBe(root);
@@ -120,18 +123,14 @@ describe('production navigation state and shared native adapter DTO projection',
     controller.dispose();
   });
   it.each(['denied', 'notFound'])(
-    'keeps persistent %s root availability through cancelled/failed choices and unrelated feedback until a successful scan',
+    'keeps persistent %s root availability through unrelated feedback until a successful scan',
     async (code) => {
       const { controller, bridge } = setup();
-      bridge.choose.mockResolvedValueOnce({
-        status: 'ready',
-        snapshot: cache(
-          { ...index(), entries: [] },
-          'unavailable',
-          `${code} folder`,
-        ),
-      });
-      await controller.choose();
+      await adoptRoot(
+        bridge,
+        controller,
+        cache({ ...index(), entries: [] }, 'unavailable', `${code} folder`),
+      );
       const root = controller.state.root;
       const explanation = controller.state.rootMessage;
       const current = { snapshot: snapshot(), html: '', metadata: null };
@@ -142,12 +141,6 @@ describe('production navigation state and shared native adapter DTO projection',
         expect(explanation).toContain(`${code} folder`);
         expect(explanation).toContain('last known');
       };
-      unavailable();
-      bridge.choose.mockResolvedValueOnce({ status: 'cancelled' });
-      await controller.choose();
-      unavailable();
-      bridge.choose.mockRejectedValueOnce({ message: 'Chooser unavailable' });
-      await controller.choose();
       unavailable();
       await controller.reveal(current);
       unavailable();
@@ -178,7 +171,7 @@ describe('production navigation state and shared native adapter DTO projection',
   );
   it('previews only requested Markdown through the shared parser and retains completed context/source until explicit invalidation', async () => {
     const { controller, bridge, parse } = setup();
-    await controller.choose();
+    await adoptRoot(bridge, controller, cache(index(2)));
     const root = controller.state.root;
     if (!root) throw new Error('Expected selected root');
     await controller.preview(root, root.entries[2]);
@@ -202,7 +195,7 @@ describe('production navigation state and shared native adapter DTO projection',
   });
   it('cancels only collapsed owned work and ignores its late native response', async () => {
     const { controller, bridge, parse } = setup();
-    await controller.choose();
+    await adoptRoot(bridge, controller, cache(index(2)));
     const root = controller.state.root;
     if (!root) throw new Error('Expected selected root');
     const held = deferred<Snapshot>();
@@ -219,7 +212,7 @@ describe('production navigation state and shared native adapter DTO projection',
   });
   it('terminates its real parse-job seam on supersession without publishing old-root headings', async () => {
     const { controller, bridge, parse } = setup();
-    await controller.choose();
+    await adoptRoot(bridge, controller, cache(index(2)));
     const root = controller.state.root;
     if (!root) throw new Error('Expected selected root');
     const reading = deferred<ReturnType<typeof sanitizeReading>>();
@@ -232,11 +225,11 @@ describe('production navigation state and shared native adapter DTO projection',
     reading.resolve(sanitizeReading(parseMarkdown('# Obsolete')));
     await pending;
     expect(controller.state.previews.size).toBe(0);
-    bridge.choose.mockResolvedValueOnce({
-      status: 'ready',
-      snapshot: cache({ ...index(), scope: 10 }),
-    });
-    await controller.choose();
+    await adoptRoot(
+      bridge,
+      controller,
+      cache({ ...index(), scope: 10, revision: 2 }, 'ready'),
+    );
     expect(controller.state.root?.scope).toBe(10);
     controller.dispose();
   });
@@ -294,63 +287,48 @@ describe('production navigation state and shared native adapter DTO projection',
     expect(siblingTargets(siblings, 'name', 'asc').next).toBeUndefined();
     expect(siblingTargets(siblings, 'name', 'asc').previous?.id).toBe(2);
   });
-  it('derives the Quick Open scope from the displayed file and drops it when a root is chosen', async () => {
+  it('labels an unpublished working folder as indexing instead of excluded, and exposes the retained index meanwhile', async () => {
     const { controller, bridge } = setup();
-    const derived = { ...index(), scope: 30, revision: 2, name: 'fixture/sub' };
-    const held = deferred<FileIndex>();
-    bridge.quickScope.mockReturnValueOnce(held.promise);
     const doc = { snapshot: snapshot(), html: '', metadata: null };
-    const first = controller.openQuickScope(doc);
-    expect(controller.state.quickBusy).toBe(true);
-    // One fetch at a time: a second open while pending never re-requests.
-    await controller.openQuickScope(doc);
-    expect(bridge.quickScope).toHaveBeenCalledOnce();
-    held.resolve(derived);
-    await first;
-    expect(controller.state.quickBusy).toBe(false);
-    expect(controller.state.quick?.scope).toBe(30);
-    // The recovery path reuses: it adopts the traversal-published scope.
-    bridge.quickScope.mockResolvedValueOnce({ ...derived, revision: 3 });
-    await controller.openQuickScope(doc, true);
-    expect(bridge.quickScope).toHaveBeenNthCalledWith(2, doc.snapshot, true);
-    expect(controller.state.quick?.revision).toBe(3);
-    // Overlay opens stay plain rescans and drop the old scope synchronously.
-    bridge.quickScope.mockResolvedValueOnce({ ...derived, revision: 4 });
-    const rescan = controller.openQuickScope(doc);
-    expect(controller.state.quick).toBeNull();
-    await rescan;
-    expect(bridge.quickScope).toHaveBeenNthCalledWith(3, doc.snapshot, false);
-    expect(controller.state.quick?.revision).toBe(4);
-    // Without a displayed document there is nothing to derive from.
-    await controller.openQuickScope(null);
-    expect(bridge.quickScope).toHaveBeenCalledTimes(3);
-    await controller.choose();
-    expect(controller.state.root?.scope).toBe(7);
-    expect(controller.state.quick).toBeNull();
-    // With a root present the derived scope is never fetched again.
-    await controller.openQuickScope(doc);
-    expect(bridge.quickScope).toHaveBeenCalledTimes(3);
+    await adoptRoot(bridge, controller, cache(index(), 'loading'));
+    expect(controller.state.rootBusy).toBe(true);
+    bridge.siblings.mockResolvedValue({
+      index: index(),
+      active: null,
+      inRoot: true,
+      rootActive: null,
+    });
+    await controller.update(doc);
+    expect(controller.state.siblingMessage).toBe('Indexing folder…');
+    // Once the scan settles the same reply is a truthful exclusion.
+    await adoptRoot(bridge, controller, cache(index(2)));
+    await controller.update(doc);
+    expect(controller.state.siblingMessage).toBe(
+      'Displayed file is not a visible sibling; no neighbor is selected.',
+    );
     controller.dispose();
   });
-  it('reports a failed derived-scope fetch and discards a fetch that lands after a root is chosen', async () => {
+  it('derives the Quick Open scope from the working folder status alone', async () => {
     const { controller, bridge } = setup();
-    const doc = { snapshot: snapshot(), html: '', metadata: null };
-    bridge.quickScope.mockRejectedValue({ message: 'folder vanished' });
-    await controller.openQuickScope(doc);
-    expect(controller.state.quick).toBeNull();
-    expect(controller.state.quickBusy).toBe(false);
-    expect(controller.state.quickMessage).toContain('folder vanished');
-    const held = deferred<FileIndex>();
-    bridge.quickScope.mockReturnValueOnce(held.promise);
-    const pending = controller.openQuickScope(doc);
-    await controller.choose();
-    expect(controller.state.quick).toBeNull();
-    expect(controller.state.quickBusy).toBe(false);
-    held.resolve({ ...index(), scope: 31 });
-    await pending;
-    // The landed fetch is discarded: the chosen root owns the scope now.
-    expect(controller.state.quick).toBeNull();
-    expect(controller.state.quickBusy).toBe(false);
+    expect(quickOpenScope(controller.state)).toEqual({
+      index: null,
+      busy: false,
+    });
+    await adoptRoot(bridge, controller, cache(index(), 'loading'));
+    expect(quickOpenScope(controller.state)).toEqual({
+      index: controller.state.root,
+      busy: true,
+    });
+    await adoptRoot(bridge, controller, cache(index(2)));
+    const ready = quickOpenScope(controller.state);
+    expect(ready.busy).toBe(false);
+    expect(ready.index?.revision).toBe(2);
+    await adoptRoot(
+      bridge,
+      controller,
+      cache(index(3), 'unavailable', 'Folder removed'),
+    );
+    expect(quickOpenScope(controller.state).busy).toBe(true);
     controller.dispose();
   });
 });

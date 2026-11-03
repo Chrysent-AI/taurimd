@@ -16,7 +16,6 @@ interface NavigationState {
   cache: IndexStatus | null;
   watcherMessage: string;
   root: FileIndex | null;
-  choosing: boolean;
   rootBusy: boolean;
   rootStatus: 'none' | 'loading' | 'ready' | 'partial' | 'unavailable';
   rootMessage: string;
@@ -25,12 +24,6 @@ interface NavigationState {
   siblings: Siblings | null;
   siblingDocument: Rendered | null;
   siblingMessage: string;
-  // Quick Open's derived scope: indexed from the displayed file's folder when
-  // no folder root is open. It has no watcher, so it is re-scanned whenever
-  // the overlay opens and dropped as soon as a root is chosen.
-  quick: FileIndex | null;
-  quickBusy: boolean;
-  quickMessage: string;
   previews: ReadonlyMap<number, Preview>;
 }
 export class NavigationController {
@@ -38,7 +31,6 @@ export class NavigationController {
     cache: null,
     watcherMessage: '',
     root: null,
-    choosing: false,
     rootBusy: false,
     rootStatus: 'none',
     rootMessage: '',
@@ -47,15 +39,11 @@ export class NavigationController {
     siblings: null,
     siblingDocument: null,
     siblingMessage: '',
-    quick: null,
-    quickBusy: false,
-    quickMessage: '',
     previews: new Map(),
   };
   private listeners = new Set<() => void>();
   private sequence = 0;
   private siblingSequence = 0;
-  private quickSequence = 0;
   private jobs = new Map<number, { request: number; job?: ParseJob }>();
   private disposed = false;
   private expected: IndexStatus | null = null;
@@ -162,7 +150,6 @@ export class NavigationController {
       this.notifications !== 'unavailable' ||
       !this.state.root ||
       !this.state.rootBusy ||
-      this.state.choosing ||
       this.state.cache?.phase !== 'loading'
     )
       return;
@@ -176,7 +163,6 @@ export class NavigationController {
         this.notifications === 'unavailable' &&
         !this.disposed &&
         this.state.rootBusy &&
-        !this.state.choosing &&
         this.state.cache?.phase === 'loading'
       )
         void this.recover();
@@ -249,9 +235,18 @@ export class NavigationController {
       root: changed ? index : this.state.root,
       cache: status,
       rootBusy: loading,
-      rootStatus: !index ? 'none' : status.phase || 'loading',
+      // A failure before any root was adopted has no retained entries to
+      // show, but it is still a real, settled degradation — surface it
+      // instead of collapsing it into the never-opened 'none' state.
+      rootStatus: !index
+        ? status.phase === 'unavailable'
+          ? 'unavailable'
+          : 'none'
+        : status.phase || 'loading',
       rootMessage: !index
-        ? ''
+        ? status.phase === 'unavailable'
+          ? `Folder unavailable (${status.message}). Open the file again to restore its folder.`
+          : ''
         : loading
           ? `Indexing folder… ${String(status.entries)} known entries; retained entries are last known.`
           : status.phase === 'unavailable'
@@ -267,48 +262,6 @@ export class NavigationController {
   }
   notice(message: string, error = false) {
     this.publish({ message, error });
-  }
-  async choose() {
-    if (this.state.choosing) return 'failed' as const;
-    this.retireRecovery();
-    this.publish({
-      choosing: true,
-      rootBusy: true,
-      message: 'Choosing folder…',
-      error: false,
-    });
-    try {
-      const result = await this.bridge.choose(++this.sequence);
-      if (this.disposed) return 'failed' as const;
-      if (result.status === 'cancelled') {
-        this.publish({
-          choosing: false,
-          rootBusy: this.state.cache?.phase === 'loading',
-          message: 'Folder selection cancelled; folder unchanged.',
-        });
-        this.scheduleCompletion();
-        return 'cancelled' as const;
-      }
-      this.invalidate();
-      this.accept(result.snapshot);
-      this.publish({
-        choosing: false,
-        quick: null,
-        quickBusy: false,
-        quickMessage: '',
-      });
-      this.scheduleCompletion();
-      return 'opened' as const;
-    } catch (error) {
-      this.publish({
-        choosing: false,
-        rootBusy: this.state.cache?.phase === 'loading',
-        message: `Could not choose folder: ${message(error)}`,
-        error: true,
-      });
-      this.scheduleCompletion();
-      return 'failed' as const;
-    }
   }
   async refresh() {
     const root = this.state.root;
@@ -363,7 +316,9 @@ export class NavigationController {
         siblingDocument: document,
         siblingMessage:
           siblings.active === null
-            ? 'Displayed file is not a visible sibling; no neighbor is selected.'
+            ? this.state.rootBusy || this.state.rootStatus === 'loading'
+              ? 'Indexing folder…'
+              : 'Displayed file is not a visible sibling; no neighbor is selected.'
             : '',
       });
     } catch (error) {
@@ -371,32 +326,6 @@ export class NavigationController {
         this.publish({
           siblingDocument: document,
           siblingMessage: `Siblings unavailable: ${message(error)}`,
-        });
-    }
-  }
-  // The Quick Open overlay searches the watched root when one exists;
-  // otherwise it asks the native side for a bounded subtree index of the
-  // displayed file's folder. Called with reuse on the recovery path so a
-  // directory traversal's published scope is adopted instead of rescanned;
-  // overlay opens re-scan, keeping the re-read-on-open lifecycle.
-  async openQuickScope(document: Rendered | null, reuse = false) {
-    if (!document || this.state.root || this.state.quickBusy) return;
-    const request = ++this.quickSequence;
-    this.publish({ quick: null, quickBusy: true, quickMessage: '' });
-    try {
-      const index = await this.bridge.quickScope(document.snapshot, reuse);
-      if (request !== this.quickSequence || this.disposed) return;
-      // A root may have been chosen while the fetch was in flight; getState
-      // reads the live state beyond the entry guard's narrowing.
-      if (this.getState().root) return;
-      this.publish({ quick: index, quickBusy: false });
-    } catch (error) {
-      if (request !== this.quickSequence || this.disposed) return;
-      if (!this.getState().root)
-        this.publish({
-          quick: null,
-          quickBusy: false,
-          quickMessage: `Could not index this folder: ${message(error)}`,
         });
     }
   }
@@ -489,18 +418,15 @@ function message(error: unknown) {
     ? error.message
     : 'The operation could not finish.';
 }
-// The Quick Open overlay searches the watched folder root when one exists;
-// otherwise it uses the derived scope indexed from the displayed file's
-// folder. Both pickers (controller wiring and dialog gating) share this one
-// derivation so reply gating can never disagree with the searched scope.
+// The Quick Open overlay searches the watched working folder, which the
+// native side establishes when a document is committed and keeps indexed.
+// The picker and the dialog gating share this one derivation so reply gating
+// can never disagree with the searched scope.
 export function quickOpenScope(
   state: NavigationController['state'],
 ): PickerScope {
-  if (state.root)
-    return {
-      index: state.root,
-      busy:
-        state.rootBusy || state.choosing || state.rootStatus === 'unavailable',
-    };
-  return { index: state.quick, busy: state.choosing || state.quickBusy };
+  return {
+    index: state.root,
+    busy: state.rootBusy || state.rootStatus === 'unavailable',
+  };
 }

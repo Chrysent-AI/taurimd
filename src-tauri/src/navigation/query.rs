@@ -460,7 +460,7 @@ mod tests {
         ];
         for (root, input, expected) in cases {
             let mut nav = crate::navigation::Navigation::default();
-            let scope = nav.start(PathBuf::from(&root), true, false).unwrap();
+            let scope = nav.start(PathBuf::from(&root), false).unwrap();
             let (prepared, fragment) = path(&scope, &input, None, &scope.path).unwrap();
             assert_eq!(prepared, PathBuf::from(expected));
             assert!(fragment.is_empty());
@@ -492,7 +492,7 @@ mod tests {
         ];
         for (root, inputs) in outside {
             let mut nav = crate::navigation::Navigation::default();
-            let scope = nav.start(PathBuf::from(root), true, false).unwrap();
+            let scope = nav.start(PathBuf::from(root), false).unwrap();
             for input in inputs {
                 assert_eq!(
                     path(&scope, &input, None, &scope.path).unwrap_err(),
@@ -503,7 +503,7 @@ mod tests {
         }
         let mut nav = crate::navigation::Navigation::default();
         let scope = nav
-            .start(PathBuf::from(r"\\?\C:\docs\project"), true, false)
+            .start(PathBuf::from(r"\\?\C:\docs\project"), false)
             .unwrap();
         for input in [
             r"C:\docs\project\unchecked\..\sub\",
@@ -516,7 +516,7 @@ mod tests {
         }
         for root in [r"\\?\C:\docs\project".to_owned(), canonical_unc] {
             let mut nav = crate::navigation::Navigation::default();
-            let scope = nav.start(PathBuf::from(root), true, false).unwrap();
+            let scope = nav.start(PathBuf::from(root), false).unwrap();
             assert_eq!(
                 path(
                     &scope,
@@ -566,7 +566,7 @@ mod tests {
         fs::write(home.join("authorized/sub/a.md"), "# Cached").unwrap();
         let canonical = super::super::root_path(&home.join("authorized")).unwrap();
         let mut nav = crate::navigation::Navigation::default();
-        let draft = nav.start(canonical.clone(), true, false).unwrap();
+        let draft = nav.start(canonical.clone(), false).unwrap();
         nav.publish(super::super::scan(draft, true).unwrap())
             .unwrap();
         let scope = nav.root.as_ref().unwrap();
@@ -616,7 +616,7 @@ mod tests {
             fs::write(root.join(format!("file-{number:03}.log")), [0xff]).unwrap();
         }
         let mut nav = Navigation::default();
-        let scope = nav.start(root.clone(), true, false).unwrap();
+        let scope = nav.start(root.clone(), false).unwrap();
         nav.publish(super::super::scan(scope, true).unwrap())
             .unwrap();
         let scope = nav.root.clone().unwrap();
@@ -689,7 +689,7 @@ mod tests {
         assert_eq!(missing.reply.status, "missing");
         let target = missing.missing.unwrap();
         validate_directory(&scope, &target).unwrap();
-        let draft = nav.start(root.clone(), true, true).unwrap();
+        let draft = nav.start(root.clone(), true).unwrap();
         nav.publish(super::super::scan_directory(draft, target).unwrap())
             .unwrap();
         let next = nav.root.as_ref().unwrap();
@@ -729,7 +729,7 @@ mod tests {
         fs::write(native.join("native.md"), "# Native").unwrap();
         fs::write(lookalike.join("other.md"), "# Other").unwrap();
         let mut nav = crate::navigation::Navigation::default();
-        let mut draft = super::super::scan(nav.start(root, true, false).unwrap(), true).unwrap();
+        let mut draft = super::super::scan(nav.start(root, false).unwrap(), true).unwrap();
         // Exercise display/native separation even on filesystems rejecting raw
         // non-UTF-8 names: a colliding display projection is not path authority.
         let projected = std::sync::Arc::make_mut(&mut draft.records)
@@ -787,7 +787,7 @@ mod tests {
         let root = temp.path().canonicalize().unwrap();
         fs::create_dir(root.join("sub")).unwrap();
         let mut nav = crate::navigation::Navigation::default();
-        let scope = nav.start(root.clone(), true, false).unwrap();
+        let scope = nav.start(root.clone(), false).unwrap();
         nav.publish(super::super::scan(scope, true).unwrap())
             .unwrap();
         let scope = nav.root.as_ref().unwrap();

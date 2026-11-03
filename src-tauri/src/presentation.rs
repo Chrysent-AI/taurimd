@@ -23,6 +23,8 @@ pub struct Presentation {
     pub status_visible: bool,
     #[serde(default = "sidebar_default")]
     pub sidebar_visible: bool,
+    #[serde(default = "sidebar_default")]
+    pub toc_visible: bool,
     #[serde(default)]
     pub has_root: bool,
     #[serde(default)]
@@ -69,6 +71,7 @@ impl Default for Presentation {
             find_matches: false,
             status_visible: true,
             sidebar_visible: true,
+            toc_visible: true,
             has_root: false,
             previous: false,
             next: false,
@@ -102,6 +105,7 @@ impl Presentation {
     pub fn checked(&self, id: &str) -> bool {
         match id {
             "sidebar" => self.sidebar_visible,
+            "toc" => self.toc_visible,
             "sort-name" => self.file_sort_key == FileSortKey::Name,
             "sort-modified" => self.file_sort_key == FileSortKey::Modified,
             "sort-size" => self.file_sort_key == FileSortKey::Size,
@@ -139,7 +143,7 @@ impl Presentation {
             "reload" | "information" | "reveal" | "export-svg" | "export-png" => {
                 free && self.modal == Modal::None && has_document
             }
-            "open" | "open-folder" | "sidebar" | "sort-name" | "sort-modified" | "sort-size"
+            "open" | "sidebar" | "toc" | "sort-name" | "sort-modified" | "sort-size"
             | "sort-asc" | "sort-desc" | "settings" | "guide" | "about" | "status-bar"
             | "appearance-system" | "appearance-light" | "appearance-dark" | "fit-diagrams" => {
                 free && self.modal == Modal::None
@@ -253,6 +257,21 @@ mod tests {
         assert!(applied.checked("sort-desc"));
         assert!(!applied.checked("sort-name"));
         assert!(!applied.checked("sort-asc"));
+        // The File Explorer and Table of Contents checks follow their
+        // remembered visibility and stay available outside modals.
+        assert!(applied.checked("sidebar"));
+        assert!(applied.checked("toc"));
+        applied.toc_visible = false;
+        assert!(applied.checked("sidebar"));
+        assert!(!applied.checked("toc"));
+        for modal in [Modal::Settings, Modal::QuickOpen, Modal::Other] {
+            applied.modal = modal;
+            assert!(!applied.enabled("toc", true));
+            assert!(!applied.enabled("sidebar", true));
+        }
+        applied.modal = Modal::None;
+        assert!(applied.enabled("toc", true));
+        assert!(!applied.enabled("open-folder", true));
         let wire: Presentation = serde_json::from_value(serde_json::json!({
             "sequence":3,"statusVisible":true,"busy":false,"modal":"none","composing":false,
             "pageZoom":100,"fileSortKey":"size","fileSortDirection":"desc","editing":true

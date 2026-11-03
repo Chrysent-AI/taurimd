@@ -600,6 +600,10 @@ test('fitted viewport keeps the document cursor without capture until zoom creat
   const source = '# Cursor states' + fence(flow);
   await open(page, source);
   await settle(page, 1);
+  // Diagram geometry is pane-independent: hide both shell panes so the
+  // deliberately narrow viewport isolates the diagram, not the layout.
+  await page.evaluate(() => window.readerFixture.menu('sidebar'));
+  await page.evaluate(() => window.readerFixture.menu('toc'));
   await page.setViewportSize({ width: 500, height: 600 });
   const figure = page.locator('.diagram');
   const viewport = figure.getByRole('region');
@@ -702,6 +706,10 @@ test('fit-disabled natural overflow pans and follows zoom steps and window resiz
   const source = '# Natural size' + fence(chain);
   await open(page, source);
   await settle(page, 1);
+  // Diagram geometry is pane-independent: hide both shell panes so the
+  // deliberately narrow viewport isolates the diagram, not the layout.
+  await page.evaluate(() => window.readerFixture.menu('sidebar'));
+  await page.evaluate(() => window.readerFixture.menu('toc'));
   await page.setViewportSize({ width: 500, height: 600 });
   const figure = page.locator('.diagram');
   const viewport = figure.getByRole('region');

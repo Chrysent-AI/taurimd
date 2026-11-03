@@ -21,7 +21,18 @@ export interface SettingsV1 {
   fileSortKey: FileSortKey;
   fileSortDirection: FileSortDirection;
   remoteImageHosts: string[];
+  /** How many directory levels of the working folder are indexed. */
+  navigationDepth: number;
+  /** Whether the right-hand "On this page" pane starts visible. */
+  tocVisible: boolean;
 }
+// Mirrors the native owner's accepted range; one documented home per side.
+export const navigationDepthMin = 1;
+export const navigationDepthMax = 8;
+export const navigationDepthChoices = Array.from(
+  { length: navigationDepthMax - navigationDepthMin + 1 },
+  (_, offset) => navigationDepthMin + offset,
+);
 // The confirmed starter hosts for automatic HTTPS image requests, in the
 // canonical sorted order the native owner stores them.
 export const remoteImageHosts = [
@@ -75,6 +86,8 @@ export const defaults: SettingsV1 = {
   fileSortKey: 'name',
   fileSortDirection: 'asc',
   remoteImageHosts: [...remoteImageHosts],
+  navigationDepth: 4,
+  tocVisible: true,
 };
 export interface SettingsRecord {
   version: 1;

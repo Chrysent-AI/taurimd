@@ -35,9 +35,9 @@ export class QuickOpenController {
   private listeners = new Set<() => void>();
   private timer: ReturnType<typeof setTimeout> | undefined;
   private sequence = 0;
-  // The searched index: the watched folder root, or the derived scope from
-  // the displayed file's folder when no root is open. Only the scope and
-  // revision identity matter here; provenance stays in NavigationController.
+  // The searched index: the watched working folder root the native side
+  // keeps indexed. Only the scope and revision identity matter here;
+  // provenance stays in NavigationController.
   private scope: FileIndex | null = null;
   private busy = false;
   private active = false;

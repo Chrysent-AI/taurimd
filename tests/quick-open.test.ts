@@ -56,12 +56,8 @@ function bridge() {
     complete: vi
       .fn<NavigationBridge['complete']>()
       .mockImplementation((request) => Promise.resolve(reply(request))),
-    choose: vi
-      .fn<NavigationBridge['choose']>()
-      .mockResolvedValue({ status: 'cancelled' }),
     refresh: vi.fn<NavigationBridge['refresh']>().mockResolvedValue(snapshot()),
     siblings: vi.fn<NavigationBridge['siblings']>(),
-    quickScope: vi.fn<NavigationBridge['quickScope']>(),
     preview: vi.fn<NavigationBridge['preview']>(),
     cancelPreview: vi
       .fn<NavigationBridge['cancelPreview']>()
@@ -228,55 +224,23 @@ describe('production Quick Open debounce and immutable query ownership', () => {
     model.close();
   });
 });
-describe('derived Quick Open scope from the displayed file', () => {
-  const derived = (): FileIndex => ({
-    scope: 30,
-    revision: 4,
-    name: 'fixture/displayed-folder',
-    entries: [],
-    issues: [],
-  });
-  it('debounces while the derived scope is pending and searches once it lands', async () => {
-    vi.useFakeTimers();
-    const native = bridge();
-    const model = new QuickOpenController(native, vi.fn());
-    model.open(null, true);
-    model.text('deep');
-    await vi.advanceTimersByTimeAsync(300);
-    expect(native.query).not.toHaveBeenCalled();
-    expect(model.state.phase).toBe('idle');
-    model.update(derived(), false);
-    await vi.advanceTimersByTimeAsync(200);
-    expect(native.query).toHaveBeenCalledOnce();
-    expect(native.query.mock.calls[0][0]).toMatchObject({
-      scope: 30,
-      revision: 4,
-      text: 'deep',
-    });
-    expect(model.currentReply()?.scope).toBe(30);
-    model.close();
-  });
-  it('traverse recovery adopts the traversal-published scope instead of rescanning it away', async () => {
+describe('traverse recovery against the watched working folder', () => {
+  it('adopts the traversal-published root revision instead of rescanning it away', async () => {
     vi.useFakeTimers();
     const native = bridge();
     const recover = vi.fn();
     const model = new QuickOpenController(native, recover);
-    const derived = {
-      ...root(),
-      scope: 30,
-      revision: 4,
-      name: 'fixture/displayed-folder',
-    };
-    model.open(derived, false);
+    const folder = root();
+    model.open(folder, false);
     // A hollow boundary directory probes as missing (native query policy).
     native.query.mockImplementationOnce((request) =>
       Promise.resolve({ ...reply(request), status: 'missing' }),
     );
     await vi.advanceTimersByTimeAsync(200);
     expect(model.currentReply()?.status).toBe('missing');
-    // The native traverse reads the directory, republishes the scope under
-    // revision 5, and returns the request-built pre-traversal reply: still
-    // revision 4 and missing. Convergence comes from the recovery fetch
+    // The native traverse reads the directory, republishes the root under
+    // revision 2, and returns the request-built pre-traversal reply: still
+    // revision 1 and missing. Convergence comes from the recovery fetch
     // adopting the republished scope, not from the reply's revision.
     native.complete.mockImplementationOnce((request) =>
       Promise.resolve({ ...reply(request), status: 'missing' }),
@@ -287,11 +251,11 @@ describe('derived Quick Open scope from the displayed file', () => {
     // The pre-traversal missing reply stays visible as "Reading folder…"
     // while the recovery fetch runs.
     expect(model.currentReply()).toMatchObject({
-      revision: 4,
+      revision: 1,
       status: 'missing',
     });
     expect(model.state.message).toBe('Reading folder…');
-    // The recovery fetch adopts the published scope: revision 5 survives
+    // The recovery fetch adopts the published scope: revision 2 survives
     // with the just-read directory, and the re-search is ready with it.
     const child = {
       id: 41,
@@ -312,14 +276,14 @@ describe('derived Quick Open scope from the displayed file', () => {
         results: [{ entry: child, positions: [] }],
       }),
     );
-    model.update({ ...derived, revision: 5, entries: [child] }, false);
+    model.update({ ...root(2), entries: [child] }, false);
     await vi.advanceTimersByTimeAsync(200);
     expect(native.query).toHaveBeenCalledTimes(2);
     expect(native.query.mock.calls[1][0]).toMatchObject({
-      scope: 30,
-      revision: 5,
+      scope: 7,
+      revision: 2,
     });
-    expect(model.currentReply()).toMatchObject({ revision: 5, total: 1 });
+    expect(model.currentReply()).toMatchObject({ revision: 2, total: 1 });
     model.close();
   });
 });
@@ -470,17 +434,14 @@ describe('revisioned getter and actual subscription lifecycle', () => {
         index: { ...root(), scope: 40 },
         status: { ...loadingSnapshot().status, scope: 40 },
       };
-      native.choose.mockResolvedValueOnce({
-        status: 'ready',
-        snapshot: nextLoading,
-      });
       const nextReady: IndexSnapshot = {
         index: { ...root(2), scope: 40 },
         status: { ...snapshot(2, 3).status, scope: 40 },
       };
       native.get.mockResolvedValue(nextReady);
-      await model.choose();
-      expect(model.state.root?.scope).toBe(40);
+      // A replaced working folder (scope 40) publishes while the old getter
+      // is held; the notification starts one superseding recovery.
+      native.listen.mock.calls[0][0](nextLoading.status);
       expect(model.state.rootBusy).toBe(true);
       await vi.advanceTimersByTimeAsync(completionDelay);
       expect(native.get).toHaveBeenCalledTimes(before + 1);
@@ -507,21 +468,23 @@ describe('revisioned getter and actual subscription lifecycle', () => {
         await model.refresh();
         expect(vi.getTimerCount()).toBe(1);
         const calls = native.get.mock.calls.length;
+        const replacement: IndexSnapshot = {
+          index: { ...root(), scope: 40 },
+          status: { ...snapshot().status, scope: 40 },
+        };
         if (end === 'disconnect') disconnect();
         else if (end === 'dispose') model.dispose();
         else {
-          native.choose.mockResolvedValueOnce({
-            status: 'ready',
-            snapshot: {
-              index: { ...root(), scope: 40 },
-              status: { ...snapshot().status, scope: 40 },
-            },
-          });
-          await model.choose();
+          native.get.mockResolvedValue(replacement);
+          native.listen.mock.calls[0][0](replacement.status);
+          await Promise.resolve();
+          await Promise.resolve();
         }
         expect(vi.getTimerCount()).toBe(0);
         await vi.advanceTimersByTimeAsync(completionDelay * 20);
-        expect(native.get).toHaveBeenCalledTimes(calls);
+        expect(native.get).toHaveBeenCalledTimes(
+          end === 'root' ? calls + 1 : calls,
+        );
       } finally {
         disconnect();
         model.dispose();
@@ -574,26 +537,19 @@ describe('revisioned getter and actual subscription lifecycle', () => {
     close();
     model.dispose();
   });
-  it.each(['cancelled', 'failed'] as const)(
-    'retains native loading ownership after a %s folder chooser',
-    async (outcome) => {
-      const native = bridge();
-      native.get.mockResolvedValue({
-        ...snapshot(),
-        status: { ...snapshot().status, phase: 'loading' },
-      });
-      if (outcome === 'failed')
-        native.choose.mockRejectedValueOnce({ message: 'Chooser failed' });
-      const model = new NavigationController(native);
-      await model.recover();
-      const before = model.state.root;
-      await model.choose();
-      expect(model.state.root).toBe(before);
-      expect(model.state.rootBusy).toBe(true);
-      expect(model.state.rootStatus).toBe('loading');
-      model.dispose();
-    },
-  );
+  it('keeps loading ownership while the working folder scan is in flight', async () => {
+    const native = bridge();
+    native.get.mockResolvedValue({
+      ...snapshot(),
+      status: { ...snapshot().status, phase: 'loading' },
+    });
+    const model = new NavigationController(native);
+    await model.recover();
+    expect(model.state.root).toEqual(snapshot().index);
+    expect(model.state.rootBusy).toBe(true);
+    expect(model.state.rootStatus).toBe('loading');
+    model.dispose();
+  });
   it('subscribes before getter, rejects older same-revision status, and disposes late installation', async () => {
     const native = bridge();
     const installing = deferred<() => void>();

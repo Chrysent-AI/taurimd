@@ -71,18 +71,11 @@ export const navigation: NavigationBridge = {
     ),
   query: (request) => invoke('query_index', { request }),
   complete: (request) => invoke('complete_path', { request }),
-  choose: (requestId) => invoke('select_root', { requestId }),
   refresh: (scopeId) => invoke('refresh_index', { scopeId }),
   siblings: (document) =>
     invoke('get_siblings', {
       documentId: document.documentId,
       revision: document.revision,
-    }),
-  quickScope: (document, reuse) =>
-    invoke('get_quick_index', {
-      documentId: document.documentId,
-      revision: document.revision,
-      reuse,
     }),
   preview: (binding, requestId) =>
     invoke('read_preview', { binding, requestId }),

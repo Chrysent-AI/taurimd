@@ -25,15 +25,25 @@ const root = (scope: number, name: string, revision = 1): FileIndex => ({
   issues: [],
 });
 async function choose(page: Page, index: FileIndex) {
+  // Opening a file establishes and announces that file's working folder.
   await page.evaluate((index) => {
-    window.readerFixture.enqueue('select_root', {
+    window.readerFixture.workingFolder(index);
+    window.readerFixture.enqueue('select_document', {
       value: {
         status: 'ready',
-        snapshot: window.readerFixture.indexSnapshot(index),
+        snapshot: {
+          documentId: 900,
+          revision: 1,
+          name: 'kept.log',
+          location: 'fixture/kept.log',
+          format: 'text',
+          source: 'kept',
+        },
       },
     });
-    return window.readerFixture.menu('open-folder');
+    return window.readerFixture.menu('open');
   }, index);
+  await expect(page.getByRole('article', { name: 'kept.log' })).toBeFocused();
   await expect(
     page.getByRole('navigation', { name: 'Files', exact: true }),
   ).toContainText('Folder loaded');
@@ -145,6 +155,13 @@ test('shared native emitter keeps commands, index watermarks, requests and notic
     }
     await choose(page, root(50, 'a'));
     await choose(other, root(7, 'b'));
+    // Each reader's own commit announces its working folder locally; count
+    // that baseline so only cross-reader leakage fails the locality check.
+    const ownDeliveries = broker.deliveries.filter(
+      (delivery) =>
+        delivery.event === 'index_status' &&
+        delivery.metadata.currentWindow.label === 'reader-b',
+    ).length;
     await other.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
     await other.clock.pauseAt(new Date('2026-01-01T00:00:01Z'));
     await other.evaluate(() => window.readerFixture.menu('quick-open'));
@@ -170,7 +187,7 @@ test('shared native emitter keeps commands, index watermarks, requests and notic
           delivery.event === 'index_status' &&
           delivery.metadata.currentWindow.label === 'reader-b',
       ),
-    ).toHaveLength(0);
+    ).toHaveLength(ownDeliveries);
     expect(await other.evaluate(() => window.readerFixture.indexGets())).toBe(
       beforeGets,
     );
@@ -201,7 +218,9 @@ test('shared native emitter keeps commands, index watermarks, requests and notic
         error: { code: 'notFound', message: 'Owner A document request' },
       }),
     );
-    await expect(page.getByRole('alert')).toContainText(
+    // Reader A has its working-folder fixture document displayed, so the
+    // request error surfaces as reading link status rather than an alert.
+    await expect(page.getByLabel('Reading link status')).toContainText(
       'Owner A document request',
     );
     expect(
@@ -216,7 +235,9 @@ test('shared native emitter keeps commands, index watermarks, requests and notic
     await page.evaluate(() =>
       window.readerFixture.readerNotice('Owner A notice'),
     );
-    await expect(page.getByRole('alert')).toContainText('Owner A notice');
+    await expect(page.getByLabel('Reading link status')).toContainText(
+      'Owner A notice',
+    );
     await expect(other.getByRole('alert')).toHaveCount(0);
     expect(
       broker.deliveries.filter(

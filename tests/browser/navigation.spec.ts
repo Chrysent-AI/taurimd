@@ -110,19 +110,34 @@ async function siblings(page: Page, active = 10, root = index()) {
     { active, root },
   );
 }
+const keptText: Snapshot = {
+  ...snapshot('kept.log', 900, 'kept'),
+  format: 'text',
+};
+async function openRoot(page: Page, doc: Snapshot, root: FileIndex | null) {
+  await page.evaluate(
+    ({ doc, root }) => {
+      window.readerFixture.workingFolder(root);
+      window.readerFixture.enqueue('select_document', {
+        value: { status: 'ready', snapshot: doc },
+      });
+      return window.readerFixture.menu('open');
+    },
+    { doc, root },
+  );
+  await expect(page.getByRole('article', { name: doc.name })).toBeFocused();
+  if (root) {
+    await expect(
+      page.getByRole('navigation', { name: 'Files', exact: true }),
+    ).toContainText(
+      root.issues.length ? 'incomplete results' : 'Folder loaded.',
+    );
+  }
+}
+// Opening a file establishes the working folder. A plain-text fixture keeps
+// the parse count at zero, matching the old chooser-based establishment.
 async function choose(page: Page, root = index()) {
-  await page.evaluate((root) => {
-    window.readerFixture.enqueue('select_root', {
-      value: {
-        status: 'ready',
-        snapshot: window.readerFixture.indexSnapshot(root),
-      },
-    });
-    return window.readerFixture.menu('open-folder');
-  }, root);
-  await expect(
-    page.getByRole('navigation', { name: 'Files', exact: true }),
-  ).toContainText(root.issues.length ? 'incomplete results' : 'Folder loaded.');
+  await openRoot(page, keptText, root);
 }
 async function open(page: Page, doc = snapshot()) {
   await page.evaluate((doc) => {
@@ -204,7 +219,10 @@ test('recursive folder disclosure and lazy shared-worker headings open the exact
   expect(await page.evaluate(() => window.readerFixture.workerParses())).toBe(
     0,
   );
-  await expect(page.getByRole('article')).toHaveCount(0);
+  // The working folder arrives with its plain-text fixture document; tree
+  // exploration adds no reading content of its own.
+  await expect(page.getByRole('article')).toHaveCount(1);
+  await expect(page.getByRole('article', { name: 'kept.log' })).toBeVisible();
   await expect(page.getByRole('tree')).toHaveCount(0);
   await expect(
     page.getByRole('button', { name: 'Open nested/deep.md', exact: true }),
@@ -225,11 +243,12 @@ test('recursive folder disclosure and lazy shared-worker headings open the exact
   expect(
     await page.evaluate(() => window.readerFixture.diagrams().renders.length),
   ).toBe(0);
-  expect(
-    (await page.evaluate(() => window.readerFixture.calls())).some(
-      (c) => c.command === 'resolve_media' || c.command === 'commit_document',
-    ),
-  ).toBe(false);
+  const explorations = (
+    await page.evaluate(() => window.readerFixture.calls())
+  ).filter(
+    (c) => c.command === 'resolve_media' || c.command === 'open_index_entry',
+  );
+  expect(explorations).toHaveLength(0);
   await siblings(page, 20);
   await page.evaluate(
     (doc) => {
@@ -262,8 +281,10 @@ test('recursive folder disclosure and lazy shared-worker headings open the exact
   const call = (await page.evaluate(() => window.readerFixture.calls())).find(
     (c) => c.command === 'open_index_entry',
   );
+  // Request 1 opened the working-folder fixture document; the tree read
+  // follows it.
   expect(call?.payload).toEqual({
-    requestId: 1,
+    requestId: 2,
     binding: { scope: 7, revision: 1, entry: 20 },
     newWindow: false,
   });
@@ -406,7 +427,7 @@ test('retains established disclosure nodes, cancels only hidden preview work, an
   await page.evaluate(() => window.readerFixture.menu('settings'));
   await page
     .getByRole('dialog')
-    .getByLabel('Show sidebar by default')
+    .getByLabel('Show File Explorer by default')
     .uncheck();
   await page
     .getByRole('dialog')
@@ -559,21 +580,14 @@ test('native-ranked immediate siblings stop at endpoints and retain persistent c
   );
 });
 
-test('folder cancel, empty, partial and denied refresh remain distinct and do not replace last-good reading or grants', async ({
+test('empty, partial and denied refresh stay distinct from each other and do not replace last-good reading or grants', async ({
   page,
 }) => {
   await choose(page);
   await open(page, snapshot('alpha.md', 10, '# Kept'));
   const article = await page.getByRole('article').elementHandle();
-  await page.evaluate(() => {
-    window.readerFixture.enqueue('select_root', {
-      value: { status: 'cancelled' },
-    });
-    return window.readerFixture.menu('open-folder');
-  });
-  await expect(
-    page.getByRole('navigation', { name: 'Files', exact: true }),
-  ).toContainText('folder unchanged');
+  // Opening from another folder replaces the working folder without a
+  // separate chooser step.
   const empty = {
     ...index(),
     scope: 8,
@@ -676,7 +690,7 @@ test('all navigation entry points reject composition, pending document commit an
   const before = await page.evaluate(() => window.readerFixture.calls().length);
   await page.evaluate(async () => {
     for (const action of [
-      'open-folder',
+      'toc',
       'refresh-folder',
       'reveal',
       'previous',
@@ -711,7 +725,7 @@ test('all navigation entry points reject composition, pending document commit an
     before,
   );
   await page.locator('.shell').dispatchEvent('compositionstart');
-  await page.evaluate(() => window.readerFixture.menu('open-folder'));
+  await page.evaluate(() => window.readerFixture.menu('toc'));
   expect(await page.evaluate(() => window.readerFixture.calls().length)).toBe(
     before,
   );
@@ -742,7 +756,7 @@ test('all navigation entry points reject composition, pending document commit an
     () => window.readerFixture.calls().length,
   );
   await page.evaluate(async () => {
-    await window.readerFixture.menu('open-folder');
+    await window.readerFixture.menu('toc');
     await window.readerFixture.menu('reveal');
   });
   expect(await page.evaluate(() => window.readerFixture.calls().length)).toBe(
@@ -847,26 +861,23 @@ for (const [palette] of palettes) {
 }
 
 for (const code of ['denied', 'notFound'] as const) {
-  test(`repair persistent ${code} root outcome survives chooser cancellation/error and reveal/jump feedback`, async ({
+  test(`repair persistent ${code} root outcome survives unrelated feedback and recovers through refresh`, async ({
     page,
   }, info) => {
     await open(page, snapshot('outside.md', 99, '# Kept reader\n## Target'));
     const article = await page.getByRole('article').elementHandle();
     const root = { ...index(), entries: [] };
+    // The working folder becomes unavailable through its watcher status, the
+    // way a removed or denied folder degrades in production.
     await page.evaluate(
-      ({ root, code }) => {
-        window.readerFixture.enqueue('select_root', {
-          value: {
-            status: 'ready',
-            snapshot: window.readerFixture.indexSnapshot(
-              root,
-              'unavailable',
-              `${code} root access`,
-            ),
-          },
-        });
-        return window.readerFixture.menu('open-folder');
-      },
+      ({ root, code }) =>
+        window.readerFixture.indexEvent(
+          window.readerFixture.indexSnapshot(
+            root,
+            'unavailable',
+            `${code} root access`,
+          ),
+        ),
       { root, code },
     );
     const files = page.getByRole('navigation', { name: 'Files', exact: true });
@@ -886,22 +897,6 @@ for (const code of ['denied', 'notFound'] as const) {
         ),
       ).toBe(true);
     };
-    await unavailable();
-    await page.evaluate(() => {
-      window.readerFixture.enqueue('select_root', {
-        value: { status: 'cancelled' },
-      });
-      return window.readerFixture.menu('open-folder');
-    });
-    await expect(files).toContainText('Folder selection cancelled');
-    await unavailable();
-    await page.evaluate(() => {
-      window.readerFixture.enqueue('select_root', {
-        error: { code: 'io', message: 'Chooser failed' },
-      });
-      return window.readerFixture.menu('open-folder');
-    });
-    await expect(files).toContainText('Could not choose folder');
     await unavailable();
     await page.evaluate(() => window.readerFixture.menu('reveal'));
     await expect(files).toContainText('Sent outside.md to the file manager');
@@ -1302,6 +1297,8 @@ for (const direction of ['previous', 'next'] as const)
               .filter((call) => call.command === 'open_index_entry').length,
         ),
       ).toBe(1);
+      // One fixture commit established the working folder; the open and the
+      // endpoint navigation add two more.
       expect(
         await page.evaluate(
           () =>
@@ -1309,7 +1306,7 @@ for (const direction of ['previous', 'next'] as const)
               .calls()
               .filter((call) => call.command === 'commit_document').length,
         ),
-      ).toBe(2);
+      ).toBe(3);
       await page.screenshot({
         path: info.outputPath('menu-endpoint-focus.png'),
       });
@@ -1616,15 +1613,118 @@ test('a sort-only interaction replaces no reading session', async ({
   expect(
     calls.filter((call) => call.command === 'open_index_entry'),
   ).toHaveLength(1);
+  // The working-folder fixture document adds the other commit.
   expect(
     calls.filter((call) => call.command === 'commit_document'),
-  ).toHaveLength(1);
+  ).toHaveLength(2);
   expect(calls.filter((call) => call.command === 'resolve_media')).toHaveLength(
     1,
   );
   await article.dispose();
   await media.dispose();
   await figure.dispose();
+});
+
+test('opening a file adopts its folder without a picker step; depth and pane preferences are remembered and both-hidden stays readable', async ({
+  page,
+}, info) => {
+  const tree = index();
+  // One open: the document commits and its folder becomes the watched
+  // working folder. No chooser command exists at all.
+  await openRoot(page, snapshot('alpha.md', 10, text), tree);
+  await siblings(page, 10);
+  const files = page.getByRole('navigation', { name: 'Files', exact: true });
+  await expect(
+    files.getByRole('button', { name: 'Open nested/deep.md', exact: true }),
+  ).toBeHidden();
+  await page
+    .getByRole('button', { name: 'Expand folder nested', exact: true })
+    .click();
+  await expect(
+    files.getByRole('button', { name: 'Open nested/deep.md', exact: true }),
+  ).toBeVisible();
+  // Adoption is not an operation: besides the document open, its commit,
+  // sibling enumeration and the document's own media resolution, the
+  // interaction issued no folder-picking or separate indexing command.
+  const interaction = (
+    await page.evaluate(() => window.readerFixture.calls())
+  ).map((call) => call.command);
+  expect(
+    interaction.filter(
+      (name) =>
+        name !== 'select_document' &&
+        name !== 'commit_document' &&
+        name !== 'get_siblings' &&
+        name !== 'resolve_media',
+    ),
+  ).toEqual([]);
+  // The right-hand Table of Contents renders beside the article.
+  const outline = page.getByRole('navigation', { name: 'On this page' });
+  await expect(outline).toBeVisible();
+  await expect(outline.getByRole('link', { name: /Repeat/ })).toHaveCount(2);
+  await page.screenshot({ path: info.outputPath('three-pane.png') });
+  // View → Show Table of Contents hides the right pane and remembers it.
+  await page.evaluate(() => window.readerFixture.menu('toc'));
+  await expect(outline).toBeHidden();
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.readerFixture.settings().settings.tocVisible),
+    )
+    .toBe(false);
+  await expect(
+    page.getByRole('dialog').getByLabel('Show Table of Contents by default'),
+  ).toHaveCount(0);
+  await page.evaluate(() => window.readerFixture.menu('settings'));
+  const dialog = page.getByRole('dialog', { name: 'Settings', exact: true });
+  await expect(
+    dialog.getByLabel('Show Table of Contents by default'),
+  ).not.toBeChecked();
+  await expect(
+    dialog.getByLabel('Show File Explorer by default'),
+  ).toBeChecked();
+  // The indexing depth is offered as a remembered choice.
+  await expect(
+    dialog.getByLabel('Indexing depth', { exact: true }),
+  ).toHaveValue('4');
+  await dialog.getByLabel('Indexing depth', { exact: true }).selectOption('6');
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.readerFixture.settings().settings.navigationDepth,
+      ),
+    )
+    .toBe(6);
+  const calls = await page.evaluate(() => window.readerFixture.settingsCalls());
+  // Revision 1 came from the Table of Contents toggle; the depth rides the
+  // same revisioned store.
+  expect(calls.at(-1)).toEqual({
+    command: 'update_settings',
+    payload: { expectedRevision: 1, patch: { navigationDepth: 6 } },
+  });
+  await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+  // A reload restores the remembered choices: the Table of Contents stays
+  // hidden, the File Explorer stays visible.
+  await page.reload();
+  await expect(
+    page.getByRole('navigation', { name: 'On this page' }),
+  ).toBeHidden();
+  await expect(
+    page.getByRole('navigation', { name: 'Files', exact: true }),
+  ).toBeVisible();
+  // Hiding the explorer too leaves a quiet reader-only shell, and the
+  // outline returns on its own command alone.
+  await page.evaluate(() => window.readerFixture.menu('sidebar'));
+  await expect(
+    page.getByRole('navigation', { name: 'Files', exact: true }),
+  ).toBeHidden();
+  await expect(
+    page.getByRole('navigation', { name: 'On this page' }),
+  ).toBeHidden();
+  await page.screenshot({ path: info.outputPath('reader-only.png') });
+  await page.evaluate(() => window.readerFixture.menu('toc'));
+  await expect(
+    page.getByRole('navigation', { name: 'On this page' }),
+  ).toBeVisible();
 });
 
 test('Cmd/Ctrl+Arrow keys open the first and last sibling on overfilled documents without scrolling', async ({

@@ -56,6 +56,19 @@ pub struct SettingsV1 {
     pub file_sort_key: FileSortKey,
     pub file_sort_direction: FileSortDirection,
     pub remote_image_hosts: Vec<String>,
+    /// How many directory levels of the working folder the explorer indexes.
+    /// The single home for the default and the accepted range; the scan
+    /// engine clamps against `NAVIGATION_DEPTH_MAX` before consuming it.
+    pub navigation_depth: u8,
+    /// Whether the right-hand "On this page" pane starts visible.
+    pub toc_visible: bool,
+}
+/// The explorer indexing depth is a whole number of directory levels between
+/// 1 and `NAVIGATION_DEPTH_MAX`, defaulting to `NAVIGATION_DEPTH_DEFAULT`.
+pub const NAVIGATION_DEPTH_DEFAULT: u8 = 4;
+pub const NAVIGATION_DEPTH_MAX: u8 = 8;
+fn valid_depth(depth: u8) -> bool {
+    (1..=NAVIGATION_DEPTH_MAX).contains(&depth)
 }
 impl Default for SettingsV1 {
     fn default() -> Self {
@@ -70,6 +83,8 @@ impl Default for SettingsV1 {
             file_sort_key: FileSortKey::Name,
             file_sort_direction: FileSortDirection::Asc,
             remote_image_hosts: remote_images::starter_host_list(),
+            navigation_depth: NAVIGATION_DEPTH_DEFAULT,
+            toc_visible: true,
         }
     }
 }
@@ -94,6 +109,8 @@ pub struct Patch {
     pub file_sort_key: Option<FileSortKey>,
     pub file_sort_direction: Option<FileSortDirection>,
     pub remote_image_hosts: Option<Vec<String>>,
+    pub navigation_depth: Option<u8>,
+    pub toc_visible: Option<bool>,
 }
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
@@ -147,10 +164,15 @@ impl SettingsStore {
                         let mut fields = serde_json::to_value(SettingsV1::default())
                             .expect("settings serialize");
                         for (key, default) in fields.as_object_mut().expect("settings object") {
-                            // This field was added to version 1; absence alone is not corruption.
+                            // These fields were added to version 1 after the
+                            // first release; absence alone is not corruption.
                             if matches!(
                                 key.as_str(),
-                                "statusVisible" | "fileSortKey" | "fileSortDirection"
+                                "statusVisible"
+                                    | "fileSortKey"
+                                    | "fileSortDirection"
+                                    | "navigationDepth"
+                                    | "tocVisible"
                             ) && value["settings"].get(key).is_none()
                             {
                                 continue;
@@ -192,6 +214,10 @@ impl SettingsStore {
                                     .as_u64()
                                     .and_then(|n| u16::try_from(n).ok())
                                     .is_some_and(valid_zoom),
+                                "navigationDepth" => candidate
+                                    .as_u64()
+                                    .and_then(|n| u8::try_from(n).ok())
+                                    .is_some_and(valid_depth),
                                 _ => candidate.is_boolean(),
                             };
                             if valid {
@@ -245,6 +271,15 @@ impl SettingsStore {
                 "Page zoom must be 50–300% in steps of 10%.",
             ));
         }
+        if patch
+            .navigation_depth
+            .is_some_and(|depth| !valid_depth(depth))
+        {
+            return Err(AppError::new(
+                "unsupported",
+                "Indexing depth must be a whole number of levels between 1 and 8.",
+            ));
+        }
         // The whole host list is validated before any field is applied: an
         // invalid entry rejects the patch without partial mutation.
         let remote_hosts = match &patch.remote_image_hosts {
@@ -285,6 +320,12 @@ impl SettingsStore {
         }
         if let Some(value) = remote_hosts {
             next.settings.remote_image_hosts = value;
+        }
+        if let Some(value) = patch.navigation_depth {
+            next.settings.navigation_depth = value;
+        }
+        if let Some(value) = patch.toc_visible {
+            next.settings.toc_visible = value;
         }
         next.revision = next.revision.checked_add(1).ok_or_else(unavailable)?;
         next.notice = None;

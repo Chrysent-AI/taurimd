@@ -88,16 +88,8 @@ export interface NavigationBridge {
   listen(receive: (status: IndexStatus) => void): Promise<() => void>;
   query(request: QueryRequest): Promise<QueryReply>;
   complete(request: QueryRequest): Promise<QueryReply>;
-  choose(
-    requestId: number,
-  ): Promise<
-    { status: 'cancelled' } | { status: 'ready'; snapshot: IndexSnapshot }
-  >;
   refresh(scopeId: number): Promise<IndexSnapshot>;
   siblings(document: Snapshot): Promise<Siblings>;
-  // `reuse` adopts the native scope already published by a directory
-  // traversal instead of rescanning it away; overlay opens omit it.
-  quickScope(document: Snapshot, reuse?: boolean): Promise<FileIndex>;
   preview(binding: EntryBinding, requestId: number): Promise<Snapshot>;
   cancelPreview(requestId: number): Promise<unknown>;
   reveal(document: Snapshot): Promise<unknown>;

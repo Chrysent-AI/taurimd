@@ -141,10 +141,14 @@ test('platform icon references preserve the five Markdown Viewer associations', 
 
 test('README reuses the lightweight relative logo with alt text and display size', () => {
   const readme = read('README.md').toString();
+  // The header block is centered (the human's chosen format, 0ec2483); the
+  // invariant is the lightweight relative logo, its alt text and its
+  // display size — not the surrounding markup.
   assert.match(
     readme,
-    /^# taurimd\n\n<img src="src-tauri\/icons\/icon\.png" alt="taurimd logo: [^"]+" width="160" height="160" \/>/,
+    /<img src="src-tauri\/icons\/icon\.png" alt="taurimd logo: [^"]+" width="160" height="160" \/>/,
   );
+  assert.ok(!/<img [^>]*src="https?:\/\//.test(readme));
   assert.ok(!readme.includes('logo-master.png'));
   const ignore = read('.gitignore').toString();
   for (const name of ['icon.png', 'icon.ico', 'icon.icns', 'logo-master.png']) {

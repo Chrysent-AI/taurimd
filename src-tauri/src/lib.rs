@@ -6,8 +6,8 @@ mod navigation;
 mod navigation_cache;
 mod navigation_commands;
 use navigation_commands::{
-    cancel_preview, complete_path, get_index, get_quick_index, get_siblings, open_index_entry,
-    query_index, read_preview, refresh_index, reveal_document, select_root,
+    adopt_working_folder, cancel_preview, complete_path, get_index, get_siblings, open_index_entry,
+    query_index, read_preview, refresh_index, reveal_document,
 };
 mod presentation;
 mod remote_images;
@@ -166,7 +166,6 @@ async fn reload_document(
     let (granted, cancel) = {
         let mut session = session(&window, &state)?;
         let granted = session.active(document_id, revision)?;
-        session.navigation.retire_derived();
         if session
             .navigation
             .root
@@ -203,6 +202,16 @@ fn commit_document(window: WebviewWindow, request_id: u32) -> Result<(), AppErro
         );
         eprintln!("Window title update failed: {error}");
     }
+    // The committed document's folder becomes the watched working folder.
+    // Adoption never fails the commit and runs off the command path: the
+    // document is already displayed and folder problems surface as explorer
+    // status, not dialog errors.
+    let adopted = window.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = adopt_working_folder(adopted).await {
+            eprintln!("Working folder adoption failed: {}", error.message);
+        }
+    });
     Ok(())
 }
 #[tauri::command]
@@ -597,12 +606,18 @@ async fn update_settings(
 ) -> Result<Update, AppError> {
     settings_caller(&window)?;
     let app = window.app_handle().clone();
+    let depth_changed = patch.navigation_depth.is_some();
     tauri::async_runtime::spawn_blocking(move || {
         app.state::<SettingsStore>()
             .update(expected_revision, patch, |record| {
                 // Retired remote grants are pruned before the committed
                 // revision is announced.
                 windows::prune_remote(&app);
+                // A depth change takes effect by rescanning every reader's
+                // working folder through its own watcher worker.
+                if depth_changed {
+                    windows::refresh_working_folders(&app);
+                }
                 if let Err(error) = app.emit("settings_changed", record) {
                     eprintln!("Preferences notification failed: {error}");
                 }
@@ -692,13 +707,11 @@ pub fn run() {
             append_export_image,
             finish_export,
             cancel_export,
-            select_root,
             get_index,
             query_index,
             complete_path,
             refresh_index,
             get_siblings,
-            get_quick_index,
             read_preview,
             cancel_preview,
             open_index_entry,
@@ -756,10 +769,18 @@ pub fn run() {
             let sidebar = CheckMenuItem::with_id(
                 app,
                 "sidebar",
-                "Show Sidebar",
+                "Show File Explorer",
                 true,
                 true,
                 Some("CmdOrCtrl+Shift+B"),
+            )?;
+            let toc = CheckMenuItem::with_id(
+                app,
+                "toc",
+                "Show Table of Contents",
+                true,
+                true,
+                None::<&str>,
             )?;
             let appearance_system = CheckMenuItem::with_id(
                 app,
@@ -897,6 +918,7 @@ pub fn run() {
                     &PredefinedMenuItem::separator(app)?,
                     &status,
                     &sidebar,
+                    &toc,
                     &Submenu::with_items(
                         app,
                         "Appearance",
@@ -923,7 +945,6 @@ pub fn run() {
                 Submenu::with_items(app, "Diagram", true, &[&fit, &export_svg, &export_png])?;
             let open = MenuItem::with_id(app, "open", "Open File…", true, Some("CmdOrCtrl+O"))?;
             let reload = MenuItem::with_id(app, "reload", "Reload", false, Some("CmdOrCtrl+R"))?;
-            let folder = MenuItem::with_id(app, "open-folder", "Open Folder…", true, None::<&str>)?;
             let reveal = MenuItem::with_id(
                 app,
                 "reveal",
@@ -943,7 +964,6 @@ pub fn run() {
                 true,
                 &[
                     &open,
-                    &folder,
                     &reveal,
                     &reload,
                     &information,
@@ -991,7 +1011,6 @@ pub fn run() {
                     ("find-next", find_next),
                     ("find-previous", find_previous),
                     ("quick-open", quick_open),
-                    ("open-folder", folder),
                     ("reveal", reveal),
                     ("previous", previous),
                     ("next", next),
@@ -1012,6 +1031,7 @@ pub fn run() {
                 ],
                 navigation_checks: vec![
                     ("sidebar", sidebar),
+                    ("toc", toc),
                     ("sort-name", sort_name),
                     ("sort-modified", sort_modified),
                     ("sort-size", sort_size),

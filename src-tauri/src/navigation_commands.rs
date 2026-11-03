@@ -1,130 +1,138 @@
 use super::{ReaderState, session};
 use crate::{
     documents::{AppError, Session, Snapshot},
-    navigation::{self, Binding, Index, Siblings},
-    navigation_cache::{self, RootWorker, Snapshot as CacheSnapshot, Status},
+    navigation::{self, Binding, Siblings},
+    navigation_cache::{self, RootWorker, Snapshot as CacheSnapshot, Status as CacheStatus},
+    settings::SettingsStore,
     windows::reader,
 };
 use serde::Serialize;
 use std::sync::atomic::Ordering;
-use tauri::{Emitter, EventTarget, Manager, WebviewWindow};
-use tauri_plugin_dialog::DialogExt;
+use tauri::{AppHandle, Emitter, EventTarget, Manager, WebviewWindow};
 use tauri_plugin_opener::OpenerExt;
 
-#[derive(Serialize)]
-#[serde(tag = "status", rename_all = "camelCase")]
-pub enum RootSelection {
-    Cancelled,
-    Ready { snapshot: CacheSnapshot },
+/// Reads the configured explorer indexing depth for one worker scan.
+fn explorer_depth(app: &AppHandle) -> usize {
+    usize::from(
+        app.state::<SettingsStore>()
+            .get()
+            .map(|record| record.settings.navigation_depth)
+            .unwrap_or(crate::settings::NAVIGATION_DEPTH_DEFAULT),
+    )
 }
-#[tauri::command]
-pub async fn select_root(
-    window: WebviewWindow,
-    request_id: u32,
-) -> Result<RootSelection, AppError> {
+
+/// Marks the working folder unavailable for an adoption failure. The status
+/// keeps its current scope identity — the default scope 0 when no root has
+/// ever existed, the previous root's id otherwise — so the frontend watermark
+/// accepts it either way. Returns the status for the window-local
+/// announcement; the caller emits it off the session lock.
+pub(crate) fn mark_root_unavailable(session: &mut Session, message: String) -> CacheStatus {
+    session.navigation.status.phase = "unavailable";
+    session.navigation.status.message = message;
+    session.navigation.status.sequence += 1;
+    session.navigation.status.clone()
+}
+
+/// Ensures the displayed document's folder is the watched working folder:
+/// opening a file from a new directory retires the previous root and its
+/// watcher worker and scans the new one; reopening a file from the same
+/// folder keeps the root, its revision and its watcher untouched. Runs off
+/// the commit path, and never fails the commit itself: folder problems
+/// surface as explorer status, not dialog errors.
+pub(crate) async fn adopt_working_folder(window: WebviewWindow) -> Result<(), AppError> {
     let state = reader(&window)?;
-    session(&window, &state)?.navigation.choose(request_id)?;
-    let handle = window.clone();
-    let selected = tauri::async_runtime::spawn_blocking(move || {
-        handle
-            .dialog()
-            .file()
-            .set_parent(&handle)
-            .set_title("Open folder")
-            .blocking_pick_folder()
-    })
-    .await
-    .map_err(|_| AppError::new("resourceFailure", "The folder chooser failed."))?;
-    session(&window, &state)?.navigation.chosen(request_id)?;
-    let Some(selected) = selected else {
-        return Ok(RootSelection::Cancelled);
+    let parent = {
+        let session = session(&window, &state)?;
+        let Some(document) = session.displayed() else {
+            return Ok(());
+        };
+        document.parent.clone()
     };
-    let path = selected
-        .into_path()
-        .map_err(|_| AppError::new("unsupported", "Choose a local folder."))?;
-    let handle = window.clone();
-    let snapshot = tauri::async_runtime::spawn_blocking(move || {
-        let path = navigation::root_path(&path)?;
-        let (id, lifetime, old) = {
-            let mut session = session(&handle, &state)?;
-            session.navigation.chosen(request_id)?;
-            let old = session.navigation.worker.take();
-            if let Some(old) = &old {
-                old.stop();
-            }
-            let scope = session.navigation.start(path.clone(), true, false)?;
-            session.navigation.status = Status {
-                scope: scope.id,
-                revision: scope.revision,
-                phase: "loading",
-                ..Status::default()
+    // A vanished or now-ungrantable folder cannot adopt a root. Mark the
+    // status unavailable and announce it so the explorer and Quick Open show
+    // the settled degradation instead of claiming an indexing pass.
+    let path = match navigation::root_path(&parent) {
+        Ok(path) => path,
+        Err(error) => {
+            let status = {
+                let mut session = session(&window, &state)?;
+                mark_root_unavailable(&mut session, error.message.clone())
             };
-            (scope.id, scope.lifetime.clone(), old)
-        };
-        if let Some(old) = old {
-            old.retire();
+            let _ = window.emit_to(
+                EventTarget::webview_window(window.label()),
+                "index_status",
+                status,
+            );
+            return Err(error);
         }
-        let owner = handle.clone();
-        let worker_state = state.clone();
-        let worker = RootWorker::start(path, lifetime, move |work| {
-            navigation_cache::apply(&worker_state, id, work, |status| {
-                let _ = owner.emit_to(
-                    EventTarget::webview_window(owner.label()),
-                    "index_status",
-                    status,
-                );
-            })
-        });
-        let worker = match worker {
-            Ok(worker) => worker,
-            Err(error) => {
-                let status = {
-                    let mut session = session(&handle, &state)?;
-                    if session
-                        .navigation
-                        .root
-                        .as_ref()
-                        .is_none_or(|root| root.id != id)
-                    {
-                        return Err(Session::stale());
-                    }
-                    session.navigation.status.phase = "unavailable";
-                    session.navigation.status.message = error.message.clone();
-                    session.navigation.status.sequence += 1;
-                    session.navigation.status.clone()
-                };
-                let _ = handle.emit_to(
-                    EventTarget::webview_window(handle.label()),
-                    "index_status",
-                    status,
-                );
-                return Err(error);
-            }
-        };
-        let mut worker = Some(worker);
-        let snapshot = {
-            let mut session = session(&handle, &state)?;
-            if session
-                .navigation
-                .root
-                .as_ref()
-                .is_some_and(|root| root.id == id)
-            {
-                session.navigation.worker = worker.take();
-                Some(CacheSnapshot::get(&session))
-            } else {
-                None
-            }
-        };
-        if let Some(worker) = worker {
-            worker.retire();
+    };
+    let replaced = {
+        let mut session = session(&window, &state)?;
+        session.navigation.adopt_root(path.clone())?
+    };
+    let Some((scope, retired)) = replaced else {
+        return Ok(());
+    };
+    if let Some(old) = retired {
+        old.retire();
+    }
+    let id = scope.id;
+    let lifetime = scope.lifetime.clone();
+    let worker_state = state.clone();
+    let owner = window.clone();
+    let worker = RootWorker::start(path, lifetime, move |work| {
+        // The depth is read at scan time so a settings change takes effect
+        // on the very next scan without restarting the worker.
+        let app = owner.app_handle();
+        navigation_cache::apply(&worker_state, id, work, explorer_depth(app), |status| {
+            let _ = owner.emit_to(
+                EventTarget::webview_window(owner.label()),
+                "index_status",
+                status,
+            );
+        })
+    });
+    let handle = window.clone();
+    let mut installed = Some(match worker {
+        Ok(worker) => worker,
+        Err(error) => {
+            let status = {
+                let mut session = session(&handle, &state)?;
+                if session
+                    .navigation
+                    .root
+                    .as_ref()
+                    .is_none_or(|root| root.id != id)
+                {
+                    return Err(error);
+                }
+                mark_root_unavailable(&mut session, error.message.clone())
+            };
+            let _ = handle.emit_to(
+                EventTarget::webview_window(handle.label()),
+                "index_status",
+                status,
+            );
+            return Err(error);
         }
-        snapshot.ok_or_else(Session::stale)
-    })
-    .await
-    .map_err(|_| AppError::new("resourceFailure", "Folder enumeration was interrupted."))??;
-    Ok(RootSelection::Ready { snapshot })
+    });
+    {
+        let mut session = session(&window, &state)?;
+        if session
+            .navigation
+            .root
+            .as_ref()
+            .is_some_and(|root| root.id == id)
+        {
+            session.navigation.worker = installed.take();
+        }
+    }
+    if let Some(worker) = installed {
+        worker.retire();
+    }
+    Ok(())
 }
+
 #[tauri::command]
 pub fn get_index(window: WebviewWindow) -> Result<CacheSnapshot, AppError> {
     let state = reader(&window)?;
@@ -180,39 +188,23 @@ async fn search(
         if current.revision != answer.reply.revision {
             return Err(Session::stale());
         }
-        let rooted = nav.root.as_ref().is_some_and(|root| root.id == current.id);
         if traverse {
-            answer
-                .missing
-                .take()
-                .map(|path| (rooted, current.path.clone(), path))
+            answer.missing.take()
         } else {
             None
         }
     };
-    if let Some((rooted, scope_path, path)) = follow_up {
-        if rooted {
-            let session = session(&window, &state)?;
-            session
-                .navigation
-                .worker
-                .as_ref()
-                .ok_or_else(Session::stale)?
-                .directory(path);
-        } else {
-            // The derived scope has no worker or watcher: read the requested
-            // directory into it now so the retried query can answer.
-            let draft = {
-                let mut session = session(&window, &state)?;
-                session.navigation.start_quick(scope_path, true)?
-            };
-            let scanned = tauri::async_runtime::spawn_blocking(move || {
-                navigation::scan_directory(draft, path)
-            })
-            .await
-            .map_err(|_| AppError::new("resourceFailure", "File filtering was interrupted."))??;
-            session(&window, &state)?.navigation.publish(scanned)?;
-        }
+    if let Some(path) = follow_up {
+        // The watched root owns the only queryable scope; its worker reads
+        // the requested directory under a new revision so the retried query
+        // can answer without a separate indexing step.
+        let session = session(&window, &state)?;
+        session
+            .navigation
+            .worker
+            .as_ref()
+            .ok_or_else(Session::stale)?
+            .directory(path);
     }
     Ok(answer.reply)
 }
@@ -230,6 +222,11 @@ pub async fn complete_path(
 ) -> Result<navigation::query::Reply, AppError> {
     search(window, request, true).await
 }
+/// Sibling navigation reads the watched working folder: the displayed file's
+/// neighbors are the indexed entries of its directory inside that root.
+/// Before the root's scan has published (or while it is unavailable) the
+/// reply carries the retained index with no active neighbor, and the next
+/// root publication under a new revision re-runs the query.
 #[tauri::command]
 pub async fn get_siblings(
     window: WebviewWindow,
@@ -237,96 +234,31 @@ pub async fn get_siblings(
     revision: u32,
 ) -> Result<Siblings, AppError> {
     let state = reader(&window)?;
-    let (document, scope) = {
-        let mut session = session(&window, &state)?;
-        let document = session.active(document_id, revision)?;
-        if let Some(siblings) = session.navigation.root_siblings(&document.path) {
-            return Ok(siblings);
-        }
-        if let Some(siblings) = session.navigation.parent_siblings(&document.path) {
-            return Ok(siblings);
-        }
-        let scope = session
-            .navigation
-            .start(document.parent.clone(), false, false)?;
-        (document, scope)
-    };
-    let handle = window.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let scope = navigation::scan(scope, false)?;
-        let mut session = session(&handle, &state)?;
-        session.active(document_id, revision)?;
-        let index = session.navigation.publish(scope)?;
-        let scope = session.navigation.scope(index.scope)?;
-        let active = scope.member(&document.path);
-        let root_active = session
-            .navigation
-            .root
-            .as_ref()
-            .filter(|root| root.live().is_ok())
-            .and_then(|root| root.member(&document.path));
-        let in_root = root_active.is_some();
-        Ok(Siblings {
+    let session = session(&window, &state)?;
+    let document = session.active(document_id, revision)?;
+    let root = session
+        .navigation
+        .root
+        .as_ref()
+        .ok_or_else(Session::stale)?;
+    if root.unpublished_or_dead() {
+        let index = root.index();
+        return Ok(Siblings {
             index,
-            active,
-            in_root,
-            root_active,
-        })
-    })
-    .await
-    .map_err(|_| AppError::new("resourceFailure", "Sibling enumeration was interrupted."))?
-}
-/// Materialize the Quick Open scope from the displayed document's folder:
-/// a depth-capped recursive prefetch that feeds the existing query scoring.
-/// The scope follows the displayed document and is re-scanned each time the
-/// overlay opens without a folder root. It has no watcher, so while the
-/// overlay stays open results are refreshed by a directory traversal plus a
-/// recovery fetch: the traversal reads the directory into the published
-/// scope under a new revision, and `reuse` adopts that scope instead of
-/// rescanning it away. Without `reuse` the fetch always rescans.
-#[tauri::command]
-pub async fn get_quick_index(
-    window: WebviewWindow,
-    document_id: u32,
-    revision: u32,
-    reuse: Option<bool>,
-) -> Result<Index, AppError> {
-    let state = reader(&window)?;
-    let parent = {
-        let session = session(&window, &state)?;
-        let document = session.active(document_id, revision)?;
-        document.parent.clone()
-    };
-    let handle = window.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut adopted = None;
-        if reuse == Some(true) {
-            let session = session(&handle, &state)?;
-            session.active(document_id, revision)?;
-            adopted = session.navigation.adopt_quick(&parent);
-        }
-        let index = match adopted {
-            Some(index) => index,
-            // No live published scope to adopt (first open, the document
-            // moved, or a plain open): scan a fresh depth-capped draft.
-            None => {
-                let draft = {
-                    let mut session = session(&window, &state)?;
-                    let document = session.active(document_id, revision)?;
-                    session
-                        .navigation
-                        .start_quick(document.parent.clone(), false)?
-                };
-                let scope = navigation::scan_subtree(draft)?;
-                let mut session = session(&handle, &state)?;
-                session.active(document_id, revision)?;
-                session.navigation.publish(scope)?
-            }
-        };
-        Ok::<_, AppError>(index)
-    })
-    .await
-    .map_err(|_| AppError::new("resourceFailure", "Quick Open indexing was interrupted."))?
+            active: None,
+            in_root: true,
+            root_active: None,
+        });
+    }
+    Ok(session
+        .navigation
+        .root_siblings(&document.path)
+        .unwrap_or(Siblings {
+            index: root.index(),
+            active: None,
+            in_root: false,
+            root_active: None,
+        }))
 }
 #[tauri::command]
 pub async fn read_preview(

@@ -43,10 +43,8 @@ type Command =
   | 'get_index'
   | 'query_index'
   | 'complete_path'
-  | 'select_root'
   | 'refresh_index'
   | 'get_siblings'
-  | 'get_quick_index'
   | 'read_preview'
   | 'cancel_preview'
   | 'open_index_entry'
@@ -104,24 +102,18 @@ function indexSnapshot(
   };
 }
 let cachedIndex = indexSnapshot(null);
-// Quick Open's derived scope: served to get_quick_index callers and matched
-// by scope id in query doubles, mirroring how native queries resolve the
-// scope their request names.
-let quickIndex: FileIndex = {
-  scope: 2,
-  revision: 1,
-  name: 'fixture',
-  entries: [],
-  issues: [],
-};
+// The working folder the double installs when a document commit adopts it,
+// mirroring how the native side establishes the watched root at file open.
+// A null value keeps the cached index untouched, so reader-only flows can
+// open documents without populating the explorer.
+let workingFolder: FileIndex | null = null;
 function queryReply(request: QueryRequest): QueryReply {
   // Matching here is only a transport double; native policy is tested in Rust.
   const outside =
     request.text.startsWith('/') ||
     request.text.startsWith('~') ||
     request.text.startsWith('..');
-  const source =
-    request.scope === quickIndex.scope ? quickIndex : cachedIndex.index;
+  const source = cachedIndex.index;
   const results = (source?.entries ?? [])
     .flatMap((entry) => {
       const characters = Array.from(entry.relative);
@@ -349,10 +341,8 @@ mockIPC(async (command, payload) => {
       'get_index',
       'query_index',
       'complete_path',
-      'select_root',
       'refresh_index',
       'get_siblings',
-      'get_quick_index',
       'read_preview',
       'cancel_preview',
       'open_index_entry',
@@ -443,8 +433,6 @@ mockIPC(async (command, payload) => {
       if (!reply && received) return structuredClone(received);
     }
     if (!reply && name === 'get_index') return structuredClone(cachedIndex);
-    if (!reply && name === 'get_quick_index')
-      return structuredClone(quickIndex);
     if (!reply && (name === 'query_index' || name === 'complete_path'))
       return queryReply((payload as { request: QueryRequest }).request);
     if (!reply && name === 'get_siblings') return structuredClone(siblingReply);
@@ -458,8 +446,16 @@ mockIPC(async (command, payload) => {
       applyPresentation();
       return null;
     }
-    if (!reply && (name === 'commit_document' || name === 'cancel_operation'))
+    if (!reply && name === 'cancel_operation') return null;
+    if (!reply && name === 'commit_document') {
+      // The native side adopts the committed document's folder as the
+      // watched working folder and announces it through index_status.
+      if (workingFolder) {
+        cachedIndex = indexSnapshot(workingFolder);
+        await nativeEvent('index_status', cachedIndex.status);
+      }
       return null;
+    }
     if (!reply && name === 'get_settings') return structuredClone(settings);
     if (!reply && name === 'cancel_remote_image') return null;
     if (!reply && name === 'resolve_media' && binding) {
@@ -500,13 +496,6 @@ mockIPC(async (command, payload) => {
       // Tauri rejects commands with the serialized AppError DTO, not a JS Error.
       // eslint-disable-next-line @typescript-eslint/only-throw-error
       throw outcome.error;
-    }
-    if (name === 'select_root') {
-      const selection = outcome.value as {
-        status: string;
-        snapshot?: IndexSnapshot;
-      };
-      if (selection.snapshot) cachedIndex = structuredClone(selection.snapshot);
     }
     if (name === 'refresh_index')
       cachedIndex = structuredClone(outcome.value as IndexSnapshot);
@@ -624,8 +613,8 @@ const fixture = {
   setSiblings: (value: Siblings) => {
     siblingReply = structuredClone(value);
   },
-  quickIndex: (value: FileIndex) => {
-    quickIndex = structuredClone(value);
+  workingFolder: (value: FileIndex | null) => {
+    workingFolder = value === null ? null : structuredClone(value);
   },
   workerParses: () => workerParses,
   enqueue(command: Command, reply: Reply) {
@@ -646,10 +635,8 @@ const fixture = {
     structuredClone(
       calls.filter((call) =>
         [
-          'select_root',
           'refresh_index',
           'get_siblings',
-          'get_quick_index',
           'read_preview',
           'cancel_preview',
           'open_index_entry',
@@ -664,7 +651,6 @@ const fixture = {
           call.command !== 'pending_document' &&
           call.command !== 'get_index' &&
           call.command !== 'get_siblings' &&
-          call.command !== 'get_quick_index' &&
           call.command !== 'get_settings' &&
           call.command !== 'update_settings' &&
           call.command !== 'present_reader',
@@ -716,7 +702,7 @@ const fixture = {
       | 'find-next'
       | 'find-previous'
       | 'quick-open'
-      | 'open-folder'
+      | 'toc'
       | 'refresh-folder'
       | 'reveal'
       | 'sidebar'

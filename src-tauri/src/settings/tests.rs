@@ -466,7 +466,7 @@ fn native_validation_and_dtos_match_frontend_wire_without_path_parameters() {
         serde_json::to_value(store.get().unwrap()).unwrap(),
         json!({
             "version":1,"revision":0,"settings":{"mode":"system","lightPalette":"githubLight","darkPalette":"githubDark","pageZoom":100,"fitDiagrams":true,"sidebarDefault":true,"statusVisible":true,"fileSortKey":"name","fileSortDirection":"asc",
-            "remoteImageHosts":["camo.githubusercontent.com","github.com","raw.githubusercontent.com","user-images.githubusercontent.com"]},"notice":null
+            "remoteImageHosts":["camo.githubusercontent.com","github.com","raw.githubusercontent.com","user-images.githubusercontent.com"],"navigationDepth":4,"tocVisible":true},"notice":null
         })
     );
     let result = store
@@ -475,4 +475,71 @@ fn native_validation_and_dtos_match_frontend_wire_without_path_parameters() {
     let wire = serde_json::to_value(result).unwrap();
     assert_eq!(wire["status"], "committed");
     assert_eq!(wire["record"]["revision"], 1);
+}
+#[test]
+fn explorer_depth_and_toc_visibility_migrate_per_field_and_reject_out_of_range_depth() {
+    let fixture = root();
+    let file = fixture.path().join("settings-v1.json");
+    // A valid older record without the fields is not corruption.
+    let mut legacy = serde_json::to_value(Record {
+        version: 1,
+        revision: 3,
+        settings: SettingsV1::default(),
+        notice: None,
+    })
+    .unwrap();
+    legacy["settings"]
+        .as_object_mut()
+        .unwrap()
+        .remove("navigationDepth");
+    legacy["settings"]
+        .as_object_mut()
+        .unwrap()
+        .remove("tocVisible");
+    fs::write(&file, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let old = SettingsStore::load(Some(fixture.path().into()))
+        .get()
+        .unwrap();
+    assert_eq!(old.revision, 3);
+    assert_eq!(old.settings.navigation_depth, NAVIGATION_DEPTH_DEFAULT);
+    assert!(old.settings.toc_visible);
+    assert!(old.notice.is_none());
+    // Invalid present values fall back per field only.
+    legacy["settings"]["navigationDepth"] = json!(12);
+    legacy["settings"]["tocVisible"] = json!("yes");
+    fs::write(&file, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let invalid = SettingsStore::load(Some(fixture.path().into()))
+        .get()
+        .unwrap();
+    assert_eq!(invalid.settings.navigation_depth, NAVIGATION_DEPTH_DEFAULT);
+    assert!(invalid.settings.toc_visible);
+    assert!(invalid.notice.is_some());
+    // Out-of-range patches are rejected without partial mutation.
+    let store = SettingsStore::load(Some(fixture.path().into()));
+    for depth in [0_u8, 9, 255] {
+        assert!(
+            store
+                .update(3, patch(json!({"navigationDepth": depth})), |_| {})
+                .is_err()
+        );
+    }
+    assert_eq!(store.get().unwrap().revision, 3);
+    let saved = committed(
+        store
+            .update(
+                3,
+                patch(json!({"navigationDepth": NAVIGATION_DEPTH_MAX, "tocVisible": false})),
+                |_| {},
+            )
+            .unwrap(),
+    );
+    assert_eq!(saved.revision, 4);
+    assert_eq!(saved.settings.navigation_depth, NAVIGATION_DEPTH_MAX);
+    assert!(!saved.settings.toc_visible);
+    assert_eq!(
+        SettingsStore::load(Some(fixture.path().into()))
+            .get()
+            .unwrap(),
+        saved
+    );
 }

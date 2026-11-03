@@ -733,27 +733,20 @@ test('latest pointer-selected reading text and direction survive Close focus/cli
 test('picker/root native handoffs, parsing and export preparation reject stale Find and retire picker debounce work', async ({
   page,
 }) => {
-  await open(
-    page,
-    '# Keep\n\nneedle\n\n```mermaid\nflowchart LR\n A --> B\n```',
-  );
-  await expect(page.locator('.diagram svg')).toHaveCount(1);
   await page.evaluate(() => {
-    const index = {
+    window.readerFixture.workingFolder({
       scope: 7,
       revision: 1,
       name: 'fixture',
       entries: [],
       issues: [],
-    };
-    window.readerFixture.enqueue('select_root', {
-      value: {
-        status: 'ready',
-        snapshot: window.readerFixture.indexSnapshot(index),
-      },
     });
-    return window.readerFixture.menu('open-folder');
   });
+  await open(
+    page,
+    '# Keep\n\nneedle\n\n```mermaid\nflowchart LR\n A --> B\n```',
+  );
+  await expect(page.locator('.diagram svg')).toHaveCount(1);
   await expect(
     page.getByRole('navigation', { name: 'Files', exact: true }),
   ).toContainText('Folder loaded');
@@ -788,9 +781,10 @@ test('picker/root native handoffs, parsing and export preparation reject stale F
   await expect(bar(page)).toHaveCount(0);
   await find(page);
   await input(page).press('Escape');
+  // A held plain Open File handoff is the other native chooser owner.
   await page.evaluate(() => {
-    window.readerFixture.enqueue('select_root', { hold: 'root-native' });
-    return window.readerFixture.menu('open-folder');
+    window.readerFixture.enqueue('select_document', { hold: 'root-native' });
+    return window.readerFixture.menu('open');
   });
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.pending()))

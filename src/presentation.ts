@@ -6,6 +6,7 @@ export interface MenuPresentation {
   findMatches: boolean;
   statusVisible: boolean;
   sidebarVisible: boolean;
+  tocVisible: boolean;
   hasRoot: boolean;
   previous: boolean;
   next: boolean;

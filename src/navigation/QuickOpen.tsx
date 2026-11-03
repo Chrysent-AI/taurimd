@@ -23,15 +23,13 @@ export function QuickOpen({
   composing: { current: boolean };
   input: { current: HTMLInputElement | null };
   accept: (intent: EntryIntent) => void;
-  choose: (kind: 'file' | 'folder') => void;
+  choose: () => void;
 }) {
   const state = useSyncExternalStore(model.subscribe, model.getState);
   const nav = useSyncExternalStore(navigation.subscribe, navigation.getState);
   const scope = quickOpenScope(nav);
   const index = scope.index;
-  const partial = nav.root
-    ? nav.rootStatus === 'partial'
-    : (nav.quick?.issues.length ?? 0) > 0;
+  const partial = nav.rootStatus === 'partial';
   const selectedOption = useRef<HTMLLIElement | null>(null);
   const optionRef = useCallback(
     (node: HTMLLIElement | null) => {
@@ -77,13 +75,17 @@ export function QuickOpen({
   }, [state.selected, reply]);
   const summary = (() => {
     if (!index) {
-      if (!hasDocument || nav.root)
-        return 'Choose a folder to search its files.';
-      if (nav.quickMessage) return nav.quickMessage;
+      // Without an open document no working folder exists; opening one
+      // establishes and indexes it, so there is nothing else to await here.
+      // A settled failure before any index exists says so honestly instead
+      // of claiming an indexing pass that will never run.
+      if (!hasDocument) return 'Open a file to search its folder.';
+      if (nav.rootStatus === 'unavailable')
+        return nav.rootMessage || 'No working folder — open a file again.';
       return 'Indexing this folder…';
     }
-    if (nav.root && (nav.rootStatus === 'unavailable' || nav.rootBusy))
-      return nav.rootMessage;
+    if (nav.rootStatus === 'unavailable' || nav.rootBusy)
+      return nav.rootMessage || 'Indexing folder…';
     if (state.phase === 'filtering') return 'Filtering…';
     if (state.phase === 'error') return state.message;
     if (reply?.status === 'authorizationRequired')
@@ -111,7 +113,7 @@ export function QuickOpen({
   return (
     <section className="quick-open" aria-label="File lookup">
       <p className="quick-scope">
-        <strong>Scope:</strong> {index?.name ?? 'No folder selected'}
+        <strong>Scope:</strong> {index?.name ?? 'No folder open'}
         <br />
         <strong>Location:</strong> {reply?.location || '.'}
       </p>
@@ -196,10 +198,7 @@ export function QuickOpen({
         id="quick-results"
         role="listbox"
         aria-label="Files and folders"
-        aria-busy={
-          state.phase === 'filtering' ||
-          (nav.root ? nav.rootBusy : nav.quickBusy)
-        }
+        aria-busy={state.phase === 'filtering' || nav.rootBusy}
       >
         {results.map(({ entry, positions }, position) => (
           <li
@@ -272,17 +271,10 @@ export function QuickOpen({
         )}
         <button
           onClick={() => {
-            if (!composing.current) choose('file');
+            if (!composing.current) choose();
           }}
         >
           Choose File…
-        </button>
-        <button
-          onClick={() => {
-            if (!composing.current) choose('folder');
-          }}
-        >
-          Choose Folder…
         </button>
       </div>
     </section>

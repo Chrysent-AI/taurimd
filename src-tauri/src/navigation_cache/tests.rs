@@ -65,7 +65,7 @@ fn fixture() -> (tempfile::TempDir, Arc<Mutex<Session>>, u32) {
     let mut session = Session::default();
     let scope = session
         .navigation
-        .start(navigation::root_path(dir.path()).unwrap(), true, false)
+        .start(navigation::root_path(dir.path()).unwrap(), false)
         .unwrap();
     session.navigation.status = Status {
         scope: scope.id,
@@ -121,7 +121,7 @@ fn real_backend_watch_before_scan_create_rename_remove_then_handler_release_and_
             fs::write(&marker, "before scan").unwrap();
             registration.send(()).unwrap();
         }
-        apply(&host, id, work, |status| {
+        apply(&host, id, work, 4, |status| {
             let _ = events.send(status);
         })
     })
@@ -219,7 +219,7 @@ fn dirty_during_held_initial_scan_repeats_and_root_replacement_rejects_late_work
             first = false;
         }
         let boundary = AtomicBool::new(pause);
-        apply(&host, id, work, |status| {
+        apply(&host, id, work, 4, |status| {
             if boundary.swap(false, Ordering::AcqRel) {
                 assert!(host.try_lock().is_ok(), "status publication is off Session");
                 entered.send(()).unwrap();
@@ -239,14 +239,9 @@ fn dirty_during_held_initial_scan_repeats_and_root_replacement_rejects_late_work
         snapshot.status.phase == "ready" && snapshot.status.scans >= 2
     });
     let before = state.lock().unwrap().navigation.status.sequence;
-    let replacement = state
-        .lock()
-        .unwrap()
-        .navigation
-        .start(path, true, false)
-        .unwrap();
+    let replacement = state.lock().unwrap().navigation.start(path, false).unwrap();
     assert_ne!(replacement.id, id);
-    assert!(!apply(&state, id, Work::Health(true), |_| panic!(
+    assert!(!apply(&state, id, Work::Health(true), 4, |_| panic!(
         "old publication"
     )));
     assert_eq!(state.lock().unwrap().navigation.status.sequence, before);
@@ -258,10 +253,10 @@ fn dirty_during_held_initial_scan_repeats_and_root_replacement_rejects_late_work
 fn cache_filters_and_explicit_one_directory_traversal_have_distinct_production_counters() {
     let (dir, state, id) = fixture();
     fs::write(dir.path().join("kept.md"), [0xff]).unwrap();
-    assert!(apply(&state, id, Work::Scan(None, true), |_| {
+    assert!(apply(&state, id, Work::Scan(None, true), 4, |_| {
         assert!(state.try_lock().is_ok());
     }));
-    assert!(apply(&state, id, Work::Settled, |_| {}));
+    assert!(apply(&state, id, Work::Settled, 4, |_| {}));
     let scope = state.lock().unwrap().navigation.root.clone().unwrap();
     for query_id in 0..10 {
         let answer = navigation::query::query(
@@ -284,8 +279,8 @@ fn cache_filters_and_explicit_one_directory_traversal_have_distinct_production_c
     fs::create_dir(dir.path().join("new")).unwrap();
     fs::write(dir.path().join("new/added.md"), "added").unwrap();
     let target = navigation::root_path(dir.path()).unwrap().join("new");
-    assert!(apply(&state, id, Work::Scan(Some(target), true), |_| {}));
-    assert!(apply(&state, id, Work::Settled, |_| {}));
+    assert!(apply(&state, id, Work::Scan(Some(target), true), 4, |_| {}));
+    assert!(apply(&state, id, Work::Settled, 4, |_| {}));
     let snapshot = Snapshot::get(&state.lock().unwrap());
     assert_eq!(snapshot.status.scans, 1);
     assert_eq!(snapshot.status.traversals, 1);
@@ -300,6 +295,78 @@ fn cache_filters_and_explicit_one_directory_traversal_have_distinct_production_c
     );
     assert!(!state.lock().unwrap().has_document());
     drop(scope);
+    drop(state);
+    reap(dir);
+}
+#[test]
+fn a_depth_change_takes_effect_on_the_next_worker_scan_without_restarting() {
+    let (dir, state, id) = fixture();
+    fs::create_dir_all(dir.path().join("one/two")).unwrap();
+    fs::write(dir.path().join("top.md"), "# Top").unwrap();
+    fs::write(dir.path().join("one/mid.md"), "# Mid").unwrap();
+    fs::write(dir.path().join("one/two/deep.md"), "# Deep").unwrap();
+    let path = navigation::root_path(dir.path()).unwrap();
+    let (events, receiver) = mpsc::channel();
+    let host = state.clone();
+    let lifetime = state
+        .lock()
+        .unwrap()
+        .navigation
+        .root
+        .as_ref()
+        .unwrap()
+        .lifetime
+        .clone();
+    // The host closure reads the depth at scan time exactly like production:
+    // a settings change writes the new value and the next scan honors it.
+    let depth = Arc::new(std::sync::atomic::AtomicUsize::new(1));
+    let scan_depth = depth.clone();
+    let worker = RootWorker::start(path.clone(), lifetime, move |work| {
+        apply(
+            &host,
+            id,
+            work,
+            scan_depth.load(Ordering::SeqCst),
+            |status| {
+                let _ = events.send(status);
+            },
+        )
+    })
+    .unwrap();
+    until(&receiver, &state, |snapshot| {
+        snapshot.status.phase == "ready"
+            && snapshot
+                .index
+                .as_ref()
+                .unwrap()
+                .entries
+                .iter()
+                .all(|entry| !entry.relative.contains('/'))
+            && snapshot
+                .index
+                .as_ref()
+                .unwrap()
+                .entries
+                .iter()
+                .any(|entry| entry.name == "top.md")
+    });
+    // The settings commit writes the new depth and refreshes the worker.
+    depth.store(4, Ordering::SeqCst);
+    worker.refresh();
+    let deep = PathBuf::from("one").join("two").join("deep.md");
+    until(&receiver, &state, |snapshot| {
+        snapshot.status.phase == "ready"
+            && snapshot
+                .index
+                .as_ref()
+                .unwrap()
+                .entries
+                .iter()
+                .any(|entry| entry.relative == deep.to_string_lossy())
+    });
+    // One initial scan and one manual rescan, on the same owner.
+    assert_eq!(state.lock().unwrap().navigation.status.scans, 2);
+    worker.retire();
     drop(state);
     reap(dir);
 }
@@ -326,7 +393,7 @@ fn registration_failure_degrades_but_manual_refresh_and_retry_use_same_owner() {
         lifetime,
         Duration::from_millis(20),
         move |work| {
-            apply(&host, id, work, |status| {
+            apply(&host, id, work, 4, |status| {
                 let _ = events.send(status);
             })
         },

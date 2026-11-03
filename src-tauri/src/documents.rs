@@ -381,7 +381,6 @@ impl Session {
         self.retire_export()?;
         let document = self.pending.take().ok_or_else(Self::stale)?;
         self.pending_navigation = None;
-        self.navigation.retire_derived();
         let name = document.snapshot.name.clone();
         self.media_lifetime.store(true, Ordering::Release);
         self.media.clear();

@@ -82,15 +82,6 @@ vi.mock('../src/native', () => ({
           inRoot: false,
         },
       ),
-    quickScope: () =>
-      Promise.resolve({
-        scope: 2,
-        revision: 1,
-        name: 'fixture',
-        entries: [],
-        issues: [],
-      }),
-    choose: () => Promise.resolve({ status: 'cancelled' }),
     refresh: vi.fn(),
     preview: vi.fn(),
     cancelPreview: () => Promise.resolve(null),

@@ -235,7 +235,7 @@ fn same_numeric_ids_do_not_cross_media_root_export_or_presentation_owners() {
         .lock()
         .unwrap()
         .navigation
-        .start(navigation::root_path(root.path()).unwrap(), true, false)
+        .start(navigation::root_path(root.path()).unwrap(), false)
         .unwrap();
     let scope = navigation::scan(scope, true).unwrap();
     let index = one.lock().unwrap().navigation.publish(scope).unwrap();
@@ -369,6 +369,45 @@ fn focus_fragments_bind_displayed_revision_and_reject_actual_native_owners() {
     cleanup(windows, root);
 }
 #[test]
+fn the_reader_folder_refresh_seam_rescans_a_live_worker_and_tolerates_none() {
+    let root = fixture();
+    let mut windows = Registry::default();
+    let label = windows.enroll(None).unwrap();
+    let state = windows.readers[&label].session.clone();
+    // No worker yet: the settings-driven seam is a no-op, never a failure.
+    refresh_reader_folder(&state);
+    let scope = state
+        .lock()
+        .unwrap()
+        .navigation
+        .start(navigation::root_path(root.path()).unwrap(), false)
+        .unwrap();
+    let lifetime = scope.lifetime.clone();
+    let id = scope.id;
+    let callback_state = state.clone();
+    let (published, ready) = mpsc::channel();
+    let worker =
+        navigation_cache::RootWorker::start(root.path().to_owned(), lifetime, move |work| {
+            navigation_cache::apply(&callback_state, id, work, 4, |_| {
+                let _ = published.send(());
+            })
+        })
+        .unwrap();
+    state.lock().unwrap().navigation.worker = Some(worker);
+    ready.recv_timeout(Duration::from_secs(5)).unwrap();
+    let scans_before = state.lock().unwrap().navigation.status.scans;
+    // The settings-commit path refreshes through this seam; the worker's
+    // next full scan is the depth rescan.
+    refresh_reader_folder(&state);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while state.lock().unwrap().navigation.status.scans == scans_before {
+        assert!(std::time::Instant::now() < deadline, "bounded rescan wait");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(state.lock().unwrap().navigation.status.scans > scans_before);
+    cleanup(windows, root);
+}
+#[test]
 fn retirement_reaps_root_worker_and_waits_for_non_cancellable_export_completion() {
     let root = fixture();
     let mut windows = Registry::default();
@@ -380,7 +419,7 @@ fn retirement_reaps_root_worker_and_waits_for_non_cancellable_export_completion(
         .lock()
         .unwrap()
         .navigation
-        .start(navigation::root_path(root.path()).unwrap(), true, false)
+        .start(navigation::root_path(root.path()).unwrap(), false)
         .unwrap();
     let lifetime = scope.lifetime.clone();
     let id = scope.id;
@@ -388,7 +427,7 @@ fn retirement_reaps_root_worker_and_waits_for_non_cancellable_export_completion(
     let (published, ready) = mpsc::channel();
     let worker =
         navigation_cache::RootWorker::start(root.path().to_owned(), lifetime, move |work| {
-            navigation_cache::apply(&callback_state, id, work, |_| {
+            navigation_cache::apply(&callback_state, id, work, 4, |_| {
                 let _ = published.send(());
             })
         })
@@ -475,7 +514,7 @@ fn colliding_root_bindings_resolve_only_local_entries_and_root_replacement_rejec
             .lock()
             .unwrap()
             .navigation
-            .start(navigation::root_path(path).unwrap(), true, false)
+            .start(navigation::root_path(path).unwrap(), false)
             .unwrap();
         let scope = navigation::scan(scope, true).unwrap();
         indexes.push(state.lock().unwrap().navigation.publish(scope).unwrap());
@@ -513,7 +552,7 @@ fn colliding_root_bindings_resolve_only_local_entries_and_root_replacement_rejec
         .lock()
         .unwrap()
         .navigation
-        .start(navigation::root_path(&paths[1]).unwrap(), true, false)
+        .start(navigation::root_path(&paths[1]).unwrap(), false)
         .unwrap();
     assert!(source.lock().unwrap().current(2).is_ok());
     assert!(

@@ -32,6 +32,7 @@ import { Guide } from './Guide';
 import { syncMenu } from './presentation';
 import { DocumentFind, type FindState } from './reader/find';
 import { FindBar } from './FindBar';
+import { HeadingList } from './navigation/Navigation';
 import { version } from '../package.json';
 function usableFocus(
   node: HTMLElement | null | undefined,
@@ -91,12 +92,6 @@ export function App({ controller }: { controller: ReaderController }) {
     () =>
       new QuickOpenController(navigationBridge, () => {
         void navigation.recover();
-        // The derived Quick Open scope has no watcher: recovery re-fetches
-        // it so a directory traversal or a failed query refreshes the
-        // overlay's scope instead of leaving it stale. reuse adopts the
-        // scope a traversal just republished rather than rescanning it.
-        if (!navigation.state.root)
-          void navigation.openQuickScope(controller.state.displayed, true);
       }),
   );
   const readerMounted = useRef(true);
@@ -109,6 +104,7 @@ export function App({ controller }: { controller: ReaderController }) {
     picker.update(pickerScope.index, pickerScope.busy);
   }, [picker, pickerScope.index, pickerScope.busy]);
   const sidebar = useRef<HTMLElement | null>(null);
+  const tocPane = useRef<HTMLElement | null>(null);
   const siblingGroup = useRef<HTMLDivElement>(null);
   const siblingGroupRef = useCallback((node: HTMLDivElement | null) => {
     siblingGroup.current = node;
@@ -120,11 +116,6 @@ export function App({ controller }: { controller: ReaderController }) {
     action: 'entry' | 'reload';
     inSiblings: boolean;
   } | null>(null);
-  const rootFocus = useRef<{
-    anchor: HTMLElement | null;
-    scope: number | undefined;
-    inSidebar: boolean;
-  } | null>(null);
   const [section, setSection] = useState<number | null>(null);
   useEffect(
     () => () => {
@@ -135,10 +126,7 @@ export function App({ controller }: { controller: ReaderController }) {
     [navigation, picker],
   );
   useEffect(() => {
-    if (
-      !navigationState.choosing &&
-      !['loading', 'parsing', 'committing'].includes(state.phase)
-    )
+    if (!['loading', 'parsing', 'committing'].includes(state.phase))
       void navigation.update(state.displayed);
   }, [
     navigation,
@@ -146,7 +134,6 @@ export function App({ controller }: { controller: ReaderController }) {
     state.phase,
     navigationState.root,
     navigationState.rootBusy,
-    navigationState.choosing,
   ]);
   useEffect(() => {
     navigation.invalidate();
@@ -304,22 +291,21 @@ export function App({ controller }: { controller: ReaderController }) {
     },
     [focusReading],
   );
+  const tocRef = useCallback(
+    (node: HTMLElement | null) => {
+      if (!node && tocPane.current?.contains(window.document.activeElement))
+        focusReading();
+      tocPane.current = node;
+    },
+    [focusReading],
+  );
   useLayoutEffect(() => {
-    const pending = rootFocus.current;
-    if (!pending || navigationState.choosing) return;
-    rootFocus.current = null;
-    if (pending.inSidebar && pending.scope !== navigationState.root?.scope)
-      sidebar.current
-        ?.querySelector<HTMLElement>('nav h2')
-        ?.focus({ preventScroll: true });
-    else if (
-      pending.anchor?.isConnected &&
-      !pending.anchor.closest('[hidden]') &&
-      !pending.anchor.matches(':disabled')
+    if (
+      !settings.tocVisible &&
+      tocPane.current?.contains(window.document.activeElement)
     )
-      pending.anchor.focus({ preventScroll: true });
-    else if (pending.inSidebar) focusReading();
-  }, [navigationState.choosing, navigationState.root?.scope, focusReading]);
+      focusReading();
+  }, [settings.tocVisible, focusReading]);
   useLayoutEffect(() => {
     if (
       !settings.sidebarDefault &&
@@ -367,7 +353,6 @@ export function App({ controller }: { controller: ReaderController }) {
     if (
       composing.current ||
       modalOpen.current ||
-      navigation.state.choosing ||
       ['loading', 'parsing', 'committing'].includes(controller.state.phase)
     ) {
       setActionFeedback({
@@ -378,7 +363,7 @@ export function App({ controller }: { controller: ReaderController }) {
       return false;
     }
     return true;
-  }, [controller, navigation]);
+  }, [controller]);
   const jump = useCallback(
     (key: number) => {
       const heading = controller.state.displayed?.headings?.find(
@@ -482,44 +467,35 @@ export function App({ controller }: { controller: ReaderController }) {
     },
     [controller, navigation, picker, focusReading],
   );
-  const chooseFromPicker = useCallback(
-    async (kind: 'file' | 'folder') => {
-      if (
-        modalOpen.current !== 'quick-open' ||
-        pickerHandoff.current ||
-        composing.current ||
-        navigation.state.choosing ||
-        ['loading', 'parsing', 'committing'].includes(controller.state.phase)
-      )
-        return;
-      pickerHandoff.current = true;
-      picker.close(true);
-      flushSync(() => {
-        setPickerNative(true);
-        setSurface(null);
-      });
-      if (
-        kind === 'file' &&
-        (sidebar.current?.contains(window.document.activeElement) ||
-          window.document.activeElement?.closest('.recovery'))
-      )
-        focusReading();
-      const outcome =
-        kind === 'file'
-          ? await controller.run('open')
-          : await navigation.choose();
-      if (!readerMounted.current) return;
-      pickerHandoff.current = false;
-      setPickerNative(false);
-      if (outcome === 'cancelled' || kind === 'folder') {
-        const scope = quickOpenScope(navigation.state);
-        picker.open(scope.index, scope.busy);
-        if (outcome === 'failed') picker.notice(navigation.state.message);
-        setSurface('quick-open');
-      } else modalOpen.current = null;
-    },
-    [controller, navigation, picker, focusReading],
-  );
+  const chooseFromPicker = useCallback(async () => {
+    if (
+      modalOpen.current !== 'quick-open' ||
+      pickerHandoff.current ||
+      composing.current ||
+      ['loading', 'parsing', 'committing'].includes(controller.state.phase)
+    )
+      return;
+    pickerHandoff.current = true;
+    picker.close(true);
+    flushSync(() => {
+      setPickerNative(true);
+      setSurface(null);
+    });
+    if (
+      sidebar.current?.contains(window.document.activeElement) ||
+      window.document.activeElement?.closest('.recovery')
+    )
+      focusReading();
+    const outcome = await controller.run('open');
+    if (!readerMounted.current) return;
+    pickerHandoff.current = false;
+    setPickerNative(false);
+    if (outcome === 'cancelled') {
+      const scope = quickOpenScope(navigation.state);
+      picker.open(scope.index, scope.busy);
+      setSurface('quick-open');
+    } else modalOpen.current = null;
+  }, [controller, navigation, picker, focusReading]);
   const dispatch = useCallback(
     (payload: string, invoker?: HTMLElement) => {
       const phase = controller.state.phase;
@@ -538,7 +514,6 @@ export function App({ controller }: { controller: ReaderController }) {
           composing.current ||
           pending ||
           pickerHandoff.current ||
-          navigation.state.choosing ||
           !eligibleSurface ||
           !controller.state.displayed
         ) {
@@ -598,8 +573,7 @@ export function App({ controller }: { controller: ReaderController }) {
         modalOpen.current === 'quick-open' &&
         !pending &&
         !composing.current &&
-        !pickerHandoff.current &&
-        !navigation.state.choosing
+        !pickerHandoff.current
       ) {
         pickerInput.current?.focus({ preventScroll: true });
         return;
@@ -608,7 +582,6 @@ export function App({ controller }: { controller: ReaderController }) {
         composing.current ||
         pickerHandoff.current ||
         pending ||
-        navigation.state.choosing ||
         (modalOpen.current && !(zoom && modalOpen.current === 'settings'))
       ) {
         setActionFeedback({
@@ -630,7 +603,6 @@ export function App({ controller }: { controller: ReaderController }) {
           'export-png',
           'open',
           'reload',
-          'open-folder',
         ].includes(payload)
       )
         closeFind();
@@ -642,25 +614,11 @@ export function App({ controller }: { controller: ReaderController }) {
             : null;
         setOrigin(surfaceOrigin.current);
         modalOpen.current = 'quick-open';
-        // Without a folder root the overlay derives its scope from the
-        // displayed file's folder; refresh it before opening so the scope
-        // always follows the displayed document. openQuickScope clears the
-        // old scope synchronously, so the overlay never shows stale entries.
-        if (!navigation.state.root)
-          void navigation.openQuickScope(controller.state.displayed);
+        // The overlay searches the working folder the native side indexed at
+        // the document's commit; there is no separate indexing step to run.
         const scope = quickOpenScope(navigation.state);
         picker.open(scope.index, scope.busy);
         setSurface('quick-open');
-      } else if (payload === 'open-folder') {
-        if (!navigation.state.rootBusy) {
-          const active = invoker ?? window.document.activeElement;
-          rootFocus.current = {
-            anchor: active instanceof HTMLElement ? active : null,
-            scope: navigation.state.root?.scope,
-            inSidebar: !!sidebar.current?.contains(active),
-          };
-        }
-        void navigation.choose();
       } else if (payload === 'refresh-folder') {
         void navigation.refresh();
       } else if (payload === 'reveal' && controller.state.displayed) {
@@ -671,6 +629,12 @@ export function App({ controller }: { controller: ReaderController }) {
         settingsController.change({
           sidebarDefault:
             !settingsController.getState().settings.sidebarDefault,
+        });
+      } else if (payload === 'toc') {
+        if (tocPane.current?.contains(window.document.activeElement))
+          focusReading();
+        settingsController.change({
+          tocVisible: !settingsController.getState().settings.tocVisible,
         });
       } else if (payload.startsWith('sort-')) {
         const choice = payload.slice('sort-'.length);
@@ -813,6 +777,7 @@ export function App({ controller }: { controller: ReaderController }) {
       findMatches: findOpen && findResult.total > 0 && !findResult.error,
       statusVisible: settings.statusVisible,
       sidebarVisible: settings.sidebarDefault,
+      tocVisible: settings.tocVisible,
       hasRoot: !!navigationState.root && !navigationState.rootBusy,
       previous: !!targets.previous,
       next: !!targets.next,
@@ -824,7 +789,6 @@ export function App({ controller }: { controller: ReaderController }) {
       busy:
         busy ||
         exporting.progress !== null ||
-        navigationState.choosing ||
         pickerNative ||
         pickerHandoff.current,
       modal:
@@ -854,6 +818,7 @@ export function App({ controller }: { controller: ReaderController }) {
   }, [
     settings.statusVisible,
     settings.sidebarDefault,
+    settings.tocVisible,
     settings.fileSortKey,
     settings.fileSortDirection,
     navigationState,
@@ -1132,7 +1097,7 @@ export function App({ controller }: { controller: ReaderController }) {
   useEffect(() => {
     const pending = focusIntent.current;
     if (!pending || busy) return;
-    if (modalOpen.current || composing.current || navigationState.choosing) {
+    if (modalOpen.current || composing.current) {
       focusIntent.current = null;
       return;
     }
@@ -1164,7 +1129,6 @@ export function App({ controller }: { controller: ReaderController }) {
     navigation,
     navigationState.siblings,
     navigationState.siblingDocument,
-    navigationState.choosing,
     surface,
     exporting.progress,
     composition,
@@ -1544,8 +1508,8 @@ export function App({ controller }: { controller: ReaderController }) {
               composing={composing}
               input={pickerInput}
               accept={acceptPickerFile}
-              choose={(kind) => {
-                void chooseFromPicker(kind);
+              choose={() => {
+                void chooseFromPicker();
               }}
             />
           ) : surface === 'export' ? (
@@ -1625,17 +1589,14 @@ export function App({ controller }: { controller: ReaderController }) {
               busy ||
               surface !== null ||
               exporting.progress !== null ||
-              navigationState.choosing ||
               composition
             }
             allow={allowNavigation}
             open={openNavigation}
-            jump={jump}
             visible={settings.sidebarDefault}
             siblingGroupRef={siblingGroupRef}
             sortKey={settings.fileSortKey}
             sortDirection={settings.fileSortDirection}
-            section={section}
           />
         </aside>
         <div className="reading-pane">
@@ -1705,6 +1666,42 @@ export function App({ controller }: { controller: ReaderController }) {
             )}
           </main>
         </div>
+        <nav
+          hidden={!settings.tocVisible}
+          className="outline"
+          aria-label="On this page"
+          ref={tocRef}
+        >
+          <h2>On this page</h2>
+          {!document ? (
+            <p>No document open.</p>
+          ) : document.snapshot.format === 'text' ? (
+            <p>Outline unavailable for plain text.</p>
+          ) : !document.headings?.length ? (
+            <p>No H1/H2 headings.</p>
+          ) : (
+            <HeadingList
+              headings={document.headings}
+              render={(heading) => (
+                <a
+                  href={`#${heading.id}`}
+                  aria-current={
+                    section === heading.key ? 'location' : undefined
+                  }
+                  onClick={(event) => {
+                    event.preventDefault();
+                    if (allowNavigation()) jump(heading.key);
+                  }}
+                >
+                  {heading.label || 'Untitled section'}
+                  {section === heading.key && (
+                    <span aria-hidden="true"> · Current section</span>
+                  )}
+                </a>
+              )}
+            />
+          )}
+        </nav>
       </div>
       {settings.statusVisible && (
         <footer

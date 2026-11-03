@@ -68,23 +68,6 @@ pub struct Record {
     byte_size: Option<u64>,
     pub entry: Entry,
 }
-
-/// Quick Open indexes the derived scope subtree down to this entry depth
-/// relative to the scope root; deeper levels stay reachable through explicit
-/// directory traversal (Tab / "Read this directory").
-pub const QUICK_DEPTH: usize = 4;
-
-/// Which single-slot home a scope occupies. Each slot retires its previous
-/// occupant; slots are independent of each other.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Slot {
-    /// The watched folder root.
-    Root,
-    /// The displayed file's directory for sibling navigation.
-    Siblings,
-    /// The Quick Open subtree derived from the displayed file's directory.
-    Quick,
-}
 #[derive(Clone)]
 pub struct Scope {
     pub id: u32,
@@ -125,6 +108,12 @@ impl Scope {
             .cloned()
             .ok_or_else(Session::stale)
     }
+    /// True while the scope has no published index (an in-progress first
+    /// scan) or was retired: sibling queries answer with the retained index
+    /// and no active entry until the next publication.
+    pub fn unpublished_or_dead(&self) -> bool {
+        !self.published || self.live().is_err()
+    }
     pub fn validate(&self, record: &Record) -> Result<PathBuf, AppError> {
         self.live()?;
         let canonical = candidate(&self.path, &record.lexical, false)?;
@@ -160,15 +149,15 @@ impl Scope {
 }
 #[derive(Default)]
 pub struct Navigation {
+    /// The watched working folder. Established when a document is committed
+    /// (see `adopt_root`); sibling navigation, Quick Open and the explorer
+    /// tree all read this single scope.
     pub root: Option<Scope>,
-    pub siblings: Option<Scope>,
-    pub quick: Option<Scope>,
     pub worker: Option<crate::navigation_cache::RootWorker>,
     pub status: crate::navigation_cache::Status,
     next: u32,
     contexts: HashMap<PathBuf, u32>,
     previews: HashMap<u32, (u32, Arc<AtomicBool>)>,
-    latest_root: u32,
 }
 impl Navigation {
     fn number(&mut self) -> Result<u32, AppError> {
@@ -179,30 +168,6 @@ impl Navigation {
             )
         })?;
         Ok(self.next)
-    }
-    /// Retire the scopes derived from the displayed document: sibling
-    /// navigation and the Quick Open subtree both follow the document and
-    /// die with it.
-    pub fn retire_derived(&mut self) {
-        for slot in [Slot::Siblings, Slot::Quick] {
-            if let Some(scope) = self.take_slot(slot) {
-                scope.cancel.store(true, Ordering::Release);
-            }
-        }
-    }
-    fn slot(&self, slot: Slot) -> Option<&Scope> {
-        match slot {
-            Slot::Root => self.root.as_ref(),
-            Slot::Siblings => self.siblings.as_ref(),
-            Slot::Quick => self.quick.as_ref(),
-        }
-    }
-    fn take_slot(&mut self, slot: Slot) -> Option<Scope> {
-        match slot {
-            Slot::Root => self.root.take(),
-            Slot::Siblings => self.siblings.take(),
-            Slot::Quick => self.quick.take(),
-        }
     }
     pub fn root_siblings(&self, path: &Path) -> Option<Siblings> {
         let root = self.root.as_ref()?;
@@ -227,18 +192,6 @@ impl Navigation {
             in_root: true,
         })
     }
-    pub fn parent_siblings(&self, path: &Path) -> Option<Siblings> {
-        let scope = self.siblings.as_ref()?;
-        if scope.path != path.parent()? || !scope.published || scope.live().is_err() {
-            return None;
-        }
-        Some(Siblings {
-            index: scope.index(),
-            active: scope.member(path),
-            in_root: false,
-            root_active: None,
-        })
-    }
     pub fn context(&mut self, path: &Path) -> Result<u32, AppError> {
         if let Some(id) = self.contexts.get(path) {
             return Ok(*id);
@@ -247,36 +200,39 @@ impl Navigation {
         self.contexts.insert(path.to_owned(), id);
         Ok(id)
     }
-    pub fn choose(&mut self, request: u32) -> Result<(), AppError> {
-        if request <= self.latest_root {
-            return Err(Session::stale());
+    /// Makes `path` the watched working folder. `Ok(None)` keeps the current
+    /// root untouched — opening another file from the same folder causes no
+    /// churn — and `Ok(Some((scope, retired)))` started a fresh root and hands
+    /// the caller the retired watcher worker to reap off the session lock and
+    /// the scope to bind a new worker to.
+    pub fn adopt_root(
+        &mut self,
+        path: PathBuf,
+    ) -> Result<Option<(Scope, Option<crate::navigation_cache::RootWorker>)>, AppError> {
+        if self
+            .root
+            .as_ref()
+            .is_some_and(|root| root.path == path && root.live().is_ok())
+        {
+            return Ok(None);
         }
-        self.latest_root = request;
-        Ok(())
+        let retired = self.worker.take();
+        let scope = self.start(path, false)?;
+        self.status = crate::navigation_cache::Status {
+            scope: scope.id,
+            revision: scope.revision,
+            phase: "loading",
+            ..crate::navigation_cache::Status::default()
+        };
+        Ok(Some((scope, retired)))
     }
-    pub fn chosen(&self, request: u32) -> Result<(), AppError> {
-        if request == self.latest_root {
-            Ok(())
-        } else {
-            Err(Session::stale())
-        }
-    }
-    pub fn start(&mut self, path: PathBuf, root: bool, refresh: bool) -> Result<Scope, AppError> {
-        self.open_slot(
-            path,
-            if root { Slot::Root } else { Slot::Siblings },
-            refresh,
-        )
-    }
-    /// Start the Quick Open subtree scope at `path`, retiring the previous
-    /// derived scope so the overlay follows the displayed document's folder.
-    pub fn start_quick(&mut self, path: PathBuf, refresh: bool) -> Result<Scope, AppError> {
-        self.open_slot(path, Slot::Quick, refresh)
-    }
-    fn open_slot(&mut self, path: PathBuf, slot: Slot, refresh: bool) -> Result<Scope, AppError> {
-        let old = self.slot(slot);
-        let retained = old.filter(|s| s.path == path).cloned();
-        if let Some(old) = old {
+    /// Start the watched root scope at `path`, retiring the previous root:
+    /// its scans die and, unless this is a refresh of the same folder, its
+    /// records and reading bindings become stale.
+    pub fn start(&mut self, path: PathBuf, refresh: bool) -> Result<Scope, AppError> {
+        let old = self.root.clone();
+        let retained = old.clone().filter(|s| s.path == path);
+        if let Some(old) = &old {
             old.cancel.store(true, Ordering::Release);
             if !refresh {
                 old.lifetime.store(true, Ordering::Release);
@@ -319,39 +275,19 @@ impl Navigation {
             records: retained.map(|s| s.records).unwrap_or_default(),
             issues: Vec::new(),
         };
-        match slot {
-            Slot::Root => self.root = Some(scope.clone()),
-            Slot::Siblings => self.siblings = Some(scope.clone()),
-            Slot::Quick => self.quick = Some(scope.clone()),
-        }
+        self.root = Some(scope.clone());
         Ok(scope)
     }
     pub fn scope(&self, id: u32) -> Result<Scope, AppError> {
-        [Slot::Root, Slot::Siblings, Slot::Quick]
-            .into_iter()
-            .find_map(|slot| self.slot(slot).filter(|s| s.id == id).cloned())
-            .ok_or_else(Session::stale)
-    }
-    /// The scope a Quick Open query may address: the watched folder root, or
-    /// the derived Quick Open subtree scope. Sibling navigation scopes are
-    /// never queryable.
-    pub fn query_scope(&self, id: u32) -> Result<Scope, AppError> {
         self.root
             .as_ref()
-            .filter(|scope| scope.id == id)
-            .or_else(|| self.quick.as_ref().filter(|scope| scope.id == id))
+            .filter(|s| s.id == id)
             .cloned()
             .ok_or_else(Session::stale)
     }
-    /// The recovery path adopts the current derived scope for `path` without
-    /// rescanning, so a directory read published by a traversal keeps its
-    /// records. `None` when no live published scope matches the path and the
-    /// caller must fall back to a fresh scan.
-    pub fn adopt_quick(&self, path: &Path) -> Option<Index> {
-        self.quick
-            .as_ref()
-            .filter(|scope| scope.path == path && scope.published && scope.live().is_ok())
-            .map(|scope| scope.index())
+    /// The scope a Quick Open query may address: the watched folder root.
+    pub fn query_scope(&self, id: u32) -> Result<Scope, AppError> {
+        self.scope(id)
     }
     pub fn publish(&mut self, mut scope: Scope) -> Result<Index, AppError> {
         let current = self.scope(scope.id)?;
@@ -385,18 +321,14 @@ impl Navigation {
         }
         scope.published = true;
         let index = scope.index();
-        let slot = [Slot::Root, Slot::Siblings, Slot::Quick]
-            .into_iter()
-            .find(|slot| {
-                self.slot(*slot)
-                    .is_some_and(|current| current.id == scope.id)
-            })
-            .ok_or_else(Session::stale)?;
-        match slot {
-            Slot::Root => self.root = Some(scope),
-            Slot::Siblings => self.siblings = Some(scope),
-            Slot::Quick => self.quick = Some(scope),
+        if self
+            .root
+            .as_ref()
+            .is_none_or(|current| current.id != scope.id)
+        {
+            return Err(Session::stale());
         }
+        self.root = Some(scope);
         Ok(index)
     }
     pub fn preview(
@@ -414,11 +346,9 @@ impl Navigation {
         Ok((scope, record, cancel))
     }
     pub fn stop(&self) {
-        for slot in [Slot::Root, Slot::Siblings, Slot::Quick] {
-            if let Some(scope) = self.slot(slot) {
-                scope.cancel.store(true, Ordering::Release);
-                scope.lifetime.store(true, Ordering::Release);
-            }
+        if let Some(scope) = self.root.as_ref() {
+            scope.cancel.store(true, Ordering::Release);
+            scope.lifetime.store(true, Ordering::Release);
         }
         for (_, cancel) in self.previews.values() {
             cancel.store(true, Ordering::Release);
@@ -548,21 +478,25 @@ fn candidate(root: &Path, path: &Path, directory: bool) -> Result<PathBuf, AppEr
     }
     Ok(canonical)
 }
-pub fn scan(scope: Scope, recursive: bool) -> Result<Scope, AppError> {
-    scan_progress(scope, recursive, |_| {})
-}
-pub fn scan_progress(
+/// The watched root's bounded recursion at the configured explorer depth.
+/// Boundary directories at the cap are listed without being descended, so
+/// deeper content stays reachable only through an explicit directory read.
+pub fn scan_depth(
     scope: Scope,
-    recursive: bool,
+    depth: usize,
     progress: impl FnMut(usize),
 ) -> Result<Scope, AppError> {
-    // An unbounded cap keeps the watched root's full recursion; `Some(0)`
-    // lists only the scope directory itself.
-    scan_capped(scope, if recursive { None } else { Some(0) }, progress)
+    scan_capped(
+        scope,
+        Some(depth.clamp(1, usize::from(crate::settings::NAVIGATION_DEPTH_MAX))),
+        progress,
+    )
 }
-/// Quick Open's bounded prefetch: the scope subtree down to [`QUICK_DEPTH`].
-pub fn scan_subtree(scope: Scope) -> Result<Scope, AppError> {
-    scan_capped(scope, Some(QUICK_DEPTH), |_| {})
+/// Test-only full scan: production root scans always run through the
+/// configured depth cap (`scan_depth`) or single-directory traversals.
+#[cfg(test)]
+pub fn scan(scope: Scope, recursive: bool) -> Result<Scope, AppError> {
+    scan_capped(scope, if recursive { None } else { Some(0) }, |_| {})
 }
 fn scan_capped(
     mut scope: Scope,

@@ -13,11 +13,9 @@ fn reap(dir: tempfile::TempDir) {
     dir.close().unwrap();
     assert!(!path.exists());
 }
-fn published(nav: &mut Navigation, path: &Path, recursive: bool) -> Index {
-    let scope = nav
-        .start(root_path(path).unwrap(), recursive, false)
-        .unwrap();
-    nav.publish(scan(scope, recursive).unwrap()).unwrap()
+fn published(nav: &mut Navigation, path: &Path) -> Index {
+    let scope = nav.start(root_path(path).unwrap(), false).unwrap();
+    nav.publish(scan(scope, true).unwrap()).unwrap()
 }
 fn binding(index: &Index, name: &str) -> Binding {
     Binding {
@@ -57,7 +55,7 @@ fn metadata_only_recursive_formats_and_shared_root_siblings() {
         fs::write(dir.path().join(name), [0xff]).unwrap();
     }
     let mut nav = Navigation::default();
-    let index = published(&mut nav, dir.path(), true);
+    let index = published(&mut nav, dir.path());
     assert_eq!(
         index
             .entries
@@ -126,9 +124,7 @@ fn deterministic_native_alpha_date_ties_missing_times_and_no_source_writes() {
             .unwrap();
     }
     let mut nav = Navigation::default();
-    let scope = nav
-        .start(root_path(dir.path()).unwrap(), true, false)
-        .unwrap();
+    let scope = nav.start(root_path(dir.path()).unwrap(), false).unwrap();
     let mut scope = scan(scope, true).unwrap();
     assert_eq!(
         scope
@@ -186,7 +182,7 @@ fn metadata_ranks_cover_sizes_times_and_directory_totals() {
         .set_times(fs::FileTimes::new().set_modified(epoch))
         .unwrap();
     let mut nav = Navigation::default();
-    let index = published(&mut nav, dir.path(), true);
+    let index = published(&mut nav, dir.path());
     let entry = |relative: &str| {
         index
             .entries
@@ -222,7 +218,7 @@ fn alias_entries_rank_with_their_validated_target() {
     fs::write(dir.path().join("two.md"), "22").unwrap();
     symlink(dir.path().join("one.md"), dir.path().join("alias.md")).unwrap();
     let mut nav = Navigation::default();
-    let index = published(&mut nav, dir.path(), true);
+    let index = published(&mut nav, dir.path());
     let entry = |relative: &str| {
         index
             .entries
@@ -245,9 +241,7 @@ fn initial_iterator_and_nested_denial_are_not_false_empty_success() {
     fs::create_dir(dir.path().join("denied")).unwrap();
     fs::write(dir.path().join("good.md"), "# Good").unwrap();
     let mut nav = Navigation::default();
-    let mut scope = nav
-        .start(root_path(dir.path()).unwrap(), true, false)
-        .unwrap();
+    let mut scope = nav.start(root_path(dir.path()).unwrap(), false).unwrap();
     let denied = || io::Error::new(io::ErrorKind::PermissionDenied, "fixture denial");
     assert_eq!(
         scan_with(&mut scope, None, |_| Err::<Vec<io::Result<PathBuf>>, _>(
@@ -311,7 +305,7 @@ fn file_aliases_directory_cycles_hidden_targets_and_ancestor_retarget_are_revali
         symlink(target, dir.path().join(name)).unwrap();
     }
     let mut nav = Navigation::default();
-    let index = published(&mut nav, dir.path(), true);
+    let index = published(&mut nav, dir.path());
     let files: Vec<_> = index
         .entries
         .iter()
@@ -366,7 +360,7 @@ fn native_hidden_flag_excludes_even_a_non_dot_filename() {
             .success()
     );
     let mut nav = Navigation::default();
-    let index = published(&mut nav, dir.path(), true);
+    let index = published(&mut nav, dir.path());
     assert!(index.entries.is_empty());
     // Explicit file selection is still readable; tree policy does not revoke it.
     assert!(read_document(&path, None, 1, 1, &AtomicBool::new(false)).is_ok());
@@ -380,7 +374,7 @@ fn epochs_old_ids_preview_cancellation_context_and_commit_lifetime_are_native_ow
     fs::write(dir.path().join("same.md"), "# Same").unwrap();
     fs::write(other.path().join("same.md"), "# Same").unwrap();
     let mut session = Session::default();
-    let index = published(&mut session.navigation, dir.path(), true);
+    let index = published(&mut session.navigation, dir.path());
     let entry = binding(&index, "same.md");
     let (scope, record, preview_cancel) = session.navigation.preview(entry, 1).unwrap();
     assert!(session.navigation.preview(entry, 1).is_err());
@@ -393,10 +387,7 @@ fn epochs_old_ids_preview_cancellation_context_and_commit_lifetime_are_native_ow
     let cancel = session.begin(2).unwrap();
     let pending = scope.read(&record, 2, 2, &cancel).unwrap();
     session.stage_navigation(2, pending, &scope).unwrap();
-    let refresh = session
-        .navigation
-        .start(scope.path.clone(), true, true)
-        .unwrap();
+    let refresh = session.navigation.start(scope.path.clone(), true).unwrap();
     assert!(preview_cancel.load(Ordering::Acquire));
     assert!(scope.entry(entry).is_err());
     assert!(session.navigation.publish(scope.clone()).is_err());
@@ -430,27 +421,50 @@ fn epochs_old_ids_preview_cancellation_context_and_commit_lifetime_are_native_ow
             .entry(forged)
             .is_err()
     );
-    let foreign = published(&mut session.navigation, other.path(), true);
+    let foreign = published(&mut session.navigation, other.path());
     assert_ne!(foreign.entries[0].context, index.entries[0].context);
     assert_eq!(active.snapshot.source, "# Same");
-    session.navigation.choose(10).unwrap();
-    assert!(session.navigation.choose(9).is_err());
-    assert!(session.navigation.chosen(9).is_err());
-    let parent = published(&mut session.navigation, dir.path(), false);
-    let parent_scope = session.navigation.scope(parent.scope).unwrap();
+    // A navigation read from the current root commits without retiring it:
+    // the working folder survives commits, so its bindings stay valid.
+    let current = session.navigation.scope(foreign.scope).unwrap();
     let cancel = session.begin(3).unwrap();
-    let read = parent_scope
+    let read = current
         .read(
-            &parent_scope.entry(binding(&parent, "same.md")).unwrap(),
+            &current.entry(binding(&foreign, "same.md")).unwrap(),
             3,
             3,
             &cancel,
         )
         .unwrap();
-    session.stage_navigation(3, read, &parent_scope).unwrap();
+    session.stage_navigation(3, read, &current).unwrap();
     session.commit(3).unwrap();
-    assert!(parent_scope.live().is_err());
-    assert!(session.navigation.scope(parent.scope).is_err());
+    assert!(session.navigation.scope(foreign.scope).is_ok());
+    assert_eq!(session.active(3, 3).unwrap().snapshot.source, "# Same");
+    // A read staged against a root that is then replaced dies with it: the
+    // replacement cancels the old scope, so its commit fails stale and the
+    // previously displayed document survives.
+    let previous = session.navigation.scope(foreign.scope).unwrap();
+    let cancel = session.begin(4).unwrap();
+    let staged = previous
+        .read(
+            &previous
+                .entry(binding(
+                    &session.navigation.root.as_ref().unwrap().index(),
+                    "same.md",
+                ))
+                .unwrap(),
+            4,
+            4,
+            &cancel,
+        )
+        .unwrap();
+    session.stage_navigation(4, staged, &previous).unwrap();
+    let other_index = published(&mut session.navigation, dir.path());
+    assert!(session.commit(4).is_err());
+    assert!(previous.live().is_err());
+    assert!(session.navigation.scope(foreign.scope).is_err());
+    assert_eq!(session.active(3, 3).unwrap().snapshot.source, "# Same");
+    assert_eq!(other_index.entries[0].name, "same.md");
     let lifetime = session.navigation.root.as_ref().unwrap().cancel.clone();
     drop(session);
     assert!(lifetime.load(Ordering::Acquire));
@@ -458,36 +472,115 @@ fn epochs_old_ids_preview_cancellation_context_and_commit_lifetime_are_native_ow
     reap(other);
 }
 #[test]
-fn unrelated_root_publication_reuses_parent_scope_and_preserves_staged_parent_open() {
+fn an_adoption_failure_marks_the_settled_unavailable_status_the_frontend_watermarks() {
+    let dir = root();
+    fs::write(dir.path().join("a.md"), "# A").unwrap();
+    let mut session = Session::default();
+    // No root ever adopted: the default scope 0 identity is the watermark a
+    // rootless frontend accepts, and the status is settled unavailable.
+    let status =
+        crate::navigation_commands::mark_root_unavailable(&mut session, "fixture vanished".into());
+    assert_eq!(status.phase, "unavailable");
+    assert_eq!(status.message, "fixture vanished");
+    assert_eq!(status.scope, 0);
+    assert_eq!(status.sequence, 1);
+    // With a previously adopted root the current scope identity is kept, so
+    // the announcement still wins the watermark over that root's events.
+    let cancel = session.begin(1).unwrap();
+    session
+        .stage(
+            1,
+            read_document(&dir.path().join("a.md"), None, 1, 1, &cancel).unwrap(),
+        )
+        .unwrap();
+    session.commit(1).unwrap();
+    let parent = session.active(1, 1).unwrap().parent.clone();
+    let Some((scope, _)) = session.navigation.adopt_root(parent).unwrap() else {
+        panic!("the first adoption starts a fresh root");
+    };
+    assert_eq!(session.navigation.status.scope, scope.id);
+    // A fresh adoption restarts the sequence with its new scope identity —
+    // the strictly larger scope alone wins the frontend watermark — and the
+    // failure announcement advances monotonically from there.
+    assert_eq!(session.navigation.status.sequence, 0);
+    let status =
+        crate::navigation_commands::mark_root_unavailable(&mut session, "fixture vanished".into());
+    assert_eq!(status.scope, scope.id);
+    assert_eq!(status.sequence, 1);
+    assert_eq!(status.phase, "unavailable");
+    drop(session);
+    reap(dir);
+}
+#[test]
+fn opening_a_file_adopts_its_folder_and_reopening_same_or_moving_keeps_or_replaces_it() {
     let dir = root();
     let other = root();
-    fs::write(dir.path().join("active.md"), "# Active").unwrap();
-    fs::write(dir.path().join("next.md"), "# Next").unwrap();
+    fs::write(dir.path().join("a.md"), "# A").unwrap();
+    fs::write(dir.path().join("b.md"), "# B").unwrap();
+    fs::write(other.path().join("elsewhere.md"), "# Elsewhere").unwrap();
     let mut session = Session::default();
     let cancel = session.begin(1).unwrap();
     session
         .stage(
             1,
-            read_document(&dir.path().join("active.md"), None, 1, 1, &cancel).unwrap(),
+            read_document(&dir.path().join("a.md"), None, 1, 1, &cancel).unwrap(),
         )
         .unwrap();
     session.commit(1).unwrap();
-    let parent = published(&mut session.navigation, dir.path(), false);
-    let scope = session.navigation.scope(parent.scope).unwrap();
-    let record = scope.entry(binding(&parent, "next.md")).unwrap();
-    let cancel = session.begin(2).unwrap();
-    let document = scope.read(&record, 2, 2, &cancel).unwrap();
-    session.stage_navigation(2, document, &scope).unwrap();
-    let foreign = published(&mut session.navigation, other.path(), true);
-    let projection = session
+    let parent = session.active(1, 1).unwrap().parent.clone();
+    let Some((scope, retired)) = session.navigation.adopt_root(parent).unwrap() else {
+        panic!("the first adoption starts a fresh root");
+    };
+    assert!(retired.is_none());
+    let root_id = scope.id;
+    let index = session
         .navigation
-        .parent_siblings(&dir.path().join("active.md").canonicalize().unwrap())
+        .publish(scan(session.navigation.scope(root_id).unwrap(), true).unwrap())
         .unwrap();
-    assert_eq!(projection.index.scope, parent.scope);
-    assert_eq!(projection.index.revision, parent.revision);
-    assert_ne!(foreign.scope, parent.scope);
+    assert_eq!(index.scope, root_id);
+    let revision = index.revision;
+    // Reopening another file from the same folder keeps the root, its
+    // revision and its published records: no churn.
+    let cancel = session.begin(2).unwrap();
+    session
+        .stage(
+            2,
+            read_document(&dir.path().join("b.md"), None, 2, 2, &cancel).unwrap(),
+        )
+        .unwrap();
     session.commit(2).unwrap();
-    assert_eq!(session.active(2, 2).unwrap().snapshot.name, "next.md");
+    let parent = session.active(2, 2).unwrap().parent.clone();
+    assert!(session.navigation.adopt_root(parent).unwrap().is_none());
+    assert_eq!(session.navigation.root.as_ref().unwrap().id, root_id);
+    assert_eq!(session.navigation.root.as_ref().unwrap().revision, revision);
+    // Opening a file from a different folder retires the old root: its scope
+    // and reading bindings die, and the new folder becomes the watched root.
+    let cancel = session.begin(3).unwrap();
+    session
+        .stage(
+            3,
+            read_document(&other.path().join("elsewhere.md"), None, 3, 3, &cancel).unwrap(),
+        )
+        .unwrap();
+    session.commit(3).unwrap();
+    let parent = session.active(3, 3).unwrap().parent.clone();
+    let Some((scope, retired)) = session.navigation.adopt_root(parent).unwrap() else {
+        panic!("a different folder replaces the working folder");
+    };
+    assert!(retired.is_none());
+    assert_ne!(scope.id, root_id);
+    assert!(session.navigation.scope(root_id).is_err());
+    let moved = session
+        .navigation
+        .publish(scan(session.navigation.scope(scope.id).unwrap(), true).unwrap())
+        .unwrap();
+    assert_eq!(moved.entries[0].name, "elsewhere.md");
+    assert!(
+        session
+            .navigation
+            .root_siblings(&session.active(3, 3).unwrap().path)
+            .is_some()
+    );
     drop(session);
     reap(dir);
     reap(other);
@@ -498,7 +591,7 @@ fn preview_reads_fresh_bytes_even_same_size_and_time_and_does_not_enroll_documen
     let path = dir.path().join("same.md");
     fs::write(&path, "# Old").unwrap();
     let mut session = Session::default();
-    let index = published(&mut session.navigation, dir.path(), true);
+    let index = published(&mut session.navigation, dir.path());
     let scope = session.navigation.scope(index.scope).unwrap();
     let record = scope.entry(binding(&index, "same.md")).unwrap();
     let active_cancel = session.begin(5).unwrap();
@@ -565,7 +658,7 @@ fn reveal_uses_only_current_active_grant_is_off_lock_and_failure_preserves_reade
     reap(dir);
 }
 #[test]
-fn quick_subtree_caps_depth_four_while_the_watched_root_stays_recursive() {
+fn the_configured_depth_caps_the_root_scan_and_the_root_is_the_only_queryable_scope() {
     let dir = root();
     let deep: [&[&str]; 5] = [
         &["top.md"],
@@ -592,38 +685,62 @@ fn quick_subtree_caps_depth_four_while_the_watched_root_stays_recursive() {
             .to_string_lossy()
             .into_owned()
     };
-    let mut nav = Navigation::default();
-    let scope = nav
-        .start_quick(root_path(dir.path()).unwrap(), false)
-        .unwrap();
-    let quick = nav.publish(scan_subtree(scope).unwrap()).unwrap();
-    let present = |parts: &[&str], kind: &str| {
-        quick
+    let present = |index: &Index, parts: &[&str], kind: &str| {
+        index
             .entries
             .iter()
             .any(|e| e.relative == relative(parts) && e.kind == kind)
     };
-    // Depth four appears; depth five does not. The depth-4 directory is
-    // listed without its contents being scanned; query() reports such
-    // unread contents as missing so the directory-read flow populates them.
-    assert!(present(&["top.md"], "markdown"));
-    assert!(present(&["one", "deep.md"], "markdown"));
-    assert!(present(&["one", "two", "deeper.md"], "markdown"));
-    assert!(present(&["one", "two", "three", "four.md"], "markdown"));
-    assert!(present(&["one", "two", "three", "four"], "directory"));
+    let mut nav = Navigation::default();
+    // The default depth (4) lists depth-four files and depth-four boundary
+    // directories without descending; depth five is simply not indexed.
+    let capped = {
+        let scope = nav.start(root_path(dir.path()).unwrap(), false).unwrap();
+        nav.publish(scan_depth(scope, 4, |_| {}).unwrap()).unwrap()
+    };
+    assert!(present(&capped, &["top.md"], "markdown"));
+    assert!(present(&capped, &["one", "deep.md"], "markdown"));
+    assert!(present(&capped, &["one", "two", "deeper.md"], "markdown"));
+    assert!(present(
+        &capped,
+        &["one", "two", "three", "four.md"],
+        "markdown"
+    ));
+    assert!(present(
+        &capped,
+        &["one", "two", "three", "four"],
+        "directory"
+    ));
     assert!(!present(
+        &capped,
         &["one", "two", "three", "four", "beyond.md"],
         "markdown"
     ));
-    assert!(quick.issues.is_empty());
-    // The shared fuzzy scoring answers the derived scope, and a record
-    // binding resolves through the quick slot.
-    let found = query::query(
-        &nav.query_scope(quick.scope).unwrap(),
+    assert!(capped.issues.is_empty());
+    // A boundary directory holds listed-but-unread content: the query probe
+    // reports it as missing so the Read-this-directory flow engages.
+    let scope = nav.query_scope(capped.scope).unwrap();
+    let hollow = query::query(
+        &scope,
         query::Query {
-            scope: quick.scope,
-            revision: quick.revision,
+            scope: capped.scope,
+            revision: capped.revision,
             query_id: 1,
+            text: "one/two/three/four/".into(),
+            directory: None,
+        },
+        None,
+    )
+    .unwrap()
+    .reply;
+    assert_eq!(hollow.status, "missing");
+    // The shared fuzzy scoring answers the working folder root.
+    let found = query::query(
+        &scope,
+        query::Query {
+            scope: capped.scope,
+            revision: capped.revision,
+            query_id: 2,
             text: "four.md".into(),
             directory: None,
         },
@@ -636,70 +753,86 @@ fn quick_subtree_caps_depth_four_while_the_watched_root_stays_recursive() {
         found.results[0].entry.relative,
         relative(&["one", "two", "three", "four.md"])
     );
-    let binding = Binding {
-        scope: quick.scope,
-        revision: quick.revision,
+    let entry_binding = Binding {
+        scope: capped.scope,
+        revision: capped.revision,
         entry: found.results[0].entry.id,
     };
-    let record = nav.scope(binding.scope).unwrap().entry(binding).unwrap();
+    let record = nav
+        .scope(entry_binding.scope)
+        .unwrap()
+        .entry(entry_binding)
+        .unwrap();
     assert!(record.canonical.ends_with("four.md"));
-    // The derived scope follows the displayed document to another folder;
-    // the retired scope and its bindings die with the slot.
-    let retired = quick.scope;
+    // Depth one lists the root level only; unknown settings values clamp
+    // into the accepted range before the scan consumes them.
+    let shallow = {
+        let scope = nav.start(root_path(dir.path()).unwrap(), false).unwrap();
+        nav.publish(scan_depth(scope, 1, |_| {}).unwrap()).unwrap()
+    };
+    assert!(present(&shallow, &["top.md"], "markdown"));
+    assert!(!present(&shallow, &["one", "deep.md"], "markdown"));
+    // Out-of-range settings values clamp before the scan consumes them:
+    // zero behaves as the floor (1 level) and huge values as the ceiling.
+    let floored = {
+        let scope = nav.start(root_path(dir.path()).unwrap(), false).unwrap();
+        nav.publish(scan_depth(scope, 0, |_| {}).unwrap()).unwrap()
+    };
+    assert!(present(&floored, &["top.md"], "markdown"));
+    assert!(!present(&floored, &["one", "deep.md"], "markdown"));
+    let ceiled = {
+        let scope = nav.start(root_path(dir.path()).unwrap(), false).unwrap();
+        nav.publish(scan_depth(scope, 9_999, |_| {}).unwrap())
+            .unwrap()
+    };
+    assert!(present(
+        &ceiled,
+        &["one", "two", "three", "four", "beyond.md"],
+        "markdown"
+    ));
+    // The root is the only queryable scope: unknown identities are stale.
+    assert_eq!(
+        nav.query_scope(capped.scope + 10_000).err().unwrap().code,
+        "stale"
+    );
+    // A fresh root retires the previous one and its bindings.
     let other = root();
     fs::write(other.path().join("elsewhere.md"), "# Elsewhere").unwrap();
-    let next = nav
-        .start_quick(root_path(other.path()).unwrap(), false)
-        .unwrap();
-    let next = nav.publish(scan_subtree(next).unwrap()).unwrap();
-    assert_ne!(next.scope, retired);
-    assert!(nav.scope(retired).is_err());
-    assert_eq!(nav.query_scope(retired).err().unwrap().code, "stale");
-    // A traversal refresh keeps the slot identity under a new revision.
-    let refreshed = nav
-        .start_quick(root_path(other.path()).unwrap(), true)
-        .unwrap();
+    let next = {
+        let scope = nav.start(root_path(other.path()).unwrap(), false).unwrap();
+        nav.publish(scan_depth(scope, 4, |_| {}).unwrap()).unwrap()
+    };
+    assert_ne!(next.scope, capped.scope);
+    assert!(nav.scope(capped.scope).is_err());
+    assert_eq!(nav.query_scope(capped.scope).err().unwrap().code, "stale");
+    // A traversal refresh keeps the root identity under a new revision.
+    let refreshed = nav.start(root_path(other.path()).unwrap(), true).unwrap();
     assert_eq!(refreshed.id, next.scope);
     assert_ne!(refreshed.revision, next.revision);
-    // Sibling navigation scopes stay private to sibling navigation.
-    let sibling = nav
-        .start(root_path(dir.path()).unwrap(), false, false)
-        .unwrap();
-    let sibling = nav.publish(scan(sibling, false).unwrap()).unwrap();
-    assert!(nav.query_scope(sibling.scope).is_err());
-    assert!(nav.scope(sibling.scope).is_ok());
-    // The watched root keeps its unbounded recursion regardless of the cap.
-    let root_index = {
-        let scope = nav
-            .start(root_path(dir.path()).unwrap(), true, false)
-            .unwrap();
+    // The unbounded scan remains available for full indexing; it lists every
+    // depth, unlike the capped root scan.
+    let unbounded = {
+        let scope = nav.start(root_path(dir.path()).unwrap(), false).unwrap();
         nav.publish(scan(scope, true).unwrap()).unwrap()
     };
     for parts in deep.iter() {
-        assert!(
-            root_index
-                .entries
-                .iter()
-                .any(|e| e.relative == relative(parts) && e.kind != "directory")
-        );
+        assert!(present(&unbounded, parts, "markdown"));
     }
     drop(nav);
     reap(dir);
     reap(other);
 }
 #[test]
-fn capped_scan_degrades_unreadable_subdirectories_to_partial_results() {
+fn the_depth_capped_root_scan_degrades_unreadable_subdirectories_to_partial_results() {
     let dir = root();
     fs::create_dir(dir.path().join("denied")).unwrap();
     fs::create_dir_all(dir.path().join("one/two")).unwrap();
     fs::write(dir.path().join("good.md"), "# Good").unwrap();
     fs::write(dir.path().join("one/two/nested.md"), "# Nested").unwrap();
     let mut nav = Navigation::default();
-    let mut scope = nav
-        .start_quick(root_path(dir.path()).unwrap(), false)
-        .unwrap();
+    let mut scope = nav.start(root_path(dir.path()).unwrap(), false).unwrap();
     let denied = || io::Error::new(io::ErrorKind::PermissionDenied, "fixture denial");
-    scan_with(&mut scope, Some(QUICK_DEPTH), |path| {
+    scan_with(&mut scope, Some(4), |path| {
         if path.ends_with("denied") {
             return Err(denied());
         }
@@ -718,7 +851,7 @@ fn capped_scan_degrades_unreadable_subdirectories_to_partial_results() {
     reap(dir);
 }
 #[test]
-fn traversal_adoption_preserves_read_directories_and_the_cap_probe_engages_missing() {
+fn a_traversal_read_converges_a_capped_boundary_directory_through_the_worker_refresh() {
     let dir = root();
     // Address every path the way production does: component-wise joins. A
     // forward-slash string pushed onto the canonicalized (verbatim on
@@ -740,11 +873,9 @@ fn traversal_adoption_preserves_read_directories_and_the_cap_probe_engages_missi
     )
     .unwrap();
     let mut nav = Navigation::default();
-    let scope = nav
-        .start_quick(root_path(dir.path()).unwrap(), false)
-        .unwrap();
+    let scope = nav.start(root_path(dir.path()).unwrap(), false).unwrap();
     let scope_path = scope.path.clone();
-    let quick = nav.publish(scan_subtree(scope).unwrap()).unwrap();
+    let capped = nav.publish(scan_depth(scope, 4, |_| {}).unwrap()).unwrap();
     let four_dir = join_parts(&scope_path, &["one", "two", "three", "four"]);
     // Derive the expected relative from the scan-addressed directory via
     // strip_prefix so string comparisons inherit exactly the separator style
@@ -755,13 +886,13 @@ fn traversal_adoption_preserves_read_directories_and_the_cap_probe_engages_missi
         .join("child.md")
         .to_string_lossy()
         .into_owned();
-    let answer = |text: &str| {
-        let scope = nav.query_scope(quick.scope).unwrap();
+    let answer = |nav: &Navigation, text: &str| {
+        let scope = nav.query_scope(capped.scope).unwrap();
         query::query(
             &scope,
             query::Query {
-                scope: quick.scope,
-                revision: quick.revision,
+                scope: capped.scope,
+                revision: scope.revision,
                 query_id: 1,
                 text: text.into(),
                 directory: None,
@@ -773,20 +904,20 @@ fn traversal_adoption_preserves_read_directories_and_the_cap_probe_engages_missi
     // A listed depth-4 directory holding visible content reports missing so
     // the Read-this-directory flow engages; genuinely empty and
     // unsupported-only boundaries stay ready with zero results.
-    let hollow = answer("one/two/three/four/");
+    let hollow = answer(&nav, "one/two/three/four/");
     assert_eq!(hollow.reply.status, "missing");
     assert_eq!(hollow.missing.as_deref(), Some(four_dir.as_path()));
-    let vacant = answer("one/two/three/empty/");
+    let vacant = answer(&nav, "one/two/three/empty/");
     assert_eq!(vacant.reply.status, "ready");
     assert_eq!(vacant.reply.total, 0);
-    let unsupported = answer("one/two/three/blocked/");
+    let unsupported = answer(&nav, "one/two/three/blocked/");
     assert_eq!(unsupported.reply.status, "ready");
     assert_eq!(unsupported.reply.total, 0);
     // The traversal seam (search(traverse=true)): a refresh draft reads the
-    // directory under a new revision and republishes the slot.
-    let draft = nav.start_quick(scope_path.clone(), true).unwrap();
-    assert_eq!(draft.id, quick.scope);
-    assert_ne!(draft.revision, quick.revision);
+    // directory under a new revision and republishes the root.
+    let draft = nav.start(scope_path.clone(), true).unwrap();
+    assert_eq!(draft.id, capped.scope);
+    assert_ne!(draft.revision, capped.revision);
     let republished = nav
         .publish(scan_directory(draft, four_dir.clone()).unwrap())
         .unwrap();
@@ -796,44 +927,10 @@ fn traversal_adoption_preserves_read_directories_and_the_cap_probe_engages_missi
             .iter()
             .any(|e| e.relative == child_relative)
     );
-    // With reuse the recovery fetch adopts that published scope: the read
-    // directory survives under the same identity and the retried query is
-    // ready, so the Read-this-directory flow converges.
-    let adopted = nav.adopt_quick(&scope_path).unwrap();
-    assert_eq!(adopted.scope, quick.scope);
-    assert_eq!(adopted.revision, republished.revision);
-    assert!(adopted.entries.iter().any(|e| e.relative == child_relative));
-    let settled = {
-        let scope = nav.query_scope(republished.scope).unwrap();
-        query::query(
-            &scope,
-            query::Query {
-                scope: republished.scope,
-                revision: republished.revision,
-                query_id: 2,
-                text: "one/two/three/four/".into(),
-                directory: None,
-            },
-            None,
-        )
-        .unwrap()
-        .reply
-    };
+    let settled = answer(&nav, "one/two/three/four/").reply;
     assert_eq!(settled.status, "ready");
     assert_eq!(settled.total, 1);
     assert_eq!(settled.results[0].entry.name, "child.md");
-    // Adoption is exact: a foreign path never adopts.
-    assert!(nav.adopt_quick(&dir.path().join("elsewhere")).is_none());
-    // A plain (overlay-open) fetch rescans from scratch and wipes the read
-    // directory again, as the accepted re-read-on-open lifecycle requires.
-    let wiped_scope = nav.start_quick(scope_path.clone(), false).unwrap();
-    let wiped = nav.publish(scan_subtree(wiped_scope).unwrap()).unwrap();
-    assert_ne!(wiped.scope, quick.scope);
-    assert!(!wiped.entries.iter().any(|e| e.relative == child_relative));
-    // An unpublished draft in the slot never adopts.
-    let draft = nav.start_quick(scope_path.clone(), true).unwrap();
-    assert!(nav.adopt_quick(&scope_path).is_none());
-    draft.cancel.store(true, Ordering::Release);
     drop(nav);
     reap(dir);
 }

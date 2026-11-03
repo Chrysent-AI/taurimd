@@ -706,6 +706,35 @@ article[data-zoom='290'] {
 article[data-zoom='300'] {
   font-size: 3rem;
 }
+.outline {
+  flex: 0 1 14rem;
+  width: 30%;
+  max-width: 30%;
+  min-width: 8rem;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.6rem;
+  background: var(--panel);
+  border-inline-start: 1px solid var(--border);
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+}
+.outline h2 {
+  font-size: 1rem;
+}
+.outline h2:focus {
+  outline: 3px solid var(--focus);
+}
+.outline ul {
+  list-style: none;
+  padding-inline-start: 0.65rem;
+}
+.outline li {
+  margin-block: 0.45rem;
+}
+.outline a {
+  color: var(--link);
+}
 .reading-pane {
   display: flex;
   flex-direction: column;

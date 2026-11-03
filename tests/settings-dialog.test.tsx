@@ -373,8 +373,11 @@ it('restores appearance defaults in one revisioned change and leaves unrelated p
     statusVisible: false,
     fileSortKey: 'name',
     fileSortDirection: 'asc',
-    // The appearance reset never touches the remote image hosts.
+    // The appearance reset never touches the remote image hosts, the
+    // indexing depth or the remembered pane visibility.
     remoteImageHosts: ['github.com'],
+    navigationDepth: 4,
+    tocVisible: true,
   });
   expect(screen.getByLabelText<HTMLSelectElement>('Appearance').value).toBe(
     'system',
@@ -427,6 +430,8 @@ it('keeps a failed appearance reset truthful and retries only the appearance fie
     fileSortKey: 'name',
     fileSortDirection: 'asc',
     remoteImageHosts: ['github.com'],
+    navigationDepth: 4,
+    tocVisible: true,
   });
 });
 

@@ -70,6 +70,27 @@ pub fn prune_remote(app: &AppHandle) {
         }
     }
 }
+/// Triggers one manual rescan of every reader's watched working folder, so
+/// an indexing-depth change re-indexes without waiting for the next event.
+pub fn refresh_working_folders(app: &AppHandle) {
+    let registry = app.state::<Windows>();
+    let Ok(windows) = registry.lock() else {
+        return;
+    };
+    for reader in windows.readers.values() {
+        refresh_reader_folder(&reader.session);
+    }
+}
+/// The per-reader rescan seam: one manual refresh of a reader's watcher
+/// worker when it has one. Split from the registry loop so the rescan
+/// behavior stays testable without a Tauri handle.
+pub(crate) fn refresh_reader_folder(session: &Handle) {
+    if let Ok(session) = session.lock()
+        && let Some(worker) = &session.navigation.worker
+    {
+        worker.refresh();
+    }
+}
 impl Registry {
     fn detach(&mut self, label: &str) -> Option<Reader> {
         let reader = self.readers.remove(label)?;

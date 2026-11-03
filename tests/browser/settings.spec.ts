@@ -531,7 +531,7 @@ test('optimistic failure/retry, fallback, stale responses and simulated retained
   ).toHaveValue('nord');
   await expect(hydrated.getByLabel('Fit diagrams to view')).not.toBeChecked();
   await expect(
-    hydrated.getByLabel('Show sidebar by default'),
+    hydrated.getByLabel('Show File Explorer by default'),
   ).not.toBeChecked();
 });
 
@@ -579,7 +579,9 @@ test('stale native revisions and late replies preserve newer local intent and un
   await expect(dialog.getByLabel('Light palette', { exact: true })).toHaveValue(
     'nord',
   );
-  await expect(dialog.getByLabel('Show sidebar by default')).not.toBeChecked();
+  await expect(
+    dialog.getByLabel('Show File Explorer by default'),
+  ).not.toBeChecked();
   await expect(dialog.getByLabel('Fit diagrams to view')).not.toBeChecked();
   const calls = await page.evaluate(() =>
     window.readerFixture
@@ -657,9 +659,11 @@ test('real modal keyboard containment/restoration, IME guards and feature menu e
   await page.evaluate(() => window.readerFixture.menu('settings'));
   await expect(dialog).toBeVisible();
   await expect(appearance).toBeFocused();
-  await dialog.getByLabel('Show sidebar by default').focus();
+  await dialog.getByLabel('Show File Explorer by default').focus();
   await page.keyboard.press('Space');
-  await expect(dialog.getByLabel('Show sidebar by default')).not.toBeChecked();
+  await expect(
+    dialog.getByLabel('Show File Explorer by default'),
+  ).not.toBeChecked();
   await saved(page);
   await dialog.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(opener).toBeFocused();

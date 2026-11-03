@@ -55,10 +55,8 @@ interface Props {
   disabled: boolean;
   allow: () => boolean;
   open: (intent: EntryIntent, invoker?: HTMLElement) => void;
-  jump: (key: number) => void;
   visible: boolean;
   siblingGroupRef: (node: HTMLDivElement | null) => void;
-  section: number | null;
   sortKey: FileSortKey;
   sortDirection: FileSortDirection;
 }
@@ -77,114 +75,85 @@ export function Navigation(props: Props) {
     props.sortDirection,
   );
   return (
-    <>
-      <nav aria-label="Files">
-        <h2 ref={rootHeading} tabIndex={-1}>
-          Files
-        </h2>
-        <p>{state.message}</p>
-        {!state.root ? (
-          <p className="hint">Choose a folder with File → Open Folder…</p>
+    <nav aria-label="Files">
+      <h2 ref={rootHeading} tabIndex={-1}>
+        Files
+      </h2>
+      <p>{state.message}</p>
+      {!state.root ? (
+        state.rootMessage ? (
+          <p className="warning">{state.rootMessage}</p>
         ) : (
-          <div aria-busy={state.rootBusy}>
-            <p>{state.rootMessage}</p>
-            {state.watcherMessage && (
-              <p className="warning">{state.watcherMessage}</p>
-            )}
-            <p className="folder-identity">{state.root.name}</p>
-            {document &&
-              state.siblings &&
-              !state.siblings.inRoot &&
-              state.rootStatus === 'ready' && (
-                <p>
-                  Displayed file is outside this folder or excluded from
-                  navigation.
-                </p>
-              )}
-            {!state.root.entries.some((entry) => entry.kind !== 'directory') &&
-              state.rootStatus === 'ready' && <p>No supported files.</p>}
-            <ul>
-              <Rows
-                {...props}
-                index={state.root}
-                parent={null}
-                fallback={rootFallback}
-              />
-            </ul>
-            {state.root.issues.map((issue, i) => (
-              <p className="warning" key={i}>
-                {issue.relative || 'Folder'}: {issue.code} — {issue.message}
+          <p className="hint">Open a document to browse its folder.</p>
+        )
+      ) : (
+        <div aria-busy={state.rootBusy}>
+          <p>{state.rootMessage}</p>
+          {state.watcherMessage && (
+            <p className="warning">{state.watcherMessage}</p>
+          )}
+          <p className="folder-identity">{state.root.name}</p>
+          {document &&
+            state.siblings &&
+            !state.siblings.inRoot &&
+            state.rootStatus === 'ready' && (
+              <p>
+                Displayed file is outside this folder or excluded from
+                navigation.
               </p>
-            ))}
-          </div>
-        )}
-        {document && (
-          <div
-            className="sibling-controls"
-            ref={siblingGroupRef}
-            role="group"
-            aria-label="Sibling navigation"
-            tabIndex={-1}
-          >
-            <p>Files in the displayed file’s folder</p>
-            <p>{state.siblingMessage}</p>
-            <div className="commands">
-              {(['previous', 'next'] as const).map((direction) => (
-                <button
-                  key={direction}
-                  disabled={disabled || !adjacent[direction]}
-                  onClick={(event) => {
-                    const entry = adjacent[direction];
-                    if (!entry || !state.siblings || !allow()) return;
-                    open(
-                      {
-                        binding: binding(state.siblings.index, entry),
-                        name: entry.name,
-                        focus: 'preserve',
-                      },
-                      event.currentTarget,
-                    );
-                  }}
-                >
-                  {direction === 'previous' ? 'Previous File' : 'Next File'}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </nav>
-      <nav aria-label="On this page">
-        <h2>On this page</h2>
-        {!document ? (
-          <p>No document open.</p>
-        ) : document.snapshot.format === 'text' ? (
-          <p>Outline unavailable for plain text.</p>
-        ) : !document.headings?.length ? (
-          <p>No H1/H2 headings.</p>
-        ) : (
-          <HeadingList
-            headings={document.headings}
-            render={(heading) => (
-              <a
-                href={`#${heading.id}`}
-                aria-current={
-                  props.section === heading.key ? 'location' : undefined
-                }
+            )}
+          {!state.root.entries.some((entry) => entry.kind !== 'directory') &&
+            state.rootStatus === 'ready' && <p>No supported files.</p>}
+          <ul>
+            <Rows
+              {...props}
+              index={state.root}
+              parent={null}
+              fallback={rootFallback}
+            />
+          </ul>
+          {state.root.issues.map((issue, i) => (
+            <p className="warning" key={i}>
+              {issue.relative || 'Folder'}: {issue.code} — {issue.message}
+            </p>
+          ))}
+        </div>
+      )}
+      {document && (
+        <div
+          className="sibling-controls"
+          ref={siblingGroupRef}
+          role="group"
+          aria-label="Sibling navigation"
+          tabIndex={-1}
+        >
+          <p>Files in the displayed file’s folder</p>
+          <p>{state.siblingMessage}</p>
+          <div className="commands">
+            {(['previous', 'next'] as const).map((direction) => (
+              <button
+                key={direction}
+                disabled={disabled || !adjacent[direction]}
                 onClick={(event) => {
-                  event.preventDefault();
-                  if (allow()) props.jump(heading.key);
+                  const entry = adjacent[direction];
+                  if (!entry || !state.siblings || !allow()) return;
+                  open(
+                    {
+                      binding: binding(state.siblings.index, entry),
+                      name: entry.name,
+                      focus: 'preserve',
+                    },
+                    event.currentTarget,
+                  );
                 }}
               >
-                {heading.label || 'Untitled section'}
-                {props.section === heading.key && (
-                  <span aria-hidden="true"> · Current section</span>
-                )}
-              </a>
-            )}
-          />
-        )}
-      </nav>
-    </>
+                {direction === 'previous' ? 'Previous File' : 'Next File'}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </nav>
   );
 }
 function Rows(

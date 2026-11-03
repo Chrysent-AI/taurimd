@@ -313,7 +313,16 @@ impl Schedule {
     }
 }
 // Both the Tauri host and native lifecycle tests use this publication seam.
-pub fn apply(state: &Mutex<Session>, id: u32, work: Work, emit: impl Fn(Status)) -> bool {
+// `depth` is the configured explorer indexing depth; every full scan of the
+// watched root is bounded by it, including refreshes triggered by settings
+// changes, so a depth change rescan passes the new value naturally.
+pub fn apply(
+    state: &Mutex<Session>,
+    id: u32,
+    work: Work,
+    depth: usize,
+    emit: impl Fn(Status),
+) -> bool {
     let result = (|| -> Result<(), AppError> {
         let draft = {
             let mut session = state.lock().map_err(|_| Session::stale())?;
@@ -345,7 +354,7 @@ pub fn apply(state: &Mutex<Session>, id: u32, work: Work, emit: impl Fn(Status))
                 Work::Scan(directory, degraded) => {
                     nav.status.degraded = *degraded;
                     nav.status.phase = "loading";
-                    let draft = nav.start(path, true, true)?;
+                    let draft = nav.start(path, true)?;
                     nav.status.revision = draft.revision;
                     if directory.is_some() {
                         nav.status.traversals += 1;
@@ -360,7 +369,7 @@ pub fn apply(state: &Mutex<Session>, id: u32, work: Work, emit: impl Fn(Status))
         if let Some(draft) = draft {
             let result = match work {
                 Work::Scan(Some(path), _) => navigation::scan_directory(draft, path),
-                _ => navigation::scan_progress(draft, true, |entries| {
+                _ => navigation::scan_depth(draft, depth, |entries| {
                     if let Ok(mut session) = state.lock() {
                         let nav = &mut session.navigation;
                         if nav.root.as_ref().is_some_and(|root| root.id == id) {

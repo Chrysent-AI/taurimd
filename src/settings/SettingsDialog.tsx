@@ -1,6 +1,9 @@
 import { useState, type ReactNode } from 'react';
 import {
   defaults,
+  navigationDepthChoices,
+  navigationDepthMax,
+  navigationDepthMin,
   palettes,
   remoteHostProblem,
   type SettingsController,
@@ -258,12 +261,48 @@ export function SettingsDialog({
             controller.change({ sidebarDefault: event.target.checked });
           }}
         />
-        Show sidebar by default
+        Show File Explorer by default
+      </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={settings.tocVisible}
+          onChange={(event) => {
+            controller.change({ tocVisible: event.target.checked });
+          }}
+        />
+        Show Table of Contents by default
       </label>
       <p className="hint">
-        Fit updates current diagrams without rerendering them. Sidebar
-        visibility applies immediately and is remembered.
+        Fit updates current diagrams without rerendering them. Pane visibility
+        applies immediately and is remembered; View → Show File Explorer and
+        View → Show Table of Contents use the same remembered choices.
       </p>
+      <fieldset>
+        <legend>File Explorer</legend>
+        <div className="setting-field">
+          <label htmlFor="navigation-depth">Indexing depth</label>
+          <select
+            id="navigation-depth"
+            value={settings.navigationDepth}
+            onChange={(event) => {
+              const value = Number.parseInt(event.target.value, 10);
+              if (value >= navigationDepthMin && value <= navigationDepthMax)
+                controller.change({ navigationDepth: value });
+            }}
+          >
+            {navigationDepthChoices.map((levels) => (
+              <option key={levels} value={levels}>
+                {levels === 1 ? '1 level' : `${String(levels)} levels`}
+              </option>
+            ))}
+          </select>
+        </div>
+        <p className="hint">
+          How many directory levels of the working folder are indexed for the
+          File Explorer and Quick Open. Changing it rescans the folder.
+        </p>
+      </fieldset>
       <fieldset>
         <legend>File order</legend>
         <div className="setting-field">

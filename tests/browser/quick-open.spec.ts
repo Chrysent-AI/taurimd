@@ -48,16 +48,29 @@ const subtree = (): FileIndex => ({
   ],
   issues: [],
 });
-async function choose(page: Page, root = index()) {
+async function choose(page: Page, root = index(), notify = true) {
   await page.evaluate((root) => {
-    window.readerFixture.enqueue('select_root', {
+    window.readerFixture.workingFolder(root);
+    window.readerFixture.enqueue('select_document', {
       value: {
         status: 'ready',
-        snapshot: window.readerFixture.indexSnapshot(root),
+        snapshot: {
+          documentId: 900,
+          revision: 1,
+          name: 'kept.log',
+          location: 'fixture/kept.log',
+          format: 'text',
+          source: 'kept',
+        },
       },
     });
-    return window.readerFixture.menu('open-folder');
+    return window.readerFixture.menu('open');
   }, root);
+  await expect(page.getByRole('article', { name: 'kept.log' })).toBeFocused();
+  if (!notify) {
+    // The index subscription is down; the documented recovery is focus.
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  }
   await expect(
     page.getByRole('navigation', { name: 'Files', exact: true }),
   ).toContainText('Folder loaded');
@@ -76,23 +89,28 @@ async function tick(page: Page) {
 async function open(
   page: Page,
   source = '# Kept\n\n<details><summary>Details</summary>Kept body</details>',
+  folder: FileIndex | null = null,
 ) {
-  await page.evaluate((source) => {
-    window.readerFixture.enqueue('select_document', {
-      value: {
-        status: 'ready',
-        snapshot: {
-          documentId: 1,
-          revision: 1,
-          name: 'kept.md',
-          location: 'fixture/kept.md',
-          format: 'markdown',
-          source,
+  await page.evaluate(
+    ({ source, folder }) => {
+      window.readerFixture.workingFolder(folder);
+      window.readerFixture.enqueue('select_document', {
+        value: {
+          status: 'ready',
+          snapshot: {
+            documentId: 1,
+            revision: 1,
+            name: 'kept.md',
+            location: 'fixture/kept.md',
+            format: 'markdown',
+            source,
+          },
         },
-      },
-    });
-    return window.readerFixture.menu('open');
-  }, source);
+      });
+      return window.readerFixture.menu('open');
+    },
+    { source, folder },
+  );
   await expect(page.getByRole('article', { name: 'kept.md' })).toBeFocused();
 }
 test.beforeEach(async ({ page }) => {
@@ -125,7 +143,7 @@ test('manual refresh settles through cached getters when only index notification
   await expect
     .poll(() => page.evaluate(() => window.readerFixture.listenerCount()))
     .toBe(4);
-  await choose(page);
+  await choose(page, index(), false);
   await open(page);
   const article = await page.getByRole('article').elementHandle();
   const input = await picker(page);
@@ -258,11 +276,12 @@ test('native action focuses once, debounces cache queries, file Tab hands off af
   await expect(page.getByRole('article', { name: 'kept.md' })).toBeVisible();
   await expect(page.getByRole('article', { name: 'kept.md' })).toBeFocused();
   expect(await page.evaluate(() => window.readerFixture.parses())).toBe(1);
+  // One fixture commit established the working folder, one opened kept.md.
   expect(
     (await page.evaluate(() => window.readerFixture.calls())).filter(
       (call) => call.command === 'commit_document',
     ),
-  ).toHaveLength(1);
+  ).toHaveLength(2);
   expect(
     (await page.evaluate(() => window.readerFixture.calls())).find(
       (call) => call.command === 'open_index_entry',
@@ -335,15 +354,18 @@ test('directory Tab changes only picker location; ordinary Tab and Shift+Tab rea
     .press('Escape');
   await expect(page.getByRole('article', { name: 'kept.md' })).toBeFocused();
 });
-test('no-root and outside typing grant nothing; native chooser cancellation retains text and explicit file choice really commits', async ({
+test('no-document and outside typing grant nothing; native chooser cancellation retains text and explicit file choice really commits', async ({
   page,
 }) => {
   let input = await picker(page);
   await input.fill('~/outside/');
   await tick(page);
   await expect(page.getByRole('dialog')).toContainText(
-    'Choose a folder to search',
+    'Open a file to search its folder.',
   );
+  await expect(
+    page.getByRole('button', { name: 'Choose Folder…' }),
+  ).toHaveCount(0);
   expect(
     (await page.evaluate(() => window.readerFixture.calls())).filter(
       (call) => call.command === 'query_index',
@@ -357,11 +379,13 @@ test('no-root and outside typing grant nothing; native chooser cancellation reta
   await expect(page.getByRole('dialog')).toContainText(
     'This location needs permission',
   );
+  // Typing never opens anything; the one select_document call is the
+  // working-folder fixture document opened by choose().
   expect(
     (await page.evaluate(() => window.readerFixture.calls())).filter(
       (call) => call.command === 'select_document',
     ),
-  ).toHaveLength(0);
+  ).toHaveLength(1);
   await page.evaluate(() => {
     window.readerFixture.enqueue('select_document', { hold: 'chooser' });
   });
@@ -403,22 +427,53 @@ test('no-root and outside typing grant nothing; native chooser cancellation reta
     ),
   ).toBe(true);
 });
-test('with only a file open the overlay derives its scope from the displayed folder subtree and Enter opens a nested match', async ({
+test('a settled adoption failure says the folder is gone instead of claiming an indexing pass forever', async ({
   page,
 }) => {
+  // The document committed but its folder could not be adopted (deleted,
+  // renamed or no longer grantable between the read and the adoption): the
+  // native side marks the status unavailable with no root to retain.
   await open(page);
-  await page.evaluate((tree) => {
-    window.readerFixture.quickIndex(tree);
-  }, subtree());
+  await page.evaluate(() =>
+    window.readerFixture.indexEvent(
+      window.readerFixture.indexSnapshot(
+        null,
+        'unavailable',
+        'folder vanished',
+      ),
+    ),
+  );
+  await picker(page);
+  await expect(page.getByRole('dialog')).toContainText(
+    'Folder unavailable (folder vanished)',
+  );
+  await expect(page.getByRole('dialog')).not.toContainText(
+    'Indexing this folder',
+  );
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
+  // The explorer carries the same honest degradation instead of the
+  // no-document hint.
+  await expect(
+    page.getByRole('navigation', { name: 'Files', exact: true }),
+  ).toContainText('Folder unavailable (folder vanished)');
+  await expect(
+    page.getByRole('navigation', { name: 'Files', exact: true }),
+  ).not.toContainText('Open a document to browse its folder.');
+  await expect(page.getByRole('article', { name: 'kept.md' })).toBeVisible();
+});
+test('opening a file indexes its folder for Quick Open with no separate indexing step, and Enter opens a nested match', async ({
+  page,
+}) => {
+  await open(page, undefined, subtree());
   const input = await picker(page);
   await expect(page.getByRole('dialog')).toContainText(
     'fixture/displayed-folder',
   );
-  const quick = (
-    await page.evaluate(() => window.readerFixture.navigationCalls())
-  ).filter((call) => call.command === 'get_quick_index');
-  expect(quick).toHaveLength(1);
-  expect(quick[0].payload).toMatchObject({ documentId: 1, revision: 1 });
+  // The working folder exists as soon as the document committed: no derived
+  // scope command and no indexing error can occur. Only sibling enumeration
+  // of the fixture document has run.
+  const nav = await page.evaluate(() => window.readerFixture.navigationCalls());
+  expect(nav.every((call) => call.command === 'get_siblings')).toBe(true);
   await input.fill('four');
   await tick(page);
   const leaf = options(page).filter({ hasText: 'four-leaf.md' });
@@ -451,7 +506,7 @@ test('with only a file open the overlay derives its scope from the displayed fol
     )?.payload,
   ).toMatchObject({ binding: { scope: 20, revision: 3 } });
 });
-test('with a folder root open the overlay covers the root subtree to depth four without deriving a scope', async ({
+test('the working folder covers its indexed subtree and the picker reads the root index directly', async ({
   page,
 }) => {
   await choose(page, {
@@ -470,71 +525,41 @@ test('with a folder root open the overlay covers the root subtree to depth four 
     options(page).filter({ hasText: 'one/two/three/four/deep-leaf.md' }),
   ).toHaveCount(1);
   await expect(page.getByRole('dialog')).toContainText('fixture/authorized');
-  expect(
-    (await page.evaluate(() => window.readerFixture.navigationCalls())).filter(
-      (call) => call.command === 'get_quick_index',
-    ),
-  ).toHaveLength(0);
+  // The searched scope is the already-published working folder; no
+  // additional indexing call exists at all.
+  const nav = await page.evaluate(() => window.readerFixture.navigationCalls());
+  expect(nav.every((call) => call.command === 'get_siblings')).toBe(true);
 });
-test('folder chooser cancellation keeps query; success replaces scope without reading a document', async ({
+test('a new working folder published while the picker is open replaces the searched scope without reading a document', async ({
   page,
 }) => {
   await choose(page);
   const input = await picker(page);
   await input.fill('alpha');
   await tick(page);
-  await page.evaluate(() => {
-    window.readerFixture.enqueue('select_root', {
-      value: { status: 'cancelled' },
-    });
-  });
-  await page
-    .getByRole('button', { name: 'Choose Folder…', exact: true })
-    .click();
-  await expect(input).toBeFocused();
-  await expect(input).toHaveValue('alpha');
-  await page.evaluate(() => {
-    window.readerFixture.enqueue('select_root', {
-      error: { code: 'io', message: 'Chooser unavailable' },
-    });
-  });
-  await page
-    .getByRole('button', { name: 'Choose Folder…', exact: true })
-    .click();
-  await expect(input).toBeFocused();
-  await expect(page.getByRole('dialog').getByRole('alert')).toContainText(
-    'Chooser unavailable',
-  );
-  await expect(input).toHaveValue('alpha');
   const next = {
     ...index(2),
     scope: 40,
     name: 'fixture/new-root',
     entries: [entry(22, 'alpha-new.md')],
   };
-  await page.evaluate((next) => {
-    window.readerFixture.enqueue('select_root', {
-      value: {
-        status: 'ready',
-        snapshot: window.readerFixture.indexSnapshot(next),
-      },
-    });
-  }, next);
-  await page
-    .getByRole('button', { name: 'Choose Folder…', exact: true })
-    .click();
+  await page.evaluate(
+    (next) =>
+      window.readerFixture.indexEvent(window.readerFixture.indexSnapshot(next)),
+    next,
+  );
   await expect(input).toBeFocused();
   await expect(input).toHaveValue('alpha');
   await tick(page);
   await expect(page.getByRole('dialog')).toContainText('fixture/new-root');
   await expect(options(page)).toContainText('alpha-new.md');
+  // No index entry was read to replace the displayed document; the single
+  // select_document call is the working-folder fixture document.
   expect(
-    (await page.evaluate(() => window.readerFixture.calls())).some(
-      (call) =>
-        call.command === 'select_document' ||
-        call.command === 'open_index_entry',
+    (await page.evaluate(() => window.readerFixture.calls())).filter(
+      (call) => call.command === 'open_index_entry',
     ),
-  ).toBe(false);
+  ).toHaveLength(0);
 });
 test('held old query cannot overwrite latest revision, Unicode highlights and 100-cap are announced; cache events retain article nodes', async ({
   page,
@@ -670,13 +695,13 @@ test('indexing, empty, no-match, partial, degraded and unavailable stay distinct
   await expect(page.getByRole('dialog')).toContainText(
     'Folder unavailable (Folder removed)',
   );
+  // No index entry was read to replace the displayed document; the single
+  // select_document call is the working-folder fixture document.
   expect(
-    (await page.evaluate(() => window.readerFixture.calls())).some(
-      (call) =>
-        call.command === 'select_document' ||
-        call.command === 'open_index_entry',
+    (await page.evaluate(() => window.readerFixture.calls())).filter(
+      (call) => call.command === 'open_index_entry',
     ),
-  ).toBe(false);
+  ).toHaveLength(0);
 });
 test('query and watch-only publications retain playing media, diagram controls, selection, disclosures and reading scroll', async ({
   page,
