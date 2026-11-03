@@ -6,6 +6,9 @@ import type { Snapshot } from '../../src/types';
 const fence = (source: string) => `\n\n\`\`\`mermaid\n${source}\n\`\`\`\n\n`;
 const flow =
   'flowchart LR\n A[Read locally] -->|offline| B[Inspect]\n classDef chosen fill:#e0eeee,stroke:#336666,color:#112222\n class A chosen';
+const chain =
+  'flowchart LR\n' +
+  Array.from({ length: 5 }, (_, i) => `N${String(i + 1)}`).join('-->');
 async function open(
   page: Page,
   source: string,
@@ -589,6 +592,205 @@ test('focused local buttons keys wheel drag and modal composition guards leave o
     if (interruption === 'composition')
       await viewport.dispatchEvent('compositionend');
   }
+  await pointer.dispose();
+});
+test('fitted viewport keeps the document cursor without capture until zoom creates overflow', async ({
+  page,
+}) => {
+  const source = '# Cursor states' + fence(flow);
+  await open(page, source);
+  await settle(page, 1);
+  await page.setViewportSize({ width: 500, height: 600 });
+  const figure = page.locator('.diagram');
+  const viewport = figure.getByRole('region');
+  const scene = figure.locator('.diagram-scene');
+  const cursor = () =>
+    viewport.evaluate((element) => getComputedStyle(element).cursor);
+  const transform = () =>
+    scene.evaluate((element: HTMLElement) => element.style.transform);
+  const pointer = await viewport.evaluateHandle((element) => {
+    const state = { id: 0 };
+    element.addEventListener('pointerdown', (event) => {
+      if (event instanceof PointerEvent) state.id = event.pointerId;
+    });
+    return { state, element };
+  });
+
+  // A fitted image has nothing to pan: plain document cursor, and a press
+  // neither captures the pointer nor drags the scene.
+  await expect(viewport).toHaveAttribute('data-pannable', 'false');
+  expect(await cursor()).toBe('auto');
+  const fitted = await transform();
+  await viewport.scrollIntoViewIfNeeded();
+  const bounds = await viewport.boundingBox();
+  if (!bounds) throw new Error('Missing viewport');
+  await page.mouse.move(bounds.x + 30, bounds.y + 30);
+  await page.mouse.down();
+  expect(await viewport.getAttribute('data-dragging')).toBeNull();
+  expect(
+    await pointer.evaluate(({ state, element }) =>
+      element.hasPointerCapture(state.id),
+    ),
+  ).toBe(false);
+  await page.mouse.move(bounds.x + 80, bounds.y + 60);
+  await page.mouse.up();
+  expect(await transform()).toBe(fitted);
+
+  // Manual zoom creates real overflow: grab cursor, capture, live drag.
+  const zoomIn = figure.getByRole('button', { name: 'Zoom in', exact: true });
+  for (let step = 0; step < 15; step += 1) {
+    if ((await viewport.getAttribute('data-pannable')) === 'true') break;
+    await zoomIn.click();
+  }
+  await expect(viewport).toHaveAttribute('data-pannable', 'true');
+  expect(await cursor()).toBe('grab');
+  await viewport.scrollIntoViewIfNeeded();
+  const dragBounds = await viewport.boundingBox();
+  if (!dragBounds) throw new Error('Missing viewport');
+  await page.mouse.move(dragBounds.x + 30, dragBounds.y + 30);
+  await page.mouse.down();
+  expect(await viewport.getAttribute('data-dragging')).toBe('true');
+  expect(await cursor()).toBe('grabbing');
+  expect(
+    await pointer.evaluate(({ state, element }) =>
+      element.hasPointerCapture(state.id),
+    ),
+  ).toBe(true);
+  const beforeDrag = await transform();
+  await page.mouse.move(dragBounds.x + 80, dragBounds.y + 60);
+  expect(await transform()).not.toBe(beforeDrag);
+  await page.mouse.up();
+  expect(await viewport.getAttribute('data-dragging')).toBeNull();
+
+  // Document zoom steps reshape the viewport; the overflow state stays live.
+  let revision = 20;
+  const setZoom = async (pageZoom: number) => {
+    await page.evaluate(
+      ({ pageZoom, revision }) => {
+        const old = window.readerFixture.settings();
+        return window.readerFixture.settingsEvent({
+          ...old,
+          revision,
+          settings: { ...old.settings, pageZoom },
+        });
+      },
+      { pageZoom, revision: revision++ },
+    );
+    await expect(page.locator('article')).toHaveAttribute(
+      'data-zoom',
+      String(pageZoom),
+    );
+  };
+  for (const pageZoom of [50, 100, 300]) {
+    await setZoom(pageZoom);
+    await expect(viewport).toHaveAttribute('data-pannable', 'true');
+    expect(await cursor()).toBe('grab');
+  }
+
+  // Resetting refits the image at any zoom: back to the document cursor.
+  await figure.getByRole('button', { name: 'Reset diagram' }).click();
+  for (const pageZoom of [300, 100]) {
+    await setZoom(pageZoom);
+    await expect(viewport).toHaveAttribute('data-pannable', 'false');
+    expect(await cursor()).toBe('auto');
+  }
+  await pointer.dispose();
+});
+test('fit-disabled natural overflow pans and follows zoom steps and window resize', async ({
+  page,
+}) => {
+  const source = '# Natural size' + fence(chain);
+  await open(page, source);
+  await settle(page, 1);
+  await page.setViewportSize({ width: 500, height: 600 });
+  const figure = page.locator('.diagram');
+  const viewport = figure.getByRole('region');
+  const scene = figure.locator('.diagram-scene');
+  const cursor = () =>
+    viewport.evaluate((element) => getComputedStyle(element).cursor);
+  const transform = () =>
+    scene.evaluate((element: HTMLElement) => element.style.transform);
+  const pointer = await viewport.evaluateHandle((element) => {
+    const state = { id: 0 };
+    element.addEventListener('pointerdown', (event) => {
+      if (event instanceof PointerEvent) state.id = event.pointerId;
+    });
+    return { state, element };
+  });
+
+  // The wide chain shrinks to fit: nothing to pan.
+  await expect(viewport).toHaveAttribute('data-pannable', 'false');
+  expect(await cursor()).toBe('auto');
+
+  // Turning fit off reveals the natural size, which overflows.
+  await page.evaluate(() => window.readerFixture.menu('fit-diagrams'));
+  const natural = await scene.evaluate((element: HTMLElement) => ({
+    width: element.offsetWidth,
+    height: element.offsetHeight,
+  }));
+  if (natural.width <= 600 || natural.width >= 1000 || natural.height <= 0)
+    throw new Error(
+      `Unexpected natural diagram size: ${JSON.stringify(natural)}`,
+    );
+  await expect(viewport).toHaveAttribute('data-pannable', 'true');
+  expect(await cursor()).toBe('grab');
+  const bounds = await viewport.boundingBox();
+  if (!bounds) throw new Error('Missing viewport');
+  await page.mouse.move(bounds.x + 30, bounds.y + 30);
+  await page.mouse.down();
+  expect(
+    await pointer.evaluate(({ state, element }) =>
+      element.hasPointerCapture(state.id),
+    ),
+  ).toBe(true);
+  const beforeDrag = await transform();
+  await page.mouse.move(bounds.x + 90, bounds.y + 30);
+  expect(await transform()).not.toBe(beforeDrag);
+  await page.mouse.up();
+
+  // Document zoom steps keep the natural overflow pannable.
+  let revision = 20;
+  for (const pageZoom of [50, 100, 300]) {
+    await page.evaluate(
+      ({ pageZoom, revision }) => {
+        const old = window.readerFixture.settings();
+        return window.readerFixture.settingsEvent({
+          ...old,
+          revision,
+          settings: { ...old.settings, pageZoom },
+        });
+      },
+      { pageZoom, revision: revision++ },
+    );
+    await expect(page.locator('article')).toHaveAttribute(
+      'data-zoom',
+      String(pageZoom),
+    );
+    await expect(viewport).toHaveAttribute('data-pannable', 'true');
+    expect(await cursor()).toBe('grab');
+  }
+
+  // Widening the window past the natural size removes the overflow again;
+  // the zoom stays at 300, whose wide article would keep a larger diagram
+  // overflowing, so the fit flip here is unambiguously resize-driven.
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await expect(viewport).toHaveAttribute('data-pannable', 'false');
+  expect(await cursor()).toBe('auto');
+  await viewport.scrollIntoViewIfNeeded();
+  const wide = await viewport.boundingBox();
+  if (!wide) throw new Error('Missing viewport');
+  const idle = await transform();
+  await page.mouse.move(wide.x + 30, wide.y + 30);
+  await page.mouse.down();
+  expect(await viewport.getAttribute('data-dragging')).toBeNull();
+  expect(
+    await pointer.evaluate(({ state, element }) =>
+      element.hasPointerCapture(state.id),
+    ),
+  ).toBe(false);
+  await page.mouse.move(wide.x + 90, wide.y + 30);
+  await page.mouse.up();
+  expect(await transform()).toBe(idle);
   await pointer.dispose();
 });
 for (const slot of ['light', 'dark'] as const)

@@ -404,7 +404,12 @@ article input {
   margin-block: 0.5rem;
   border: 1px solid var(--border);
   touch-action: pan-y;
+}
+.diagram-viewport[data-pannable='true'] {
   cursor: grab;
+}
+.diagram-viewport[data-pannable='true'][data-dragging='true'] {
+  cursor: grabbing;
 }
 .diagram-viewport:focus {
   outline: 3px solid var(--focus);

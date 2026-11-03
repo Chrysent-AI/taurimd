@@ -25,6 +25,7 @@ export function mountDiagram(
   const viewport = node('div');
   viewport.className = 'diagram-viewport';
   viewport.tabIndex = -1;
+  viewport.setAttribute('data-pannable', 'false');
   viewport.setAttribute('role', 'region');
   viewport.setAttribute('aria-label', `${name} viewport`);
   const scene = node('div');
@@ -65,12 +66,25 @@ export function mountDiagram(
   let published = 0;
   let palette: Palette | undefined;
   let drag: { id: number; x: number; y: number } | undefined;
+  // Overflow slack in CSS pixels: a fitted image computes its scale from the
+  // same client sizes, so anything not overflowing beyond rounding and
+  // floating-point jitter leaves nothing to pan.
+  const overflowTolerance = 0.5;
+  const pannable = () =>
+    Boolean(
+      image &&
+      viewport.clientWidth > 0 &&
+      viewport.clientHeight > 0 &&
+      (image.width * scale > viewport.clientWidth + overflowTolerance ||
+        image.height * scale > viewport.clientHeight + overflowTolerance),
+    );
   const events = new AbortController();
   const options = { signal: events.signal };
   function release() {
     if (drag && viewport.hasPointerCapture(drag.id))
       viewport.releasePointerCapture(drag.id);
     drag = undefined;
+    viewport.removeAttribute('data-dragging');
   }
   function paint() {
     if (!image) return;
@@ -86,6 +100,7 @@ export function mountDiagram(
     scene.style.height = `${String(image.height)}px`;
     scene.style.transform = `translate(${String((width - image.width * scale) / 2 + x)}px, ${String((height - image.height * scale) / 2 + y)}px) scale(${String(scale)})`;
     zoom.value = `${String(Math.round(scale * 100))}%`;
+    viewport.setAttribute('data-pannable', pannable() ? 'true' : 'false');
   }
   function action(command: string) {
     if (!image || disposed || !allowed()) return;
@@ -224,13 +239,15 @@ export function mountDiagram(
         event.metaKey ||
         event.ctrlKey ||
         event.altKey ||
-        event.shiftKey
+        event.shiftKey ||
+        !pannable()
       )
         return;
       release();
       viewport.focus({ preventScroll: true });
       drag = { id: event.pointerId, x: event.clientX, y: event.clientY };
       viewport.setPointerCapture(event.pointerId);
+      viewport.setAttribute('data-dragging', 'true');
       event.preventDefault();
     },
     options,
@@ -342,6 +359,7 @@ export function mountDiagram(
         scene.replaceChildren();
         enable(false);
         release();
+        viewport.setAttribute('data-pannable', 'false');
         feedback.textContent = `${name} could not render: ${error instanceof Error ? error.message : String(error)}`;
       }
     },
