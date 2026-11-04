@@ -831,14 +831,24 @@ export function App({ controller }: { controller: ReaderController }) {
   // Cmd/Ctrl+Up and Cmd/Ctrl+Down must own first/last sibling navigation from
   // the frontend: WebKit claims those key equivalents for scroll to the
   // document's top or bottom whenever content overflows, so a native menu
-  // accelerator loses them on scrollable documents. One capture-phase listener
-  // consumes the key and routes it through the same dispatch path as the
-  // Navigate menu items, so each keypress has exactly one owner and outcome.
-  // While composing or when an editable control owns the keyboard, the key is
-  // left untouched for text cursor movement and IME handling.
+  // accelerator loses them on scrollable documents. Ctrl+K and Ctrl+O must
+  // likewise be claimed off macOS: WebView2 consumes Ctrl-combinations while
+  // the webview has focus, so the native accelerator table never sees them
+  // on Windows; on Linux BUG-0009 confirmed accelerators working (the
+  // delivery gap hit clicked menus, fixed in cbebe58), so the claim here is
+  // defense-in-depth for degraded accelerator delivery — quick-open
+  // re-entry is idempotent and open dispatch is sequence-superseded, so a
+  // hypothetical duplicate delivery is harmless. macOS accelerators work
+  // and keep owning both keys there. One
+  // capture-phase listener consumes a claimed key and routes it through the
+  // same dispatch path as the menu items, so each keypress has exactly one
+  // owner and outcome. While composing (or while the event still belongs to
+  // IME composition) or when an editable control owns the keyboard, the key
+  // is left untouched for text entry and IME handling.
   useEffect(() => {
     const onKeydown = (event: KeyboardEvent) => {
-      const primary = /Mac/.test(navigator.platform)
+      const mac = /Mac/.test(navigator.platform);
+      const primary = mac
         ? event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
         : event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
       if (!primary) return;
@@ -847,9 +857,17 @@ export function App({ controller }: { controller: ReaderController }) {
           ? 'first'
           : event.key === 'ArrowDown'
             ? 'last'
-            : null;
+            : !mac && event.key === 'k'
+              ? 'quick-open'
+              : !mac && event.key === 'o'
+                ? 'open'
+                : null;
       if (!action) return;
-      if (composing.current || ownsEditingKeys(window.document.activeElement))
+      if (
+        composing.current ||
+        event.isComposing ||
+        ownsEditingKeys(window.document.activeElement)
+      )
         return;
       event.preventDefault();
       event.stopPropagation();
