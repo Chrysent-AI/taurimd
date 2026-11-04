@@ -938,8 +938,22 @@ fn a_traversal_read_converges_a_capped_boundary_directory_through_the_worker_ref
 #[test]
 fn the_built_in_ignored_directories_are_absent_from_scans_and_probes_at_any_depth() {
     let dir = root();
+    // root_path canonicalizes (macOS /var -> /private/var), so the fixture
+    // anchors on the canonical base: the scan's scope path must share the
+    // prefix that strip_prefix expectations below are derived from.
+    let base = root_path(dir.path()).unwrap();
     // One fixture subtree per ignored name, each holding supported content
-    // the scan would otherwise admit, plus nested descent bait.
+    // the scan would otherwise admit, plus nested descent bait. Fixture paths
+    // are built through join and expected relatives derived via
+    // strip_prefix so string comparisons inherit exactly the separator
+    // style the scan records on every platform (the 1efc251 lesson).
+    let join_parts = |base: &std::path::Path, parts: &[&str]| {
+        let mut path = base.to_path_buf();
+        for part in parts {
+            path = path.join(part);
+        }
+        path
+    };
     let ignored = [
         "node_modules",
         ".git",
@@ -951,20 +965,22 @@ fn the_built_in_ignored_directories_are_absent_from_scans_and_probes_at_any_dept
         "__pycache__",
     ];
     for name in ignored {
-        fs::create_dir_all(dir.path().join(name).join("pkg/deeper")).unwrap();
-        fs::write(dir.path().join(name).join("pkg/index.md"), "# Ignored").unwrap();
+        let tree = join_parts(&base, &[name, "pkg", "deeper"]);
+        fs::create_dir_all(&tree).unwrap();
         fs::write(
-            dir.path().join(name).join("pkg/deeper/inner.md"),
-            "# Deeper",
+            join_parts(&base, &[name, "pkg"]).join("index.md"),
+            "# Ignored",
         )
         .unwrap();
+        fs::write(tree.join("inner.md"), "# Deeper").unwrap();
     }
     // Admitted neighbors: a supported file and a plain directory. A plain
     // file sharing an ignored stem is impossible to admit anyway (classify
     // requires an extension), so directory names are the whole predicate.
-    fs::write(dir.path().join("kept.md"), "# Kept").unwrap();
-    fs::create_dir(dir.path().join("builder")).unwrap();
-    fs::write(dir.path().join("builder/inside.md"), "# Inside").unwrap();
+    fs::write(base.join("kept.md"), "# Kept").unwrap();
+    let builder_dir = join_parts(&base, &["builder"]);
+    fs::create_dir(&builder_dir).unwrap();
+    fs::write(builder_dir.join("inside.md"), "# Inside").unwrap();
     let admitted = |index: &Index, relative: &str| {
         index
             .entries
@@ -975,11 +991,24 @@ fn the_built_in_ignored_directories_are_absent_from_scans_and_probes_at_any_dept
     // The same filtering holds at the new default depth and at depth 4.
     for depth in [usize::from(crate::settings::NAVIGATION_DEPTH_DEFAULT), 4] {
         let scope = nav.start(root_path(dir.path()).unwrap(), false).unwrap();
+        let scope_path = scope.path.clone();
         let index = nav
             .publish(scan_depth(scope, depth, |_| {}).unwrap())
             .unwrap();
-        assert!(admitted(&index, "kept.md"));
-        assert!(admitted(&index, "builder/inside.md"));
+        let kept_relative = "kept.md";
+        let builder_inside_relative = builder_dir
+            .strip_prefix(&scope_path)
+            .unwrap()
+            .join("inside.md")
+            .to_string_lossy()
+            .into_owned();
+        let builder_relative = builder_dir
+            .strip_prefix(&scope_path)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(admitted(&index, kept_relative));
+        assert!(admitted(&index, &builder_inside_relative));
         assert_eq!(
             index
                 .entries
@@ -987,13 +1016,16 @@ fn the_built_in_ignored_directories_are_absent_from_scans_and_probes_at_any_dept
                 .filter(|e| e.kind == "directory")
                 .map(|e| e.relative.as_str())
                 .collect::<Vec<_>>(),
-            vec!["builder"]
+            vec![builder_relative.as_str()]
         );
         for name in ignored {
+            let prefix = format!("{name}/");
+            let back_prefix = format!("{name}\\");
             assert!(
                 !index.entries.iter().any(|e| {
-                    let prefix = format!("{name}/");
-                    e.relative == name || e.relative.starts_with(&prefix)
+                    e.relative == name
+                        || e.relative.starts_with(&prefix)
+                        || e.relative.starts_with(&back_prefix)
                 }),
                 "{name} leaked into the index"
             );
@@ -1032,12 +1064,9 @@ fn the_built_in_ignored_directories_are_absent_from_scans_and_probes_at_any_dept
             .iter()
             .any(|e| e.relative == "vendor-only")
     );
-    assert!(
-        !republished
-            .entries
-            .iter()
-            .any(|e| e.relative == "vendor-only/node_modules")
-    );
+    assert!(!republished.entries.iter().any(|e| {
+        e.relative == "vendor-only/node_modules" || e.relative == "vendor-only\\node_modules"
+    }));
     drop(nav);
     reap(dir);
 }
