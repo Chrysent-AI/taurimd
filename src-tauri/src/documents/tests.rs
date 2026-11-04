@@ -260,3 +260,164 @@ fn windows_reads_still_reject_streams_and_component_prefix_escape() {
     assert_eq!(fs::read(path).unwrap(), b"unchanged");
     assert_eq!(fs::read(outside).unwrap(), b"outside");
 }
+
+#[test]
+fn verbatim_prefixes_normalize_to_plain_display_forms() {
+    // Drive form: exactly the verbatim prefix is stripped.
+    assert_eq!(strip_verbatim_prefix(r"\\?\C:\dir\a.md"), r"C:\dir\a.md");
+    // UNC form converts to the plain server-share spelling.
+    assert_eq!(
+        strip_verbatim_prefix(r"\\?\UNC\server\share\dir\a.md"),
+        r"\\server\share\dir\a.md"
+    );
+    // Minimal roots: no component is invented or dropped.
+    assert_eq!(strip_verbatim_prefix(r"\\?\C:\"), r"C:\");
+    assert_eq!(
+        strip_verbatim_prefix(r"\\?\UNC\server\share"),
+        r"\\server\share"
+    );
+    // Non-verbatim paths pass through untouched, whatever their spelling.
+    for passthrough in [r"C:\dir\a.md", r"\\server\share\a.md", "/home/u/a.md"] {
+        assert_eq!(strip_verbatim_prefix(passthrough), passthrough);
+    }
+}
+
+#[test]
+fn verbatim_normalization_is_prefix_only_and_preserves_long_paths() {
+    // A path past the 260-character limit: stripping moves the prefix and
+    // never truncates or rewrites components — the documented strip-always
+    // trade-off keeps deep trees intact as plain paths.
+    let deep = format!(r"C:\deep\{}end.md", "component-".repeat(40));
+    assert!(deep.chars().count() > 260);
+    assert_eq!(
+        strip_verbatim_prefix(&format!(r"\\?\{deep}")),
+        deep.as_str()
+    );
+    // Canonicalize's verbatim form carries raw component spellings (trailing
+    // spaces and dots are legal there); the body must survive byte for byte.
+    assert_eq!(
+        strip_verbatim_prefix(r"\\?\C:\dir \trailing."),
+        r"C:\dir \trailing."
+    );
+    // An interior UNC-looking name is not re-interpreted: only a real
+    // verbatim prefix converts.
+    assert_eq!(
+        strip_verbatim_prefix(r"\\?\C:\UNC\share\a.md"),
+        r"C:\UNC\share\a.md"
+    );
+}
+
+#[test]
+fn normalized_canonical_paths_keep_relative_derivation_working() {
+    // Round-trip sanity: after normalization, join/strip_prefix still yield
+    // clean scope relatives — the seam every tree row and issue path uses.
+    let root = normalize_canonical(PathBuf::from(r"\\?\C:\scope"));
+    let entry = root.join("nested").join("a.md");
+    let relative = entry.strip_prefix(&root).unwrap();
+    let components: Vec<_> = relative
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(components, ["nested", "a.md"]);
+    // The text form carries no verbatim prefix anywhere it may display.
+    assert!(!entry.to_string_lossy().contains(r"\\?\"));
+}
+
+#[test]
+fn verbatim_component_rebuild_yields_plain_prefix_forms() {
+    // The lone-surrogate input class has no exact text form, so its repair
+    // is exercised at the component seam the rebuild runs: prefix respelling
+    // plus the shared join (the cfg(windows) test below drives the real
+    // WTF-16 path end-to-end). The component tail is built with the native
+    // root separator so both platforms parse the same RootDir-led stream a
+    // verbatim path yields after its prefix.
+    let tail = PathBuf::from(std::path::MAIN_SEPARATOR_STR)
+        .join("dir")
+        .join("f.md");
+    let separator = std::path::MAIN_SEPARATOR_STR;
+    // Expected forms are spelled byte-exact rather than assembled with
+    // PathBuf::join: joining a bare root replaces the base on Unix, which is
+    // not the invariant under test. The invariant is prefix respelling plus
+    // native-separator component joining.
+    assert_eq!(
+        rebuild_from_prefix(Prefix::VerbatimDisk(b'C'), tail.components()).unwrap(),
+        PathBuf::from(format!("C:{separator}dir{separator}f.md"))
+    );
+    assert_eq!(
+        rebuild_from_prefix(
+            Prefix::VerbatimUNC(
+                std::ffi::OsStr::new("server"),
+                std::ffi::OsStr::new("share")
+            ),
+            tail.components(),
+        )
+        .unwrap(),
+        PathBuf::from(format!(r"\\server\\share{separator}dir{separator}f.md"))
+    );
+    // Unrecognized prefix kinds yield no plain spelling: the rebuild falls
+    // back to the caller's byte-preserving passthrough.
+    for kind in [
+        Prefix::Disk(b'C'),
+        Prefix::UNC(
+            std::ffi::OsStr::new("server"),
+            std::ffi::OsStr::new("share"),
+        ),
+        Prefix::DeviceNS(std::ffi::OsStr::new("C:")),
+        Prefix::Verbatim(std::ffi::OsStr::new("C:")),
+    ] {
+        assert!(plain_prefix(kind).is_none());
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_non_utf16_verbatim_paths_rebuild_the_plain_form() {
+    use std::{
+        ffi::OsStr,
+        os::windows::ffi::{OsStrExt, OsStringExt},
+    };
+    // A verbatim path whose text loss is one lone surrogate (U+D800) in an
+    // interior component: to_str() is None, so normalization must reach the
+    // component seam and still yield the plain drive-letter form.
+    let surrogate_name = std::ffi::OsString::from_wide(&[0xD800, 0x006E, 0x0061, 0x006D, 0x0065]);
+    let mut wide: Vec<u16> = OsStr::new(r"\\?\C:\scope\").encode_wide().collect();
+    wide.extend(surrogate_name.encode_wide());
+    wide.extend(OsStr::new(r"\\a.md").encode_wide());
+    let path = PathBuf::from(std::ffi::OsString::from_wide(&wide));
+    assert!(path.to_str().is_none());
+    let normalized = normalize_canonical(path);
+    assert_eq!(
+        normalized,
+        Path::new(r"C:\scope").join(&surrogate_name).join("a.md")
+    );
+    // Containment derivation against the plain scope root keeps working.
+    assert_eq!(
+        normalized
+            .strip_prefix(r"C:\scope")
+            .unwrap()
+            .components()
+            .count(),
+        2
+    );
+    // An already-plain non-UTF16 canonical path keeps its bytes.
+    let plain_wide: Vec<u16> = OsStr::new(r"C:\scope\")
+        .encode_wide()
+        .chain(surrogate_name.encode_wide())
+        .chain(OsStr::new(r"\a.md").encode_wide())
+        .collect();
+    let plain = PathBuf::from(std::ffi::OsString::from_wide(&plain_wide));
+    assert_eq!(normalize_canonical(plain.clone()), plain);
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_non_utf8_canonical_paths_keep_their_bytes() {
+    use std::os::unix::ffi::OsStringExt;
+    // No verbatim prefix exists off Windows: the component seam is a
+    // byte-preserving passthrough for the no-exact-text-form input class.
+    let path = PathBuf::from(std::ffi::OsString::from_vec(
+        b"/scope/na\xc3\xafve-\xff.md".to_vec(),
+    ));
+    assert!(path.to_str().is_none());
+    assert_eq!(normalize_canonical(path.clone()), path);
+}

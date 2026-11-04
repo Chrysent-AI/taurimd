@@ -1291,7 +1291,12 @@ mod protocol_tests {
             "linked.md#part",
             |_| panic!("local link must not use OS handler"),
             |path, fragment| {
-                assert_eq!(path, root.path().join("linked.md").canonicalize().unwrap());
+                // The handoff path carries the normalized canonical form the
+                // grant records, not a raw canonicalize spelling.
+                assert_eq!(
+                    path,
+                    documents::contained_file(&root.path().join("linked.md"), None).unwrap()
+                );
                 assert_eq!(fragment.as_deref(), Some("part"));
                 assert!(state.try_lock().is_ok());
                 Ok(())

@@ -1,5 +1,8 @@
 use super::*;
-use crate::{documents::read_document, navigation_commands::reveal};
+use crate::{
+    documents::{contained_file, read_document},
+    navigation_commands::reveal,
+};
 use std::{
     io,
     sync::Mutex,
@@ -84,15 +87,17 @@ fn metadata_only_recursive_formats_and_shared_root_siblings() {
             .code,
         "invalidUtf8"
     );
-    let siblings = nav
-        .root_siblings(&dir.path().join("nested/a.md").canonicalize().unwrap())
-        .unwrap();
+    // Address lookups the way production does: document paths carry the
+    // normalized canonical form the scan records (root_path/contained_file),
+    // not a raw canonicalize spelling.
+    let nested_document = contained_file(&dir.path().join("nested/a.md"), None).unwrap();
+    let siblings = nav.root_siblings(&nested_document).unwrap();
     assert_eq!(siblings.active, Some(record.entry.id));
     assert_eq!(siblings.index.scope, index.scope);
     assert_eq!(siblings.index.entries.len(), 1);
     assert_eq!(siblings.index.entries[0].id, record.entry.id);
     let top = nav
-        .root_siblings(&dir.path().join("a.MD").canonicalize().unwrap())
+        .root_siblings(&contained_file(&dir.path().join("a.MD"), None).unwrap())
         .unwrap();
     assert_eq!(top.index.entries.len(), 7);
     assert!(
@@ -101,10 +106,8 @@ fn metadata_only_recursive_formats_and_shared_root_siblings() {
             .iter()
             .all(|e| Path::new(&e.relative).components().count() == 1)
     );
-    assert!(
-        nav.root_siblings(&dir.path().join(".hidden.md").canonicalize().unwrap())
-            .is_none()
-    );
+    let hidden = contained_file(&dir.path().join(".hidden.md"), None).unwrap();
+    assert!(nav.root_siblings(&hidden).is_none());
     drop(nav);
     reap(dir);
 }
@@ -325,7 +328,7 @@ fn file_aliases_directory_cycles_hidden_targets_and_ancestor_retarget_are_revali
             .source,
         "# Base"
     );
-    let canonical = dir.path().join("sub/base.md").canonicalize().unwrap();
+    let canonical = contained_file(&dir.path().join("sub/base.md"), None).unwrap();
     assert_eq!(
         nav.root_siblings(&canonical).unwrap().active,
         Some(binding(&index, "sub/base.md").entry)
@@ -639,7 +642,12 @@ fn reveal_uses_only_current_active_grant_is_off_lock_and_failure_preserves_reade
     assert!(reveal(&state, 99, 1, |_| panic!("stale document must not reveal")).is_err());
     let result = reveal(&state, 1, 1, |path| {
         assert!(state.try_lock().is_ok());
-        assert_eq!(path, dir.path().join("active.md").canonicalize().unwrap());
+        // Reveal hands off the recorded document path: the normalized
+        // canonical form the grant carries, not a raw canonicalize spelling.
+        assert_eq!(
+            path,
+            contained_file(&dir.path().join("active.md"), None).unwrap()
+        );
         calls += 1;
         Err(AppError::new("io", "fixture opener failure"))
     });

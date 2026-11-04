@@ -343,7 +343,10 @@ fn scoped_references_decode_once_and_reject_escape_prefixes_schemes_and_non_medi
     assert_eq!(
         contained_file(
             &lookalike.join("outside.wav"),
-            Some(&std::fs::canonicalize(&narrow).unwrap())
+            // Production granted parents carry the root_path (normalized)
+            // form, so the containment boundary stays a genuine component
+            // prefix comparison on every platform.
+            Some(&crate::navigation::root_path(&narrow).unwrap())
         )
         .unwrap_err()
         .code,

@@ -480,6 +480,10 @@ pub fn root_path(path: &Path) -> Result<PathBuf, AppError> {
     let canonical = fs::canonicalize(path)?;
     #[cfg(windows)]
     crate::documents::validate_windows_path(&canonical)?;
+    // The plain display form keeps the verbatim prefix out of the folder
+    // identity, tree relatives and issue paths; normalization stays after
+    // validation, which accepts both forms.
+    let canonical = crate::documents::normalize_canonical(canonical);
     if !fs::metadata(&canonical)?.is_dir() {
         return Err(AppError::new("unsupported", "Choose a directory."));
     }

@@ -1,7 +1,9 @@
 use serde::Serialize;
 use std::{
+    borrow::Cow,
+    ffi::OsString,
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf, Prefix},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -115,12 +117,116 @@ pub(crate) fn validate_windows_path(path: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Strips the Windows verbatim prefix `fs::canonicalize` attaches, so
+/// canonical paths surface as plain drive-letter or UNC paths wherever they
+/// feed scope identity, prefix comparisons or display.
+///
+/// `\\?\C:\dir` becomes `C:\dir` and `\\?\UNC\server\share\dir` becomes
+/// `\\server\share\dir`; everything else passes through unchanged. The
+/// check is purely textual: canonicalize output is always absolute, and a
+/// `/`-rooted non-Windows path can never carry the prefix, so the function
+/// is a no-op there and safe to call unconditionally at canonicalization
+/// seams. Components are never rewritten — only the prefix moves.
+///
+/// Stripping re-exposes the 260-character MAX_PATH limit for pathologically
+/// deep trees: a plain path beyond it fails the next filesystem call where
+/// the verbatim form would have succeeded. The accepted trade-off is plain
+/// display paths everywhere; should a real long-path case appear, re-add
+/// `\\?\` at the filesystem-call boundary instead of reverting this
+/// normalization. Non-UTF-8 canonical paths are component-rebuilt rather
+/// than kept verbatim, so containment against the normalized scope root
+/// keeps working.
+fn strip_verbatim_prefix(encoded: &str) -> Cow<'_, str> {
+    // UNC first: its shorter replacement shares no prefix with the disk form.
+    if let Some(rest) = encoded.strip_prefix(r"\\?\UNC\") {
+        return Cow::Owned(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = encoded.strip_prefix(r"\\?\") {
+        return Cow::Borrowed(rest);
+    }
+    Cow::Borrowed(encoded)
+}
+
+/// The plain prefix spelling for a verbatim prefix kind: `X:` for a disk
+/// drive, `\\server\share` for a UNC server+share. `None` for anything
+/// else — those prefixes keep their bytes.
+fn plain_prefix(kind: Prefix<'_>) -> Option<OsString> {
+    let head = match kind {
+        Prefix::VerbatimDisk(drive) => OsString::from(format!("{}:", char::from(drive))),
+        Prefix::VerbatimUNC(server, share) => {
+            let mut head = OsString::from(r"\\");
+            head.push(server);
+            head.push(r"\\");
+            head.push(share);
+            head
+        }
+        _ => return None,
+    };
+    Some(head)
+}
+
+/// Component seam of the rebuild, shared with its host-independent tests:
+/// the respelled plain prefix, the root separator, then every component
+/// except the root itself.
+fn rebuild_from_prefix<'a>(
+    kind: Prefix<'a>,
+    components: impl Iterator<Item = Component<'a>>,
+) -> Option<PathBuf> {
+    let mut head = plain_prefix(kind)?;
+    head.push(std::path::MAIN_SEPARATOR_STR);
+    let mut plain = PathBuf::from(head);
+    for component in components {
+        if !matches!(component, Component::RootDir) {
+            plain.push(component.as_os_str());
+        }
+    }
+    Some(plain)
+}
+
+/// Rebuilds the plain form when a canonical path has no exact text form
+/// (WTF-16 with lone surrogates): a recognized verbatim prefix is respelled
+/// and the remaining components are joined byte-exact, so containment
+/// against the normalized scope root keeps working; anything else keeps its
+/// bytes. No path ever parses a prefix off Windows, so this is a
+/// byte-preserving passthrough there.
+fn rebuild_verbatim_components(path: PathBuf) -> PathBuf {
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return path;
+    };
+    // canonicalize output is the OS's fully resolved form — no interior
+    // separators or dot components — so component-wise joining is exact.
+    rebuild_from_prefix(prefix.kind(), components).unwrap_or(path)
+}
+
+/// Normalizes one `fs::canonicalize` result for scope identity, comparison
+/// and display. Feed it only canonicalize output: stripping is safe because
+/// such a path is absolute. Paths without an exact text form (WTF-16 with
+/// lone surrogates) have no verbatim-prefixed text to strip, so they are
+/// rebuilt component-wise instead — only the prefix moves, components stay
+/// byte-exact.
+pub(crate) fn normalize_canonical(path: PathBuf) -> PathBuf {
+    let Some(encoded) = path.to_str() else {
+        return rebuild_verbatim_components(path);
+    };
+    let normalized = strip_verbatim_prefix(encoded);
+    if normalized == encoded {
+        // Passthrough: keep the original buffer untouched.
+        return path;
+    }
+    PathBuf::from(normalized.into_owned())
+}
+
 pub(crate) fn contained_file(path: &Path, parent: Option<&Path>) -> Result<PathBuf, AppError> {
     #[cfg(windows)]
     validate_windows_path(path)?;
     let canonical = fs::canonicalize(path)?;
     #[cfg(windows)]
     validate_windows_path(&canonical)?;
+    // The same plain-form seam as root_path: document identity, media grants
+    // and link handoffs compare and display this path against normalized
+    // scope roots, so every granted path carries the prefix-free form.
+    let canonical = normalize_canonical(canonical);
     if parent.is_some_and(|root| !canonical.starts_with(root)) {
         return Err(AppError::new(
             "denied",

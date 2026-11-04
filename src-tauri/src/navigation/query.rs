@@ -615,6 +615,10 @@ mod tests {
         for number in 0..110 {
             fs::write(root.join(format!("file-{number:03}.log")), [0xff]).unwrap();
         }
+        // The scan addresses and records plain canonical roots: derive the
+        // scope root through the same root_path seam production uses, and
+        // let every later fixture use share that recorded form.
+        let root = super::super::root_path(&root).unwrap();
         let mut nav = Navigation::default();
         let scope = nav.start(root.clone(), false).unwrap();
         nav.publish(super::super::scan(scope, true).unwrap())

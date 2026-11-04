@@ -28,8 +28,11 @@ fn cleanup(mut windows: Registry, root: tempfile::TempDir) {
 #[test]
 fn native_reservations_readiness_commit_and_route_specific_replacement() {
     let root = fixture();
-    let a = root.path().join("a.md").canonicalize().unwrap();
-    let b = root.path().join("b.md").canonicalize().unwrap();
+    // Address documents the way production does: route canonicalizes and
+    // normalizes before reservations, so ownership comparisons match the
+    // recorded form on every platform.
+    let a = documents::contained_file(&root.path().join("a.md"), None).unwrap();
+    let b = documents::contained_file(&root.path().join("b.md"), None).unwrap();
     let mut windows = Registry::default();
     let origin = windows.enroll(None).unwrap();
     stage(&windows, &origin, &a, 1);
@@ -422,7 +425,7 @@ fn forwarded_paths_capture_cwd_preserve_native_paths_and_reject_lossy_items_inde
 #[test]
 fn focus_fragments_bind_displayed_revision_and_reject_actual_native_owners() {
     let root = fixture();
-    let path = root.path().join("a.md").canonicalize().unwrap();
+    let path = documents::contained_file(&root.path().join("a.md"), None).unwrap();
     let mut windows = Registry::default();
     let label = windows.enroll(None).unwrap();
     stage(&windows, &label, &path, 1);
@@ -632,7 +635,12 @@ fn colliding_root_bindings_resolve_only_local_entries_and_root_replacement_rejec
         .read(&entry, 2, 2, &std::sync::atomic::AtomicBool::new(false))
         .unwrap();
     assert_eq!(read.snapshot.source, "# Two");
-    assert_eq!(read.path, paths[1].join("doc.md").canonicalize().unwrap());
+    // The granted path carries the normalized canonical form the scan and
+    // read_document record, not a raw canonicalize spelling.
+    assert_eq!(
+        read.path,
+        documents::contained_file(&paths[1].join("doc.md"), None).unwrap()
+    );
     let source = windows.readers[&labels[0]].session.clone();
     let stale_scope = source
         .lock()
