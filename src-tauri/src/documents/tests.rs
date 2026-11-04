@@ -267,17 +267,18 @@ fn verbatim_prefixes_normalize_to_plain_display_forms() {
     assert_eq!(strip_verbatim_prefix(r"\\?\C:\dir\a.md"), r"C:\dir\a.md");
     // UNC form converts to the plain server-share spelling.
     assert_eq!(
-        strip_verbatim_prefix(r"\\?\UNC\server\share\dir\a.md"),
-        r"\\server\share\dir\a.md"
+        strip_verbatim_prefix(r"\\?\UNC\server\share\dir\a.md"), // gitleaks:allow
+        r"\\server\share\dir\a.md"                               // gitleaks:allow
     );
     // Minimal roots: no component is invented or dropped.
     assert_eq!(strip_verbatim_prefix(r"\\?\C:\"), r"C:\");
     assert_eq!(
-        strip_verbatim_prefix(r"\\?\UNC\server\share"),
-        r"\\server\share"
+        strip_verbatim_prefix(r"\\?\UNC\server\share"), // gitleaks:allow
+        r"\\server\share"                               // gitleaks:allow
     );
     // Non-verbatim paths pass through untouched, whatever their spelling.
     for passthrough in [r"C:\dir\a.md", r"\\server\share\a.md", "/srv/data/a.md"] {
+        // gitleaks:allow
         assert_eq!(strip_verbatim_prefix(passthrough), passthrough);
     }
 }
@@ -352,7 +353,7 @@ fn verbatim_component_rebuild_yields_plain_prefix_forms() {
             tail.components(),
         )
         .unwrap(),
-        PathBuf::from(format!(r"\\server\\share{separator}dir{separator}f.md"))
+        PathBuf::from(format!(r"\\server\\share{separator}dir{separator}f.md")) // gitleaks:allow
     );
     // Unrecognized prefix kinds yield no plain spelling: the rebuild falls
     // back to the caller's byte-preserving passthrough.
