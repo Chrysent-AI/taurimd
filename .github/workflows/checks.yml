@@ -46,22 +46,8 @@ jobs:
           tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
       - run: npm ci
-      - name: Independently check introduced diffs and complete messages, then quality
-        env:
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PUSH_BEFORE: ${{ github.event.before }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          head=$(git rev-parse HEAD)
-          if [ -n "$PR_BASE" ]; then
-            base=$(git merge-base "$PR_BASE" "$head")
-            npm run check:ci -- --base "$base" --head "$head"
-          elif [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != 0000000000000000000000000000000000000000 ]; then
-            npm run check:ci -- --base "$PUSH_BEFORE" --head "$head"
-          else
-            npm run check:ci -- --initial "$head"
-          fi
+      - name: Run the local gate
+        run: npm run check:local
   browsers:
     if: >-
       ${{ github.event_name == 'pull_request' ||

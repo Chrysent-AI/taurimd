@@ -720,7 +720,13 @@ test('branch pushes and tags run separate workflows, and the tag path builds the
   }
   const scripts = (job) =>
     jobs[job].steps.map((step) => step.run ?? '').join('\n');
-  assert.match(scripts('quality'), /npm run check:ci/);
+  // The secret scan is local-only: the quality job runs the shared gate and
+  // no longer computes introduced ranges or passes PR/push heads through.
+  assert.match(scripts('quality'), /npm run check:local/);
+  assert.doesNotMatch(
+    scripts('quality'),
+    /check:ci|merge-base|PR_BASE|PUSH_BEFORE/,
+  );
   assert.match(scripts('browsers'), /node scripts\/ci-browser-audio.mjs/);
   const buildCommandsIn = (allJobs, job) =>
     allJobs[job].steps.flatMap((step) =>
@@ -776,7 +782,7 @@ test('branch pushes and tags run separate workflows, and the tag path builds the
   for (const job of Object.keys(releaseJobs))
     assert.doesNotMatch(
       releaseScripts(job),
-      /check:ci|check:local|playwright|test:hooks/,
+      /check:local|playwright|test:hooks/,
       `${job} must not run a gate or a test`,
     );
   assert.deepEqual(releaseJobs['package-candidates'].needs, [

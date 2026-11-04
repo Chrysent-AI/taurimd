@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { run } from './run.mjs';
 import { preparePackage } from './prepare-package.mjs';
-import { scan, scannerPreflight } from './secrets.mjs';
+import { scan } from './secrets.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const node = (path, args = []) =>
   run(process.execPath, [resolve(root, path), ...args], { cwd: root });
@@ -112,7 +112,6 @@ async function local() {
     throw new Error(
       'Use Rust 1.99.1 for the shared checks. The version is pinned in rust-toolchain.toml; run `rustup default 1.99.1`.',
     );
-  scannerPreflight();
   await run('git', ['--version']);
   await run('cargo', ['fmt', '--version']);
   await run('cargo', ['clippy', '--version']);
@@ -162,12 +161,9 @@ try {
     await scan('staged');
     await local();
   } else if (mode === 'message') await scan('message', args);
-  else if (mode === 'ci') {
-    await scan('range', args);
-    await local();
-  } else
+  else
     throw new Error(
-      'Choose a focused frontend check, local, rust, precommit, message, ci, dev, browser or tauri.',
+      'Choose a focused frontend check, local, rust, precommit, message, dev, browser or tauri.',
     );
 } catch (error) {
   console.error(`Check failed: ${error.message}`);

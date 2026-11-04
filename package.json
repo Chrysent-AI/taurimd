@@ -24,7 +24,6 @@
     "check:rust": "node scripts/check.mjs rust",
     "check:local": "node scripts/check.mjs local",
     "check:commit": "node scripts/secrets.mjs message",
-    "check:ci": "node scripts/check.mjs ci",
     "hooks:install": "node scripts/hooks.mjs"
   },
   "dependencies": {

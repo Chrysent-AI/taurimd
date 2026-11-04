@@ -12,20 +12,18 @@ To remove protection, first identify the effective route with `git rev-parse --g
 
 ## Shared checks
 
-| Command                                       | Boundary                                                                                            |
-| --------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `npm run format:check`                        | Prettier, no fixes                                                                                  |
-| `npm run lint`                                | Strict typed ESLint, React hooks and accessibility checks, including helper scripts                 |
-| `npm run typecheck`                           | Strict TypeScript build-mode check                                                                  |
-| `npm run build`                               | Bundled Vite frontend and worker                                                                    |
-| `npm test`                                    | Production parser/sanitizer, controller and article/component tests                                 |
-| `npm run test:hooks`                          | Isolated synthetic Git repositories: staged/range/message scans, merge/root history and hook routes |
-| `npm run check:rust`                          | Locked Rust format, Clippy (`-D warnings`), tests, build; run frontend build first                  |
-| `npm run test:browser`                        | Chromium, Firefox and WebKit worker/sanitizer/offline tests; browser, not native, evidence          |
-| `npm run check:local`                         | Tool preflight, frontend checks, hook fixtures, Rust group                                          |
-| `npm run check:commit -- message-file`        | Full-message scan, then strict Conventional Commits                                                 |
-| `npm run check:ci -- --base BASE --head HEAD` | Explicit introduced-range diffs and complete messages, then the shared local group                  |
-| `npm run check:ci -- --initial HEAD`          | Root-inclusive reachable ancestry and every complete message, then local group                      |
+| Command                                | Boundary                                                                                            |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `npm run format:check`                 | Prettier, no fixes                                                                                  |
+| `npm run lint`                         | Strict typed ESLint, React hooks and accessibility checks, including helper scripts                 |
+| `npm run typecheck`                    | Strict TypeScript build-mode check                                                                  |
+| `npm run build`                        | Bundled Vite frontend and worker                                                                    |
+| `npm test`                             | Production parser/sanitizer, controller and article/component tests                                 |
+| `npm run test:hooks`                   | Isolated synthetic Git repositories: staged/range/message scans, merge/root history and hook routes |
+| `npm run check:rust`                   | Locked Rust format, Clippy (`-D warnings`), tests, build; run frontend build first                  |
+| `npm run test:browser`                 | Chromium, Firefox and WebKit worker/sanitizer/offline tests; browser, not native, evidence          |
+| `npm run check:local`                  | Tool preflight, frontend checks, hook fixtures, Rust group                                          |
+| `npm run check:commit -- message-file` | Full-message scan, then strict Conventional Commits                                                 |
 
 Foreign-repository fixture commands clear the repository-local Git variable names reported by `git rev-parse --local-env-vars` from their child environment, after caller options are applied. Changing only `cwd` is not isolation inside a Git hook. The owned-context regression runs representative protection tests inside a disposable outer repository's actual hook and checks that its HEAD, refs, staged index, config and worktree registrations do not change. Production hooks deliberately retain Git's invoking context so staged scanning still inspects the intended index.
 
@@ -45,7 +43,7 @@ Pre-commit first uses Gitleaks' own Git staged-diff traversal, then runs `check:
 
 Gitleaks must be exactly 8.30.1. Missing/wrong scanners, unreadable/malformed configuration and any scanner error fail closed. The explicit project configuration extends upstream defaults with generic privacy patterns. Project ignore files and inline allow comments cannot bypass these scans. Detectors still cannot prove the absence of every possible secret. Staged/range scans cover introduced diff content, **not unchanged portions of changed files**. Full-message coverage is separate.
 
-CI fetches complete ancestry and independently scans explicit PR merge-base/head or push-before/head ranges using Gitleaks Git mode with root/merge-parent handling, then scans each introduced complete message. Missing/shallow ancestry fails instead of shrinking coverage. The initial case intentionally includes the root. Exactly one existing commit, `9116eedb060c327c637f8556d88eea18cc098e94`, is grandfathered for historical Conventional Commits formatting only. Its complete message and root-inclusive content/history are still secret-scanned before any format exception applies. No subject/prefix exemption or history rewrite is used. Every other commit hash and every proposed commit message, including a new `init`, remains strict.
+CI runs the same shared local gate as a pre-commit; it performs no independent secret scan of introduced PR or push ranges or of commit messages. Secret scanning is local-only: the pre-commit hook scans the staged diff and the commit-msg hook scans the entire message. The hook-protection test suite inside the gate still exercises the pinned scanner directly, including root/merge-parent range fixtures over complete ancestry, so CI checkouts keep full history and missing/shallow ancestry fails instead of shrinking coverage. The initial test case intentionally includes the root. Exactly one existing commit, `9116eedb060c327c637f8556d88eea18cc098e94`, is grandfathered for historical Conventional Commits formatting only. Its complete message and root-inclusive content/history are still secret-scanned by the protection tests before any format exception applies. No subject/prefix exemption or history rewrite is used. Every other commit hash and every proposed commit message, including a new `init`, remains strict.
 
 CI uses the same quality commands. Browser tests and unsigned native release builds are separately owned jobs; macOS rejects Intel hosts/targets. The first-party runner image table lists `macos-15` as arm64: https://github.com/actions/runner-images/blob/4da2307112a0fad2fd2ecaca8ba7d08683b8c581/README.md#available-images . The runtime architecture guard remains in place; no Intel job is selected. Repository YAML does not prove remote execution or required-check/branch-protection settings. No publish or deployment job exists.
 

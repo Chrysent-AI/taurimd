@@ -62,7 +62,7 @@ node scripts/validate-tag.mjs v1.2.3
 ```
 
 This only reads an already-existing local tag and complete ancestry; it does not
-create a tag. PR/push quality, secret/range/full-message, browser and native
+create a tag. PR/push quality, browser and native
 debug-profile no-bundle compilation checks remain ordinary checks. `--no-bundle`
 only skips installers; `--debug` explicitly selects the ordinary compile profile.
 Only validated tag pushes can use the default release profile to generate the
