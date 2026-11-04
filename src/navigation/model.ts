@@ -1,13 +1,8 @@
-import { parseInWorker } from '../reader/worker';
-import type { ParseJob } from '../reader/worker';
 import type { Rendered } from '../types';
 import {
-  binding,
   type FileIndex,
-  type FileEntry,
   type NavigationBridge,
   type PickerScope,
-  type Preview,
   type Siblings,
   type IndexSnapshot,
   type IndexStatus,
@@ -24,7 +19,6 @@ interface NavigationState {
   siblings: Siblings | null;
   siblingDocument: Rendered | null;
   siblingMessage: string;
-  previews: ReadonlyMap<number, Preview>;
 }
 export class NavigationController {
   state: NavigationState = {
@@ -39,12 +33,9 @@ export class NavigationController {
     siblings: null,
     siblingDocument: null,
     siblingMessage: '',
-    previews: new Map(),
   };
   private listeners = new Set<() => void>();
-  private sequence = 0;
   private siblingSequence = 0;
-  private jobs = new Map<number, { request: number; job?: ParseJob }>();
   private disposed = false;
   private expected: IndexStatus | null = null;
   private recovering: Promise<void> | null = null;
@@ -56,7 +47,6 @@ export class NavigationController {
   private revealing = false;
   constructor(
     private bridge: NavigationBridge,
-    private parse = parseInWorker,
     private completionDelay = 500,
   ) {}
   subscribe = (listener: () => void) => {
@@ -94,7 +84,6 @@ export class NavigationController {
           status.phase === 'loading' ||
           status.phase === 'unavailable'
         ) {
-          this.invalidate();
           this.publish({
             rootBusy: true,
             rootStatus: 'loading',
@@ -229,7 +218,6 @@ export class NavigationController {
       this.state.root?.scope !== index?.scope ||
       this.state.root?.revision !== index?.revision ||
       (status.phase !== 'loading' && current?.phase === 'loading');
-    if (changed || status.phase === 'loading') this.invalidate();
     const loading = status.phase === 'loading';
     this.publish({
       root: changed ? index : this.state.root,
@@ -268,7 +256,6 @@ export class NavigationController {
     if (!root || this.state.rootBusy) return;
     this.retireRecovery();
     const generation = this.recoveryGeneration;
-    this.invalidate();
     this.publish({
       rootBusy: true,
       rootStatus: 'loading',
@@ -329,80 +316,6 @@ export class NavigationController {
         });
     }
   }
-  async preview(index: FileIndex, entry: FileEntry) {
-    if (entry.kind !== 'markdown' || this.jobs.has(entry.uiId)) return;
-    const request = ++this.sequence;
-    const owned: { request: number; job?: ParseJob } = { request };
-    this.jobs.set(entry.uiId, owned);
-    this.setPreview(entry.uiId, { phase: 'loading', headings: [] });
-    const current = () =>
-      !this.disposed &&
-      this.jobs.get(entry.uiId) === owned &&
-      this.state.root === index;
-    try {
-      const snapshot = await this.bridge.preview(
-        binding(index, entry),
-        request,
-      );
-      if (!current()) return;
-      owned.job = this.parse(
-        snapshot.source,
-        undefined,
-        `preview-${String(index.scope)}-${String(index.revision)}-${String(entry.id)}-${String(snapshot.contextId)}-${String(snapshot.revision)}`,
-      );
-      const reading = await owned.job.result;
-      if (!current()) return;
-      this.setPreview(entry.uiId, {
-        phase: 'ready',
-        headings: reading.headings ?? [],
-        snapshot,
-      });
-    } catch (error) {
-      if (current())
-        this.setPreview(entry.uiId, {
-          phase: 'error',
-          headings: [],
-          message: message(error),
-        });
-    } finally {
-      if (this.jobs.get(entry.uiId) === owned) this.jobs.delete(entry.uiId);
-    }
-  }
-  previewFromReading(key: number, reading: Rendered) {
-    // The displayed file's own preview reuses its current reading: no
-    // second native read or parse. Any in-flight native work for this
-    // entry is retired first, and a reload or changed file reaches here
-    // through previewEpoch/previewChanged invalidation plus a fresh
-    // reading object, so stale headings are never adopted twice.
-    this.collapse(key);
-    this.setPreview(key, {
-      phase: 'ready',
-      headings: reading.headings ?? [],
-      snapshot: reading.snapshot,
-    });
-  }
-  private setPreview(key: number, preview?: Preview) {
-    const previews = new Map(this.state.previews);
-    if (preview) previews.set(key, preview);
-    else previews.delete(key);
-    this.publish({ previews });
-  }
-  collapse(key: number) {
-    const owned = this.jobs.get(key);
-    if (!owned) return;
-    this.jobs.delete(key);
-    owned.job?.cancel();
-    void this.bridge.cancelPreview(owned.request).catch(() => {});
-    this.setPreview(key);
-  }
-  invalidate = () => {
-    for (const key of this.jobs.keys()) this.collapse(key);
-    // Count-only loading progress invalidates nothing when no preview
-    // work exists. Skipping the empty-map publish keeps the retained
-    // tree's inputs referentially stable, so progress announcements do
-    // not re-render the whole explorer.
-    if (this.state.previews.size > 0) this.publish({ previews: new Map() });
-  };
   async reveal(document: Rendered) {
     if (this.revealing) return;
     this.revealing = true;
@@ -421,7 +334,6 @@ export class NavigationController {
   dispose() {
     this.notifications = 'closed';
     this.retireRecovery();
-    this.invalidate();
     this.disposed = true;
     this.siblingSequence++;
     this.listeners.clear();

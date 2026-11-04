@@ -71,8 +71,6 @@ export interface Rendered extends Omit<Reading, 'html'> {
   html: string | null;
   fragment?: string | null;
   focus?: EntryIntent['focus'];
-  headingKey?: number;
-  previewChanged?: boolean;
 }
 export interface ReaderState {
   requestId: number;
@@ -82,5 +80,4 @@ export interface ReaderState {
   stale: boolean;
   linkMessage?: string;
   quietLink?: boolean;
-  previewEpoch?: number;
 }

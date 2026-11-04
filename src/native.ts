@@ -77,9 +77,6 @@ export const navigation: NavigationBridge = {
       documentId: document.documentId,
       revision: document.revision,
     }),
-  preview: (binding, requestId) =>
-    invoke('read_preview', { binding, requestId }),
-  cancelPreview: (requestId) => invoke('cancel_preview', { requestId }),
   reveal: (document) =>
     invoke('reveal_document', {
       documentId: document.documentId,

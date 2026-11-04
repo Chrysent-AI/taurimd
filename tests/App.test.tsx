@@ -84,8 +84,6 @@ vi.mock('../src/native', () => ({
         },
       ),
     refresh: vi.fn(),
-    preview: vi.fn(),
-    cancelPreview: () => Promise.resolve(null),
     reveal: () => Promise.resolve(null),
   },
   readerWindow: {

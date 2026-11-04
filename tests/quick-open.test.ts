@@ -58,10 +58,6 @@ function bridge() {
       .mockImplementation((request) => Promise.resolve(reply(request))),
     refresh: vi.fn<NavigationBridge['refresh']>().mockResolvedValue(snapshot()),
     siblings: vi.fn<NavigationBridge['siblings']>(),
-    preview: vi.fn<NavigationBridge['preview']>(),
-    cancelPreview: vi
-      .fn<NavigationBridge['cancelPreview']>()
-      .mockResolvedValue(null),
     reveal: vi.fn<NavigationBridge['reveal']>(),
   };
 }
@@ -73,7 +69,7 @@ const completionDelay = 20;
 async function failedNotifications() {
   const native = bridge();
   native.listen.mockRejectedValue(new Error('Index subscription failed'));
-  const model = new NavigationController(native, undefined, completionDelay);
+  const model = new NavigationController(native, completionDelay);
   const disconnect = model.connect();
   await model.recover();
   return { native, model, disconnect };
@@ -494,7 +490,7 @@ describe('revisioned getter and actual subscription lifecycle', () => {
   it('never starts completion polling while the installed listener is healthy', async () => {
     vi.useFakeTimers();
     const native = bridge();
-    const model = new NavigationController(native, undefined, completionDelay);
+    const model = new NavigationController(native, completionDelay);
     const disconnect = model.connect();
     try {
       await model.recover();
@@ -588,7 +584,7 @@ describe('revisioned getter and actual subscription lifecycle', () => {
     expect(lateStop).toHaveBeenCalledOnce();
     expect(late.get).not.toHaveBeenCalled();
   });
-  it('recovers a missed event through getter, invalidates same-metadata previews, and never enrolls a document', async () => {
+  it('recovers a missed event through the getter without enrolling a document or refresher', async () => {
     const native = bridge();
     const model = new NavigationController(native);
     const close = model.connect();
@@ -598,7 +594,6 @@ describe('revisioned getter and actual subscription lifecycle', () => {
     native.listen.mock.calls[0][0](snapshot(2, 4).status);
     await model.recover();
     expect(model.state.root?.revision).toBe(2);
-    expect(native.preview).not.toHaveBeenCalled();
     expect(native.refresh).not.toHaveBeenCalled();
     close();
     model.dispose();

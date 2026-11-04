@@ -12,8 +12,6 @@ import {
   type IndexSnapshot,
 } from '../src/navigation/types';
 import type { Snapshot } from '../src/types';
-import { parseMarkdown } from '../src/reader/parse';
-import { sanitizeReading } from '../src/reader/sanitize';
 const file = (id = 1, kind: FileEntry['kind'] = 'markdown'): FileEntry => ({
   id,
   uiId: id,
@@ -42,13 +40,6 @@ const snapshot = (contextId = 11, revision = 1): Snapshot => ({
   format: 'markdown',
   source: '# Same\n## Same',
 });
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((yes) => {
-    resolve = yes;
-  });
-  return { promise, resolve };
-}
 function cache(
   root: FileIndex,
   phase: IndexSnapshot['status']['phase'] = root.issues.length
@@ -81,21 +72,9 @@ function setup() {
       .fn<NavigationBridge['refresh']>()
       .mockResolvedValue(cache(index(3))),
     siblings: vi.fn<NavigationBridge['siblings']>(),
-    preview: vi.fn<NavigationBridge['preview']>().mockResolvedValue(snapshot()),
-    cancelPreview: vi
-      .fn<NavigationBridge['cancelPreview']>()
-      .mockResolvedValue(null),
     reveal: vi.fn<NavigationBridge['reveal']>().mockResolvedValue(null),
   };
-  const parse = vi.fn(
-    (source: string, _snapshot?: Snapshot, namespace?: string) => ({
-      result: Promise.resolve(
-        sanitizeReading(parseMarkdown(source), namespace),
-      ),
-      cancel: vi.fn(),
-    }),
-  );
-  return { bridge, parse, controller: new NavigationController(bridge, parse) };
+  return { bridge, controller: new NavigationController(bridge) };
 }
 // The controller learns about the working folder through its recovery getter;
 // the native side adopts it at the document's commit.
@@ -108,13 +87,11 @@ async function adoptRoot(
   await controller.recover();
 }
 describe('production navigation state and shared native adapter DTO projection', () => {
-  it('does not read document bodies when a root is accepted and labels a failed refresh last known', async () => {
-    const { controller, bridge, parse } = setup();
+  it('accepts a root without native reads and labels a failed refresh last known', async () => {
+    const { controller, bridge } = setup();
     await adoptRoot(bridge, controller, cache(index(2)));
     const root = controller.state.root;
     expect(root?.revision).toBe(2);
-    expect(bridge.preview).not.toHaveBeenCalled();
-    expect(parse).not.toHaveBeenCalled();
     bridge.refresh.mockRejectedValueOnce({ message: 'Access denied' });
     await controller.refresh();
     expect(controller.state.root).toBe(root);
@@ -169,78 +146,11 @@ describe('production navigation state and shared native adapter DTO projection',
       controller.dispose();
     },
   );
-  it('previews only requested Markdown through the shared parser and retains completed context/source until explicit invalidation', async () => {
-    const { controller, bridge, parse } = setup();
-    await adoptRoot(bridge, controller, cache(index(2)));
-    const root = controller.state.root;
-    if (!root) throw new Error('Expected selected root');
-    await controller.preview(root, root.entries[2]);
-    expect(bridge.preview).not.toHaveBeenCalled();
-    await controller.preview(root, root.entries[0]);
-    const preview = controller.state.previews.get(1);
-    expect(preview?.snapshot?.contextId).toBe(11);
-    expect(preview?.snapshot?.source).toBe('# Same\n## Same');
-    expect(preview?.headings.map((h) => h.key)).toEqual([1, 2]);
-    expect(parse).toHaveBeenCalledTimes(1);
-    expect(parse.mock.calls[0][2]).toContain('preview-7-2-1-11-1');
-    controller.collapse(1);
-    expect(controller.state.previews.get(1)).toBe(preview);
-    controller.invalidate();
-    expect(controller.state.previews.size).toBe(0);
-    await controller.preview(root, root.entries[0]);
-    expect(bridge.preview).toHaveBeenCalledTimes(2);
-    await controller.refresh();
-    expect(controller.state.previews.size).toBe(0);
-    controller.dispose();
-  });
-  it('reuses the displayed reading for its own preview and retires the superseded native work', async () => {
-    const { controller, bridge, parse } = setup();
-    await adoptRoot(bridge, controller, cache(index(2)));
-    const root = controller.state.root;
-    if (!root) throw new Error('Expected selected root');
-    const held = deferred<Snapshot>();
-    bridge.preview.mockReturnValueOnce(held.promise);
-    const pending = controller.preview(root, root.entries[0]);
-    expect(controller.state.previews.get(1)?.phase).toBe('loading');
-    const reading = {
-      snapshot: snapshot(),
-      html: null,
-      metadata: null,
-      headings: [
-        {
-          level: 1 as const,
-          label: 'Same',
-          id: 'reader-d0-r0-heading-1',
-          key: 1,
-        },
-      ],
-    };
-    controller.previewFromReading(1, reading);
-    held.resolve(snapshot());
-    await pending;
-    const preview = controller.state.previews.get(1);
-    expect(preview?.phase).toBe('ready');
-    expect(preview?.headings.map((heading) => heading.label)).toEqual(['Same']);
-    expect(preview?.snapshot).toBe(reading.snapshot);
-    // The superseded native read and its parse never publish.
-    expect(parse).not.toHaveBeenCalled();
-    expect(bridge.preview).toHaveBeenCalledTimes(1);
-    expect(bridge.cancelPreview).toHaveBeenCalledTimes(1);
-    // Invalidation still clears the adopted preview.
-    controller.invalidate();
-    expect(controller.state.previews.size).toBe(0);
-    // Adoption without pending work keeps the native bridge untouched.
-    controller.previewFromReading(2, reading);
-    expect(bridge.cancelPreview).toHaveBeenCalledTimes(1);
-    expect(controller.state.previews.get(2)?.snapshot).toBe(reading.snapshot);
-    controller.dispose();
-  });
-  it('count-only loading progress keeps the retained index and preview identity stable', async () => {
+  it('count-only loading progress keeps the retained index stable', async () => {
     const { controller, bridge } = setup();
     await adoptRoot(bridge, controller, cache(index(2)));
     const root = controller.state.root;
     if (!root) throw new Error('Expected selected root');
-    const previews = controller.state.previews;
     const loading: IndexSnapshot = {
       index: root,
       status: {
@@ -260,7 +170,6 @@ describe('production navigation state and shared native adapter DTO projection',
     // The explorer's inputs stay referentially stable while only the
     // admitted-entry count moved, so its retained tree does not re-render.
     expect(controller.state.root).toBe(root);
-    expect(controller.state.previews).toBe(previews);
     expect(controller.state.rootBusy).toBe(true);
     expect(controller.state.rootMessage).toContain('Indexing folder…');
     expect(controller.state.rootMessage).toContain(
@@ -275,46 +184,6 @@ describe('production navigation state and shared native adapter DTO projection',
     expect(controller.state.rootBusy).toBe(false);
     expect(controller.state.rootStatus).toBe('ready');
     expect(controller.state.rootMessage).toBe('Folder loaded.');
-    controller.dispose();
-  });
-  it('cancels only collapsed owned work and ignores its late native response', async () => {
-    const { controller, bridge, parse } = setup();
-    await adoptRoot(bridge, controller, cache(index(2)));
-    const root = controller.state.root;
-    if (!root) throw new Error('Expected selected root');
-    const held = deferred<Snapshot>();
-    bridge.preview.mockReturnValueOnce(held.promise);
-    const preview = controller.preview(root, root.entries[0]);
-    expect(controller.state.previews.get(1)?.phase).toBe('loading');
-    controller.collapse(1);
-    held.resolve(snapshot());
-    await preview;
-    expect(parse).not.toHaveBeenCalled();
-    expect(bridge.cancelPreview).toHaveBeenCalledTimes(1);
-    expect(controller.state.previews.has(1)).toBe(false);
-    controller.dispose();
-  });
-  it('terminates its real parse-job seam on supersession without publishing old-root headings', async () => {
-    const { controller, bridge, parse } = setup();
-    await adoptRoot(bridge, controller, cache(index(2)));
-    const root = controller.state.root;
-    if (!root) throw new Error('Expected selected root');
-    const reading = deferred<ReturnType<typeof sanitizeReading>>();
-    const cancel = vi.fn();
-    parse.mockReturnValueOnce({ result: reading.promise, cancel });
-    const pending = controller.preview(root, root.entries[0]);
-    await Promise.resolve();
-    controller.invalidate();
-    expect(cancel).toHaveBeenCalledOnce();
-    reading.resolve(sanitizeReading(parseMarkdown('# Obsolete')));
-    await pending;
-    expect(controller.state.previews.size).toBe(0);
-    await adoptRoot(
-      bridge,
-      controller,
-      cache({ ...index(), scope: 10, revision: 2 }, 'ready'),
-    );
-    expect(controller.state.root?.scope).toBe(10);
     controller.dispose();
   });
   it('retains errors locally and native-ranked siblings never wrap or invent active membership', async () => {

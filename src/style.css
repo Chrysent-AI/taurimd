@@ -182,11 +182,6 @@ body {
 .navigation .file-row > :first-child {
   flex: 1;
 }
-.navigation .headings-toggle {
-  flex: 0 0 auto;
-  font-size: 0.8rem;
-  color: var(--muted);
-}
 /* var(--code) equals var(--panel) in the Solarized palettes, so the tint is
    mixed from the text color instead to stay visible in every palette. */
 .navigation .file-row button:hover,
@@ -238,8 +233,7 @@ body {
   border-color: transparent transparent transparent currentColor;
   margin-inline-end: 0.3rem;
 }
-.tree-toggle[aria-expanded='true'] .chevron,
-.headings-toggle[aria-expanded='true'] .chevron {
+.tree-toggle[aria-expanded='true'] .chevron {
   transform: rotate(90deg);
 }
 @media (prefers-reduced-motion: no-preference) {

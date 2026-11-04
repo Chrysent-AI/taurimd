@@ -1,5 +1,4 @@
 import type { Snapshot } from '../types';
-import type { Heading } from '../reader/parse';
 import type { FileSortDirection, FileSortKey } from '../settings/model';
 export type { FileSortDirection, FileSortKey };
 export interface EntryBinding {
@@ -39,15 +38,7 @@ export interface PickerScope {
 export interface EntryIntent {
   binding: EntryBinding;
   name: string;
-  focus: 'start' | 'preserve' | 'heading';
-  preview?: Snapshot;
-  key?: number;
-}
-export interface Preview {
-  phase: 'loading' | 'ready' | 'error';
-  headings: Heading[];
-  snapshot?: Snapshot;
-  message?: string;
+  focus: 'start' | 'preserve';
 }
 export interface IndexStatus {
   sequence: number;
@@ -90,8 +81,6 @@ export interface NavigationBridge {
   complete(request: QueryRequest): Promise<QueryReply>;
   refresh(scopeId: number): Promise<IndexSnapshot>;
   siblings(document: Snapshot): Promise<Siblings>;
-  preview(binding: EntryBinding, requestId: number): Promise<Snapshot>;
-  cancelPreview(requestId: number): Promise<unknown>;
   reveal(document: Snapshot): Promise<unknown>;
 }
 export function binding(index: FileIndex, entry: FileEntry): EntryBinding {

@@ -136,15 +136,6 @@ export function App({ controller }: { controller: ReaderController }) {
     navigationState.root,
     navigationState.rootBusy,
   ]);
-  useEffect(() => {
-    navigation.invalidate();
-  }, [navigation, state.previewEpoch]);
-  useEffect(() => {
-    if (state.displayed?.previewChanged) {
-      navigation.invalidate();
-      navigation.notice('File changed; choose a heading again.', true);
-    }
-  }, [navigation, state.displayed]);
   const readingHTML = useMemo(
     () => ({ __html: state.displayed?.html ?? '' }),
     [state.displayed],
@@ -401,16 +392,6 @@ export function App({ controller }: { controller: ReaderController }) {
         return;
       }
       const document = controller.state.displayed;
-      if (
-        intent.key !== undefined &&
-        intent.preview &&
-        document?.snapshot.contextId !== undefined &&
-        document.snapshot.contextId === intent.preview.contextId &&
-        document.snapshot.source === intent.preview.source
-      ) {
-        jump(intent.key);
-        return;
-      }
       const anchor =
         invoker ??
         (window.document.activeElement instanceof HTMLElement
@@ -425,7 +406,7 @@ export function App({ controller }: { controller: ReaderController }) {
         inSiblings: !!anchor && !!siblingGroup.current?.contains(anchor),
       };
     },
-    [allowNavigation, controller, jump, navigation],
+    [allowNavigation, controller, navigation],
   );
   const acceptPickerFile = useCallback(
     (intent: EntryIntent) => {
@@ -1098,10 +1079,7 @@ export function App({ controller }: { controller: ReaderController }) {
       const pending = focusIntent.current;
       const ownsFocus =
         pending !== null && pending.requestId === document.requestId;
-      if (document.headingKey !== undefined) {
-        focusIntent.current = null;
-        jump(document.headingKey);
-      } else if (
+      if (
         ownsFocus &&
         (document.focus === 'preserve' || pending.action === 'reload')
       ) {
@@ -1140,7 +1118,7 @@ export function App({ controller }: { controller: ReaderController }) {
         host?.scrollIntoView({ block: 'start' });
       }
     }
-  }, [state.displayed, jump]);
+  }, [state.displayed]);
   useEffect(() => {
     const pending = focusIntent.current;
     if (!pending || busy) return;
@@ -1645,7 +1623,6 @@ export function App({ controller }: { controller: ReaderController }) {
             }
             allow={allowNavigation}
             open={openNavigation}
-            visible={settings.sidebarDefault}
             siblingGroupRef={siblingGroupRef}
             sortKey={settings.fileSortKey}
             sortDirection={settings.fileSortDirection}

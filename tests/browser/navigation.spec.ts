@@ -189,53 +189,6 @@ async function open(page: Page, doc = snapshot()) {
   }, doc);
   await expect(page.getByRole('article', { name: doc.name })).toBeFocused();
 }
-async function preview(
-  page: Page,
-  name = 'beta.MKDOWN',
-  context = 20,
-  source = text,
-) {
-  await page.evaluate(
-    ({ name, context, source }) => {
-      window.readerFixture.enqueue('read_preview', {
-        value: {
-          documentId: 0,
-          contextId: context,
-          revision: 99,
-          name,
-          location: `fixture/${name}`,
-          format: 'markdown',
-          source,
-        },
-      });
-    },
-    { name, context, source },
-  );
-  const show = page.getByRole('button', {
-    name: `Show headings for ${name}`,
-    exact: true,
-  });
-  const retry = page.getByRole('button', {
-    name: 'Retry headings',
-    exact: true,
-  });
-  const headings = page.getByRole('button', {
-    name: `Open ${name} at Repeat`,
-    exact: true,
-  });
-  // A disclosed group may already be expanded or may have failed its preview.
-  await expect
-    .poll(async () => {
-      if (await headings.count()) return 'ready';
-      if (await show.count()) return 'collapsed';
-      if (await retry.count()) return 'failed';
-      return 'pending';
-    })
-    .not.toBe('pending');
-  if (await show.count()) await show.click();
-  else if (await retry.count()) await retry.click();
-  await expect(headings).toHaveCount(2);
-}
 test.beforeEach(async ({ page }) => {
   await page.goto(
     `${process.env.TAURIMD_TEST_URL ?? ''}/tests/browser/shell.html`,
@@ -253,7 +206,7 @@ test.afterEach(async ({ page }) => {
   );
 });
 
-test('recursive folder disclosure and lazy shared-worker headings open the exact duplicate destination', async ({
+test('recursive folder disclosure opens nested content with no explorer preview work', async ({
   page,
 }, info) => {
   await choose(page);
@@ -274,12 +227,20 @@ test('recursive folder disclosure and lazy shared-worker headings open the exact
   await expect(
     page.getByRole('button', { name: 'Open nested/deep.md', exact: true }),
   ).toBeVisible();
+  // A markdown row is a single open control: no per-row disclosure and no
+  // explorer-triggered heading reads on open or expand.
+  for (const name of [
+    'Show headings for literal.log',
+    'Hide headings for literal.log',
+    'Retry headings',
+  ]) {
+    await expect(page.getByRole('button', { name })).toHaveCount(0);
+  }
   await expect(
-    page.getByRole('button', { name: 'Show headings for literal.log' }),
-  ).toHaveCount(0);
-  await preview(page);
+    page.getByRole('navigation', { name: 'Files', exact: true }),
+  ).not.toContainText('Loading headings');
   expect(await page.evaluate(() => window.readerFixture.workerParses())).toBe(
-    1,
+    0,
   );
   expect(
     await page.evaluate(() => window.readerFixture.diagrams().renders.length),
@@ -290,33 +251,28 @@ test('recursive folder disclosure and lazy shared-worker headings open the exact
     (c) => c.command === 'resolve_media' || c.command === 'open_index_entry',
   );
   expect(explorations).toHaveLength(0);
-  await siblings(page, 20);
+  // The sibling projection names the file about to open, so the row
+  // reports its active state once the document is displayed.
+  await siblings(page, 50);
   await page.evaluate(
     (doc) => {
       window.readerFixture.enqueue('open_index_entry', { value: doc });
-      window.readerFixture.enqueue('resolve_media', {
-        error: { code: 'notFound', message: 'Image missing' },
-      });
     },
-    snapshot('beta.MKDOWN', 20),
+    snapshot('deep.md', 50, text, 1, 50),
   );
   await page
-    .getByRole('button', { name: 'Open beta.MKDOWN at Repeat', exact: true })
-    .nth(1)
+    .getByRole('button', { name: 'Open nested/deep.md', exact: true })
     .press('Enter');
-  const article = page.getByRole('article', { name: 'beta.MKDOWN' });
+  await expect(page.getByRole('article', { name: 'deep.md' })).toBeFocused();
   await expect(
-    article.getByRole('heading', { name: 'Repeat', exact: true }).nth(1),
-  ).toBeFocused();
-  await expect(
-    page.getByRole('button', { name: 'Open beta.MKDOWN', exact: true }),
+    page.getByRole('button', { name: 'Open nested/deep.md', exact: true }),
   ).toHaveAttribute('aria-current', 'page');
   // Computed-style pin: the active row's tint and accent bar must survive
   // the de-boxed row cascade (a specificity regression turns both
   // transparent), at rest and while hovered. The probe resolves --link in
   // the live palette so the comparison stays palette-independent.
   const activeRow = page.getByRole('button', {
-    name: 'Open beta.MKDOWN',
+    name: 'Open nested/deep.md',
     exact: true,
   });
   const activeStyle = () =>
@@ -341,6 +297,7 @@ test('recursive folder disclosure and lazy shared-worker headings open the exact
   const hovered = await activeStyle();
   expect(transparent.has(hovered.background)).toBe(false);
   expect(hovered.bar).toBe(hovered.link);
+  // The displayed document's headings come from the Table of Contents pane.
   await expect(
     page
       .getByRole('navigation', { name: 'On this page' })
@@ -356,90 +313,16 @@ test('recursive folder disclosure and lazy shared-worker headings open the exact
   // follows it.
   expect(call?.payload).toEqual({
     requestId: 2,
-    binding: { scope: 7, revision: 1, entry: 20 },
+    binding: { scope: 7, revision: 1, entry: 50 },
     newWindow: false,
   });
-  expect(
-    (await page.evaluate(() => window.readerFixture.navigationCalls())).filter(
-      (call) => call.command === 'read_preview',
-    ),
-  ).toHaveLength(1);
   await expect(
     page.getByRole('navigation', { name: 'Files', exact: true }),
-  ).not.toContainText('Could not read headings');
-  await expect(article.locator('.diagram svg')).toHaveCount(1);
-  await expect(
-    article.getByRole('heading', { name: 'Repeat', exact: true }).nth(1),
-  ).toBeFocused();
-  await page.screenshot({ path: info.outputPath('nested-exact-heading.png') });
+  ).not.toContainText('headings');
+  await page.screenshot({ path: info.outputPath('nested-open.png') });
 });
 
-test('same-current-source jumps without a read; changed preview bytes open fresh content without guessing an ordinal', async ({
-  page,
-}) => {
-  await choose(page);
-  await siblings(page);
-  const source = '# Repeat\n### Between\n## Repeat';
-  await open(page, snapshot('alpha.md', 10, source));
-  await preview(page, 'alpha.md', 10, source);
-  const before = await page.evaluate(() => window.readerFixture.calls().length);
-  await page
-    .getByRole('button', { name: 'Open alpha.md at Repeat', exact: true })
-    .nth(1)
-    .click();
-  await expect(
-    page
-      .getByRole('article')
-      .getByRole('heading', { name: 'Repeat', exact: true })
-      .nth(1),
-  ).toBeFocused();
-  expect(await page.evaluate(() => window.readerFixture.calls().length)).toBe(
-    before,
-  );
-  await preview(page, 'beta.MKDOWN', 20, source);
-  const fresh = source.replace('## Repeat', '## Other!');
-  expect(fresh.length).toBe(source.length);
-  await page.evaluate(
-    (doc) => {
-      window.readerFixture.enqueue('open_index_entry', { value: doc });
-    },
-    snapshot('beta.MKDOWN', 20, fresh, 2),
-  );
-  await siblings(page, 20);
-  await page
-    .getByRole('button', { name: 'Open beta.MKDOWN at Repeat', exact: true })
-    .nth(1)
-    .click();
-  await expect(page.getByRole('article')).toContainText('Other!');
-  await expect(
-    page.getByRole('navigation', { name: 'Files', exact: true }),
-  ).toContainText('File changed; choose a heading again.');
-  await expect(
-    page
-      .getByRole('region', { name: 'Reader status', exact: true })
-      .getByText('File changed; choose a heading again.', { exact: true }),
-  ).toHaveCount(1);
-  await expect(
-    page.getByRole('article').getByRole('heading', { name: 'Other!' }),
-  ).not.toBeFocused();
-  const outline = page.getByRole('navigation', { name: 'On this page' });
-  await outline.getByRole('link', { name: /Other!/ }).click();
-  await expect(
-    page.getByRole('article').getByRole('heading', { name: 'Other!' }),
-  ).toBeFocused();
-  await page
-    .getByRole('article')
-    .getByRole('heading', { name: 'Other!' })
-    .evaluate((node) => {
-      node.remove();
-    });
-  await outline.getByRole('link', { name: /Other!/ }).click();
-  await expect(
-    page.getByRole('navigation', { name: 'Files', exact: true }),
-  ).toContainText('This section is no longer present.');
-});
-
-test('retains established disclosure nodes, cancels only hidden preview work, and refresh removal restores nearest folder focus', async ({
+test('retains established disclosure nodes and refresh removal restores nearest folder focus', async ({
   page,
 }) => {
   await choose(page);
@@ -448,14 +331,11 @@ test('retains established disclosure nodes, cancels only hidden preview work, an
   await page
     .getByRole('button', { name: 'Expand folder nested', exact: true })
     .click();
-  await preview(page, 'nested/deep.md', 50);
   const retained = await page
-    .getByRole('button', { name: 'Open nested/deep.md at Repeat', exact: true })
-    .nth(1)
+    .getByRole('button', { name: 'Open nested/deep.md', exact: true })
     .evaluateHandle((node) => node);
   await page
-    .getByRole('button', { name: 'Open nested/deep.md at Repeat', exact: true })
-    .nth(1)
+    .getByRole('button', { name: 'Open nested/deep.md', exact: true })
     .focus();
   await page
     .getByRole('button', { name: 'Collapse folder nested', exact: true })
@@ -471,66 +351,19 @@ test('retains established disclosure nodes, cancels only hidden preview work, an
   expect(
     await retained.evaluate(
       (node) =>
-        node ===
-        document.querySelectorAll(
-          '[aria-label="Open nested/deep.md at Repeat"]',
-        )[1],
+        node === document.querySelector('[aria-label="Open nested/deep.md"]'),
     ),
   ).toBe(true);
   await page
-    .getByRole('button', { name: 'Open nested/deep.md at Repeat', exact: true })
-    .nth(1)
+    .getByRole('button', { name: 'Open nested/deep.md', exact: true })
     .focus();
   await page.evaluate(() => window.readerFixture.menu('sidebar'));
   await expect(page.getByRole('article')).toBeFocused();
   await page.evaluate(() => window.readerFixture.menu('sidebar'));
   await expect(
-    page.getByRole('button', {
-      name: 'Hide headings for nested/deep.md',
-      exact: true,
-    }),
+    page.getByRole('button', { name: 'Collapse folder nested', exact: true }),
   ).toHaveAttribute('aria-expanded', 'true');
   expect(await retained.evaluate((node) => node.isConnected)).toBe(true);
-  await page
-    .getByRole('button', { name: 'Open nested/deep.md at Repeat', exact: true })
-    .nth(1)
-    .focus();
-  await page.evaluate(() => window.readerFixture.menu('settings'));
-  await page
-    .getByRole('dialog')
-    .getByLabel('Show File Explorer by default')
-    .uncheck();
-  await page
-    .getByRole('dialog')
-    .getByRole('button', { name: 'Close', exact: true })
-    .click();
-  await expect(page.getByRole('article')).toBeFocused();
-  await page.evaluate(() => window.readerFixture.menu('sidebar'));
-  await page.evaluate(() => {
-    window.readerFixture.workerMode('hold');
-    window.readerFixture.enqueue('read_preview', {
-      value: {
-        documentId: 0,
-        contextId: 20,
-        revision: 1,
-        name: 'beta.MKDOWN',
-        location: 'fixture/beta.MKDOWN',
-        format: 'markdown',
-        source: '# Pending',
-      },
-    });
-  });
-  await page
-    .getByRole('button', { name: 'Show headings for beta.MKDOWN', exact: true })
-    .click();
-  await expect
-    .poll(() => page.evaluate(() => window.readerFixture.activeWorkers()))
-    .toBe(1);
-  await page.evaluate(() => window.readerFixture.menu('sidebar'));
-  await expect
-    .poll(() => page.evaluate(() => window.readerFixture.activeWorkers()))
-    .toBe(0);
-  await page.evaluate(() => window.readerFixture.menu('sidebar'));
   await page
     .getByRole('button', { name: 'Open nested/deep.md', exact: true })
     .focus();
@@ -701,43 +534,6 @@ test('empty, partial and denied refresh stay distinct from each other and do not
   await article.dispose();
 });
 
-test('manual failed reload invalidates requested previews even when native source bytes are unchanged', async ({
-  page,
-}) => {
-  await choose(page);
-  await siblings(page);
-  await open(page, snapshot('alpha.md', 10, '# Kept'));
-  await preview(page, 'beta.MKDOWN', 20, '# Repeat\n## Repeat');
-  const count = await page.evaluate(() => window.readerFixture.workerParses());
-  await page.evaluate(() => {
-    window.readerFixture.enqueue('reload_document', {
-      error: { code: 'notFound', message: 'Reload missing' },
-    });
-    window.readerFixture.enqueue('read_preview', {
-      value: {
-        documentId: 0,
-        contextId: 20,
-        revision: 100,
-        name: 'beta.MKDOWN',
-        location: 'fixture/beta.MKDOWN',
-        format: 'markdown',
-        source: '# Repeat\n## Repeat',
-      },
-    });
-    return window.readerFixture.menu('reload');
-  });
-  await expect(page.getByRole('alert')).toContainText('Reload failed');
-  await expect
-    .poll(() => page.evaluate(() => window.readerFixture.workerParses()))
-    .toBe(count + 1);
-  await expect(
-    page.getByRole('button', {
-      name: 'Open beta.MKDOWN at Repeat',
-      exact: true,
-    }),
-  ).toHaveCount(2);
-});
-
 test('all navigation entry points reject composition, pending document commit and logical native Save ownership without queuing', async ({
   page,
 }) => {
@@ -774,12 +570,6 @@ test('all navigation entry points reject composition, pending document commit an
   });
   await expect(
     page.getByRole('button', { name: 'Open beta.MKDOWN', exact: true }),
-  ).toBeDisabled();
-  await expect(
-    page.getByRole('button', {
-      name: 'Show headings for beta.MKDOWN',
-      exact: true,
-    }),
   ).toBeDisabled();
   expect(await page.evaluate(() => window.readerFixture.calls().length)).toBe(
     before,
@@ -1514,87 +1304,13 @@ for (const direction of ['previous', 'next'] as const)
     });
   }
 
-test('opening a Markdown file expands its own heading group once and a deliberate collapse survives reordering', async ({
+test('a failed open expands nothing and a deliberate folder collapse survives reordering', async ({
   page,
 }) => {
   await choose(page);
   await siblings(page, 10);
-  await page.evaluate(
-    (doc) => {
-      window.readerFixture.enqueue('read_preview', {
-        value: {
-          documentId: 0,
-          contextId: 10,
-          revision: 99,
-          name: 'alpha.md',
-          location: 'fixture/alpha.md',
-          format: 'markdown',
-          source: '# Alpha\n## Section',
-        },
-      });
-      window.readerFixture.enqueue('open_index_entry', { value: doc });
-    },
-    snapshot('alpha.md', 10, '# Alpha\n## Section', 1, 101),
-  );
-  await page
-    .getByRole('button', { name: 'Open alpha.md', exact: true })
-    .click();
-  await expect(
-    page.getByRole('button', {
-      name: 'Hide headings for alpha.md',
-      exact: true,
-    }),
-  ).toHaveAttribute('aria-expanded', 'true');
-  await expect(
-    page.getByRole('button', { name: 'Open alpha.md at Section', exact: true }),
-  ).toHaveCount(1);
-  // A deliberate collapse is not undone by reordering the file list.
-  await page
-    .getByRole('button', { name: 'Hide headings for alpha.md', exact: true })
-    .click();
-  await expect(
-    page.getByRole('button', {
-      name: 'Show headings for alpha.md',
-      exact: true,
-    }),
-  ).toHaveAttribute('aria-expanded', 'false');
-  // The reorder arrives through the Navigate menu path now that the sidebar
-  // carries no sort controls of its own.
-  await page.evaluate(() => window.readerFixture.menu('sort-modified'));
-  await expect(
-    page.getByRole('button', {
-      name: 'Show headings for alpha.md',
-      exact: true,
-    }),
-  ).toHaveAttribute('aria-expanded', 'false');
-  // A later explicit open of the same file expands the group again.
-  await page.evaluate(
-    (doc) => {
-      window.readerFixture.enqueue('read_preview', {
-        value: {
-          documentId: 0,
-          contextId: 10,
-          revision: 99,
-          name: 'alpha.md',
-          location: 'fixture/alpha.md',
-          format: 'markdown',
-          source: '# Alpha\n## Section',
-        },
-      });
-      window.readerFixture.enqueue('open_index_entry', { value: doc });
-    },
-    snapshot('alpha.md', 10, '# Alpha\n## Section', 2, 102),
-  );
-  await page
-    .getByRole('button', { name: 'Open alpha.md', exact: true })
-    .click();
-  await expect(
-    page.getByRole('button', {
-      name: 'Hide headings for alpha.md',
-      exact: true,
-    }),
-  ).toHaveAttribute('aria-expanded', 'true');
-  // A failed open expands nothing new.
+  // Opening a markdown file is one open control: no disclosure exists to
+  // auto-expand, and a failed open changes no row anatomy.
   await page.evaluate(() => {
     window.readerFixture.enqueue('open_index_entry', {
       error: {
@@ -1608,62 +1324,35 @@ test('opening a Markdown file expands its own heading group once and a deliberat
     .getByRole('button', { name: 'Open beta.MKDOWN', exact: true })
     .click();
   await expect(page.getByRole('alert')).toContainText('beta.MKDOWN');
-  await expect(
-    page.getByRole('button', {
-      name: 'Show headings for beta.MKDOWN',
-      exact: true,
-    }),
-  ).toHaveAttribute('aria-expanded', 'false');
-  // A hidden sidebar performs no heading preview work for the opened file.
-  await page.evaluate(() => window.readerFixture.menu('sort-name'));
-  await page.evaluate(() => window.readerFixture.menu('sidebar'));
-  const previews = await page.evaluate(
-    () =>
-      window.readerFixture
-        .navigationCalls()
-        .filter((call) => call.command === 'read_preview').length,
-  );
-  await page.evaluate(
-    (doc) => {
-      window.readerFixture.enqueue('open_index_entry', { value: doc });
-    },
-    snapshot('beta.MKDOWN', 20, '# Beta', 3, 103),
-  );
-  // The settled sibling projection names the newly opened file.
-  await siblings(page, 20);
-  await page.evaluate(() => window.readerFixture.menu('next'));
-  await expect(
-    page.getByRole('article', { name: 'beta.MKDOWN' }),
-  ).toBeVisible();
-  expect(
-    await page.evaluate(
-      () =>
-        window.readerFixture
-          .navigationCalls()
-          .filter((call) => call.command === 'read_preview').length,
-    ),
-  ).toBe(previews);
-  // The hidden row is marked expanded without reading its headings.
-  await page.evaluate(() => {
-    window.readerFixture.enqueue('read_preview', {
-      value: {
-        documentId: 0,
-        contextId: 20,
-        revision: 99,
-        name: 'beta.MKDOWN',
-        location: 'fixture/beta.MKDOWN',
-        format: 'markdown',
-        source: '# Beta',
-      },
-    });
+  const files = page.getByRole('navigation', { name: 'Files', exact: true });
+  const nested = files.getByRole('button', {
+    name: 'Expand folder nested',
+    exact: true,
   });
-  await page.evaluate(() => window.readerFixture.menu('sidebar'));
+  await nested.click();
   await expect(
-    page.getByRole('button', {
-      name: 'Hide headings for beta.MKDOWN',
-      exact: true,
-    }),
-  ).toHaveAttribute('aria-expanded', 'true');
+    files.getByRole('button', { name: 'Open nested/deep.md', exact: true }),
+  ).toBeVisible();
+  // A deliberate collapse is not undone by reordering the file list.
+  await page
+    .getByRole('button', { name: 'Collapse folder nested', exact: true })
+    .click();
+  await expect(
+    files.getByRole('button', { name: 'Open nested/deep.md', exact: true }),
+  ).toBeHidden();
+  // The reorder arrives through the Navigate menu path now that the sidebar
+  // carries no sort controls of its own.
+  await page.evaluate(() => window.readerFixture.menu('sort-modified'));
+  await expect(
+    files.getByRole('button', { name: 'Expand folder nested', exact: true }),
+  ).toHaveAttribute('aria-expanded', 'false');
+  // A later deliberate expansion still works after the reorder.
+  await files
+    .getByRole('button', { name: 'Expand folder nested', exact: true })
+    .click();
+  await expect(
+    files.getByRole('button', { name: 'Open nested/deep.md', exact: true }),
+  ).toBeVisible();
 });
 
 test('a sort-only interaction replaces no reading session', async ({

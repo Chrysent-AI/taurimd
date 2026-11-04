@@ -126,4 +126,39 @@ describe('duplicate-heading slug allocation', () => {
     expect(new Set(headingIds).size).toBe(5);
     for (const key of fragments) expect(headingIds).toContain(ids[key]);
   });
+  it('projects H1/H2 from the single sanitized H1-H6 allocation with unique destinations and no metadata/code/footnote/SVG headings', () => {
+    const source =
+      '---\noutline: "# Not a heading"\n---\n# Repeat\n### Between\n## Repeat\n# Repeat\n# Δοκιμή 日本語\n\n```md\n# Code\n```\n\n<pre><h2>Raw pre</h2></pre>\n\n<div><code><h2>Raw code</h2></code></div>\n\n<h2 id="author-id">Custom</h2>\n\nA note[^a].\n\n[^a]: Definition';
+    const parsed = parseMarkdown(source);
+    const current = sanitizeReading(parsed, 'd1-r1');
+    const second = sanitizeReading(parsed, 'reading-d1-r1-again');
+    const headings = current.headings ?? [];
+    expect(headings.map((h) => h.label)).toEqual([
+      'Repeat',
+      'Repeat',
+      'Repeat',
+      'Δοκιμή 日本語',
+      'Custom',
+    ]);
+    expect(headings.map((h) => h.key)).toEqual([1, 3, 4, 5, 8]);
+    expect(headings.map((h) => h.key)).toEqual(
+      second.headings?.map((h) => h.key),
+    );
+    expect(new Set(headings.map((h) => h.id)).size).toBe(headings.length);
+    expect(headings.map((h) => h.id)).not.toEqual(
+      second.headings?.map((h) => h.id),
+    );
+    const host = document.createElement('article');
+    host.innerHTML = current.html;
+    for (const heading of headings)
+      expect(
+        [...host.querySelectorAll('[id]')].filter(
+          (node) => node.id === heading.id,
+        ),
+      ).toHaveLength(1);
+    expect(current.fragments?.['author-id']).toBe(headings.at(-1)?.id);
+    expect(
+      headings.some((h) => h.label.includes('Code') || h.label.includes('Raw')),
+    ).toBe(false);
+  });
 });

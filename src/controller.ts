@@ -15,7 +15,6 @@ export class ReaderController {
     phase: 'empty',
     message: 'Open a local document to begin.',
     stale: false,
-    previewEpoch: 0,
   };
   private sequence = 0;
   private job: ParseJob | null = null;
@@ -108,7 +107,6 @@ export class ReaderController {
     this.publish({
       requestId: request,
       phase: 'loading',
-      previewEpoch: (before.previewEpoch ?? 0) + (action === 'reload' ? 1 : 0),
       linkMessage: action === 'link' ? 'Opening link…' : '',
       quietLink: false,
       message:
@@ -212,10 +210,6 @@ export class ReaderController {
         message: `Displaying ${snapshot.name}…`,
       });
       await this.bridge.commit(request);
-      const changed =
-        intent?.preview &&
-        (snapshot.contextId !== intent.preview.contextId ||
-          snapshot.source !== intent.preview.source);
       this.publish({
         displayed: {
           requestId: request,
@@ -224,15 +218,13 @@ export class ReaderController {
           html,
           fragment,
           focus: intent?.focus,
-          headingKey: changed ? undefined : intent?.key,
-          previewChanged: !!changed,
         },
         phase: 'ready',
         stale: false,
         linkMessage: '',
-        message: changed
-          ? 'File changed; choose a heading again.'
-          : `${action === 'reload' ? 'Reloaded' : 'Opened'} ${snapshot.name}${snapshot.source.length === 0 ? ' — empty file' : ''}.`,
+        message: `${action === 'reload' ? 'Reloaded' : 'Opened'} ${snapshot.name}${
+          snapshot.source.length === 0 ? ' — empty file' : ''
+        }.`,
       });
       return 'opened' as const;
     } catch (error) {

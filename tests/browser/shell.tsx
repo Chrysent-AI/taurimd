@@ -45,8 +45,6 @@ type Command =
   | 'complete_path'
   | 'refresh_index'
   | 'get_siblings'
-  | 'read_preview'
-  | 'cancel_preview'
   | 'open_index_entry'
   | 'reveal_document'
   | 'select_document'
@@ -343,8 +341,6 @@ mockIPC(async (command, payload) => {
       'complete_path',
       'refresh_index',
       'get_siblings',
-      'read_preview',
-      'cancel_preview',
       'open_index_entry',
       'reveal_document',
       'select_document',
@@ -376,33 +372,6 @@ mockIPC(async (command, payload) => {
     });
   calls.push({ command: name, payload: structuredClone(payload) });
   try {
-    if (name === 'read_preview') {
-      // The preview double answers the requested entry, like the native read.
-      // A queued reply that names another entry never satisfies this request.
-      const binding = (payload as { binding?: { entry?: number } }).binding;
-      const entry = cachedIndex.index?.entries.find(
-        (candidate) => candidate.id === binding?.entry,
-      );
-      const queue = replies.get(name) ?? [];
-      const match = entry
-        ? queue.findIndex((queued) => {
-            if (!('value' in queued)) return false;
-            const value = queued.value;
-            if (typeof value !== 'object' || value === null) return false;
-            const queuedName = (value as { name?: unknown }).name;
-            return (
-              typeof queuedName === 'string' &&
-              (queuedName === entry.name || queuedName === entry.relative)
-            );
-          })
-        : -1;
-      if (match >= 0) {
-        const [matched] = queue.splice(match, 1);
-        replies.set(name, queue);
-        return structuredClone((matched as { value: unknown }).value);
-      }
-      throw new Error(`Queue a backend response for ${name}`);
-    }
     const binding =
       name === 'resolve_media'
         ? (payload as { remoteBinding?: RemoteBinding }).remoteBinding
@@ -436,8 +405,7 @@ mockIPC(async (command, payload) => {
     if (!reply && (name === 'query_index' || name === 'complete_path'))
       return queryReply((payload as { request: QueryRequest }).request);
     if (!reply && name === 'get_siblings') return structuredClone(siblingReply);
-    if (!reply && (name === 'cancel_preview' || name === 'reveal_document'))
-      return null;
+    if (!reply && name === 'reveal_document') return null;
     if (!reply && name === 'begin_export') return ++exportId;
     if (!reply && (name === 'append_export_image' || name === 'cancel_export'))
       return null;
@@ -637,8 +605,6 @@ const fixture = {
         [
           'refresh_index',
           'get_siblings',
-          'read_preview',
-          'cancel_preview',
           'open_index_entry',
           'reveal_document',
         ].includes(call.command),
