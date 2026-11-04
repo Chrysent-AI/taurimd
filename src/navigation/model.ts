@@ -368,6 +368,19 @@ export class NavigationController {
       if (this.jobs.get(entry.uiId) === owned) this.jobs.delete(entry.uiId);
     }
   }
+  previewFromReading(key: number, reading: Rendered) {
+    // The displayed file's own preview reuses its current reading: no
+    // second native read or parse. Any in-flight native work for this
+    // entry is retired first, and a reload or changed file reaches here
+    // through previewEpoch/previewChanged invalidation plus a fresh
+    // reading object, so stale headings are never adopted twice.
+    this.collapse(key);
+    this.setPreview(key, {
+      phase: 'ready',
+      headings: reading.headings ?? [],
+      snapshot: reading.snapshot,
+    });
+  }
   private setPreview(key: number, preview?: Preview) {
     const previews = new Map(this.state.previews);
     if (preview) previews.set(key, preview);
@@ -384,7 +397,11 @@ export class NavigationController {
   }
   invalidate = () => {
     for (const key of this.jobs.keys()) this.collapse(key);
-    this.publish({ previews: new Map() });
+    // Count-only loading progress invalidates nothing when no preview
+    // work exists. Skipping the empty-map publish keeps the retained
+    // tree's inputs referentially stable, so progress announcements do
+    // not re-render the whole explorer.
+    if (this.state.previews.size > 0) this.publish({ previews: new Map() });
   };
   async reveal(document: Rendered) {
     if (this.revealing) return;

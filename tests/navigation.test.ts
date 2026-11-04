@@ -193,6 +193,90 @@ describe('production navigation state and shared native adapter DTO projection',
     expect(controller.state.previews.size).toBe(0);
     controller.dispose();
   });
+  it('reuses the displayed reading for its own preview and retires the superseded native work', async () => {
+    const { controller, bridge, parse } = setup();
+    await adoptRoot(bridge, controller, cache(index(2)));
+    const root = controller.state.root;
+    if (!root) throw new Error('Expected selected root');
+    const held = deferred<Snapshot>();
+    bridge.preview.mockReturnValueOnce(held.promise);
+    const pending = controller.preview(root, root.entries[0]);
+    expect(controller.state.previews.get(1)?.phase).toBe('loading');
+    const reading = {
+      snapshot: snapshot(),
+      html: null,
+      metadata: null,
+      headings: [
+        {
+          level: 1 as const,
+          label: 'Same',
+          id: 'reader-d0-r0-heading-1',
+          key: 1,
+        },
+      ],
+    };
+    controller.previewFromReading(1, reading);
+    held.resolve(snapshot());
+    await pending;
+    const preview = controller.state.previews.get(1);
+    expect(preview?.phase).toBe('ready');
+    expect(preview?.headings.map((heading) => heading.label)).toEqual(['Same']);
+    expect(preview?.snapshot).toBe(reading.snapshot);
+    // The superseded native read and its parse never publish.
+    expect(parse).not.toHaveBeenCalled();
+    expect(bridge.preview).toHaveBeenCalledTimes(1);
+    expect(bridge.cancelPreview).toHaveBeenCalledTimes(1);
+    // Invalidation still clears the adopted preview.
+    controller.invalidate();
+    expect(controller.state.previews.size).toBe(0);
+    // Adoption without pending work keeps the native bridge untouched.
+    controller.previewFromReading(2, reading);
+    expect(bridge.cancelPreview).toHaveBeenCalledTimes(1);
+    expect(controller.state.previews.get(2)?.snapshot).toBe(reading.snapshot);
+    controller.dispose();
+  });
+  it('count-only loading progress keeps the retained index and preview identity stable', async () => {
+    const { controller, bridge } = setup();
+    await adoptRoot(bridge, controller, cache(index(2)));
+    const root = controller.state.root;
+    if (!root) throw new Error('Expected selected root');
+    const previews = controller.state.previews;
+    const loading: IndexSnapshot = {
+      index: root,
+      status: {
+        sequence: 99,
+        scope: root.scope,
+        revision: root.revision,
+        phase: 'loading',
+        degraded: false,
+        message: '',
+        scans: 2,
+        traversals: 0,
+        entries: root.entries.length + 7,
+      },
+    };
+    bridge.get.mockResolvedValueOnce(loading);
+    await controller.recover();
+    // The explorer's inputs stay referentially stable while only the
+    // admitted-entry count moved, so its retained tree does not re-render.
+    expect(controller.state.root).toBe(root);
+    expect(controller.state.previews).toBe(previews);
+    expect(controller.state.rootBusy).toBe(true);
+    expect(controller.state.rootMessage).toContain('Indexing folder…');
+    expect(controller.state.rootMessage).toContain(
+      String(root.entries.length + 7),
+    );
+    // A settled reply still replaces the tree inputs and the phase.
+    const settled = cache({ ...index(2), name: 'fixture' }, 'ready');
+    settled.status.sequence = 100;
+    bridge.get.mockResolvedValueOnce(settled);
+    await controller.recover();
+    expect(controller.state.root).not.toBe(root);
+    expect(controller.state.rootBusy).toBe(false);
+    expect(controller.state.rootStatus).toBe('ready');
+    expect(controller.state.rootMessage).toBe('Folder loaded.');
+    controller.dispose();
+  });
   it('cancels only collapsed owned work and ignores its late native response', async () => {
     const { controller, bridge, parse } = setup();
     await adoptRoot(bridge, controller, cache(index(2)));

@@ -43,6 +43,24 @@ describe('generated Mermaid associations through the production worker boundary'
     const duplicate = { ...parsed, html: parsed.html + parsed.html };
     expect(sanitizeReading(duplicate).diagrams).toEqual([]);
   });
+  it('keeps distinct diagram associations unique across one thousand blocks', () => {
+    const fence = '```mermaid\ngraph LR\n A-->B\n```';
+    const parsed = parseMarkdown(
+      Array.from({ length: 1000 }, () => fence).join('\n\n'),
+    );
+    expect(parsed.diagrams).toHaveLength(1000);
+    const reading = sanitizeReading(parsed, 'd1-r1');
+    expect(reading.diagrams?.length).toBe(1000);
+    expect(
+      new Set((reading.diagrams ?? []).map((diagram) => diagram.slot)).size,
+    ).toBe(1000);
+    const host = document.createElement('div');
+    host.innerHTML = reading.html;
+    expect(host.querySelectorAll('[data-reader-diagram]')).toHaveLength(1000);
+    // The single-collection-pass wall-clock pin at four thousand blocks
+    // lives in tests/browser/document-shapes.spec.ts, where the production
+    // functions run in a real engine instead of jsdom's DOM.
+  });
   it('checks finite viewBox extents without treating 100% width as intrinsic geometry', () => {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('width', '100%');

@@ -934,3 +934,183 @@ fn a_traversal_read_converges_a_capped_boundary_directory_through_the_worker_ref
     drop(nav);
     reap(dir);
 }
+
+fn synthetic_record(root: &Path, relative: &str, kind: &'static str) -> Record {
+    let lexical = root.join(relative);
+    let name = lexical
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    Record {
+        canonical: lexical.clone(),
+        modified: None,
+        byte_size: None,
+        entry: Entry {
+            id: 0,
+            ui_id: 0,
+            parent: None,
+            name,
+            relative: relative.to_owned(),
+            kind,
+            context: 0,
+            alpha_rank: 0,
+            date_rank: None,
+            size_rank: None,
+        },
+        lexical,
+    }
+}
+
+#[test]
+fn retained_rescan_identity_renames_removals_kinds_parents_and_contexts_stay_exact() {
+    let root = PathBuf::from("/fixture-root");
+    let mut nav = Navigation::default();
+    let first_scope = nav.start(root.clone(), false).unwrap();
+    let records = vec![
+        synthetic_record(&root, "folder", "directory"),
+        synthetic_record(&root, "folder/keep.md", "markdown"),
+        synthetic_record(&root, "rename-me.md", "markdown"),
+        synthetic_record(&root, "replace-me.md", "text"),
+    ];
+    let scope = Scope {
+        records: Arc::new(records),
+        ..first_scope
+    };
+    let first = nav.publish(scope).unwrap();
+    let first_entry = |relative: &str| {
+        first
+            .entries
+            .iter()
+            .find(|entry| entry.relative == relative)
+            .unwrap()
+            .clone()
+    };
+    // A rescan of the same folder: the folder and kept file are unchanged,
+    // "rename-me.md" was renamed, "replace-me.md" changed kind in place,
+    // "gone.md" was removed after the first scan, and "added.md" is new.
+    let refresh = nav.start(root.clone(), true).unwrap();
+    assert_ne!(refresh.revision, first.revision);
+    let rescanned = vec![
+        synthetic_record(&root, "folder", "directory"),
+        synthetic_record(&root, "folder/keep.md", "markdown"),
+        synthetic_record(&root, "renamed.md", "markdown"),
+        synthetic_record(&root, "replace-me.md", "markdown"),
+        synthetic_record(&root, "added.md", "markdown"),
+    ];
+    let scope = Scope {
+        records: Arc::new(rescanned),
+        ..refresh
+    };
+    let second = nav.publish(scope).unwrap();
+    let second_entry = |relative: &str| {
+        second
+            .entries
+            .iter()
+            .find(|entry| entry.relative == relative)
+            .unwrap_or_else(|| panic!("missing {relative}"))
+            .clone()
+    };
+    // Unchanged records keep their published identity and context; every
+    // id is freshly allocated each publication, so only ui_id can match.
+    let folder = second_entry("folder");
+    let kept = second_entry("folder/keep.md");
+    assert_eq!(folder.ui_id, first_entry("folder").ui_id);
+    assert_ne!(folder.id, first_entry("folder").id);
+    assert_eq!(folder.context, first_entry("folder").context);
+    assert_eq!(kept.ui_id, first_entry("folder/keep.md").ui_id);
+    assert_eq!(kept.context, first_entry("folder/keep.md").context);
+    assert_eq!(kept.parent, Some(folder.id));
+    // A renamed record is a new identity: it never inherits the old
+    // ui_id, and the retired one is not reused anywhere.
+    let renamed = second_entry("renamed.md");
+    assert_ne!(renamed.ui_id, first_entry("rename-me.md").ui_id);
+    assert_eq!(renamed.ui_id, renamed.id);
+    let replaced = second_entry("replace-me.md");
+    assert_ne!(replaced.ui_id, first_entry("replace-me.md").ui_id);
+    assert_eq!(replaced.ui_id, replaced.id);
+    let added = second_entry("added.md");
+    assert_eq!(added.ui_id, added.id);
+    assert!(
+        !second
+            .entries
+            .iter()
+            .any(|entry| entry.relative == "gone.md")
+    );
+    assert!(
+        !second
+            .entries
+            .iter()
+            .any(|entry| entry.relative == "rename-me.md")
+    );
+    assert_ne!(
+        renamed.ui_id,
+        second_entry("added.md").ui_id,
+        "a removed record's identity is never reused"
+    );
+    let mut identities: Vec<_> = second.entries.iter().map(|entry| entry.ui_id).collect();
+    identities.sort_unstable();
+    identities.dedup();
+    assert_eq!(identities.len(), second.entries.len());
+    drop(nav);
+}
+
+#[test]
+fn retained_rescan_publication_is_near_linear_at_scale() {
+    // Synthetic records isolate the publication seam: the timed region is
+    // exactly the method production runs while holding the reader session.
+    // The previous per-record retained lookup measured ~4.2 s optimized for
+    // the 16,000-entry retained republication; the map lookup keeps the
+    // same identities at a small linear cost.
+    let root = PathBuf::from("/fixture-root");
+    let mut elapsed = Vec::new();
+    for count in [8_000usize, 16_000] {
+        let mut nav = Navigation::default();
+        let first_records: Vec<_> = (0..count)
+            .map(|index| synthetic_record(&root, &format!("file-{index}.md"), "markdown"))
+            .collect();
+        let scope = Scope {
+            records: Arc::new(first_records),
+            ..nav.start(root.clone(), false).unwrap()
+        };
+        nav.publish(scope).unwrap();
+        let mut rescanned: Vec<_> = (0..count)
+            .map(|index| synthetic_record(&root, &format!("file-{index}.md"), "markdown"))
+            .collect();
+        rescanned.push(synthetic_record(&root, "file-new.md", "markdown"));
+        let scope = Scope {
+            records: Arc::new(rescanned),
+            ..nav.start(root.clone(), true).unwrap()
+        };
+        let started = std::time::Instant::now();
+        let index = nav.publish(scope).unwrap();
+        elapsed.push((count, started.elapsed()));
+        assert_eq!(index.entries.len(), count + 1);
+        // The retained identity survived the rescan at scale.
+        let kept = index
+            .entries
+            .iter()
+            .find(|entry| entry.relative == "file-0.md")
+            .unwrap();
+        assert_ne!(kept.ui_id, kept.id);
+        drop(nav);
+    }
+    let Some((_, small)) = elapsed.first() else {
+        panic!("missing 8k measurement");
+    };
+    let Some((count, large)) = elapsed.last() else {
+        panic!("missing 16k measurement");
+    };
+    assert_eq!(*count, 16_000);
+    // Doubling the entries doubles linear work; the quadratic lookup grew
+    // fourfold. A loose threefold bound plus a flat ceiling holds the line
+    // without depending on machine speed.
+    assert!(
+        large.as_secs_f64() < small.as_secs_f64() * 3.0 + 0.05,
+        "16k ({large:?}) scaled super-linearly against 8k ({small:?})"
+    );
+    assert!(
+        *large < Duration::from_secs(5),
+        "16k retained republish took {large:?}; the quadratic baseline was ~16 s optimized"
+    );
+}

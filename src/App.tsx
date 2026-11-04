@@ -1192,9 +1192,14 @@ export function App({ controller }: { controller: ReaderController }) {
     )
       return;
     const headings = state.displayed.headings ?? [];
+    // One heading-ID map replaces a per-element scan of the heading list,
+    // which squared the setup cost on heading-dense documents.
+    const headingById = new Map(
+      headings.map((heading) => [heading.id, heading]),
+    );
     const targets = [...host.querySelectorAll<HTMLElement>('[id]')].flatMap(
       (node) => {
-        const heading = headings.find((h) => h.id === node.id);
+        const heading = headingById.get(node.id);
         return heading ? [{ node, key: heading.key }] : [];
       },
     );

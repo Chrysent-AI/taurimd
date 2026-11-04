@@ -62,13 +62,22 @@ export function mountMedia(
 ) {
   let retired = false;
   const cleanup: (() => void)[] = [];
+  // One pair of article-wide walks replaces a per-resource selector scan;
+  // first match per slot wins, matching the previous querySelector order,
+  // and every resource-ownership check below stays per resource.
+  const slots = new Map<string, Element>();
+  const feedbacks = new Map<string, Element>();
+  for (const node of host.querySelectorAll('[data-reader-media]')) {
+    const slot = node.getAttribute('data-reader-media') ?? '';
+    if (!slots.has(slot)) slots.set(slot, node);
+  }
+  for (const node of host.querySelectorAll('[data-reader-media-feedback]')) {
+    const slot = node.getAttribute('data-reader-media-feedback') ?? '';
+    if (!feedbacks.has(slot)) feedbacks.set(slot, node);
+  }
   for (const resource of document.resources ?? []) {
-    const element = host.querySelector(
-      `[data-reader-media="${resource.slot}"]`,
-    );
-    const feedback = host.querySelector(
-      `[data-reader-media-feedback="${resource.slot}"]`,
-    );
+    const element = slots.get(resource.slot);
+    const feedback = feedbacks.get(resource.slot);
     if (
       !(
         element instanceof HTMLImageElement ||

@@ -1,6 +1,8 @@
 import {
+  memo,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -17,6 +19,7 @@ import {
   type FileIndex,
   type FileSortDirection,
   type FileSortKey,
+  type Preview,
 } from './types';
 export function HeadingList({
   headings,
@@ -60,6 +63,48 @@ interface Props {
   sortKey: FileSortKey;
   sortDirection: FileSortDirection;
 }
+// Children are grouped and ordered once per index identity and sort
+// preference instead of every directory re-filtering the whole flat index
+// on every render.
+const emptyChildren: ReadonlyMap<number | null, FileEntry[]> = new Map();
+function childrenByParentOf(
+  entries: FileEntry[],
+  sortKey: FileSortKey,
+  sortDirection: FileSortDirection,
+): ReadonlyMap<number | null, FileEntry[]> {
+  const grouped = new Map<number | null, FileEntry[]>();
+  for (const entry of entries) {
+    const children = grouped.get(entry.parent);
+    if (children) children.push(entry);
+    else grouped.set(entry.parent, [entry]);
+  }
+  for (const children of grouped.values())
+    children.sort((a, b) => compareEntries(a, b, sortKey, sortDirection));
+  return grouped;
+}
+interface TreeProps {
+  index: FileIndex;
+  childrenByParent: ReadonlyMap<number | null, FileEntry[]>;
+  previews: ReadonlyMap<number, Preview>;
+  rootActive: number | null;
+  rootBusy: boolean;
+  settled: boolean;
+  visible: boolean;
+  controller: NavigationController;
+  document: Rendered | null;
+  disabled: boolean;
+  allow: () => boolean;
+  open: (intent: EntryIntent, invoker?: HTMLElement) => void;
+  fallback: () => void;
+}
+// The retained tree re-renders only when what its rows display changes:
+// the index identity, the child projection, the preview map, the displayed
+// document, or one of the controller slices a row renders. Count-only scan
+// progress changes none of these, so loading announcements skip the whole
+// subtree instead of re-rendering thousands of established rows.
+const Tree = memo(function Tree(props: TreeProps) {
+  return <Rows {...props} parent={null} />;
+});
 export function Navigation(props: Props) {
   const { controller, document, disabled, allow, open, siblingGroupRef } =
     props;
@@ -68,6 +113,17 @@ export function Navigation(props: Props) {
   const rootFallback = useCallback(
     () => rootHeading.current?.focus({ preventScroll: true }),
     [],
+  );
+  const childrenByParent = useMemo(
+    () =>
+      state.root
+        ? childrenByParentOf(
+            state.root.entries,
+            props.sortKey,
+            props.sortDirection,
+          )
+        : emptyChildren,
+    [state.root, props.sortKey, props.sortDirection],
   );
   const adjacent = siblingTargets(
     state.siblings,
@@ -108,10 +164,19 @@ export function Navigation(props: Props) {
               <p className="hint">No supported files.</p>
             )}
           <ul>
-            <Rows
-              {...props}
+            <Tree
               index={state.root}
-              parent={null}
+              childrenByParent={childrenByParent}
+              previews={state.previews}
+              rootActive={state.siblings?.rootActive ?? null}
+              rootBusy={state.rootBusy}
+              settled={state.siblingDocument === document}
+              visible={props.visible}
+              controller={controller}
+              document={document}
+              disabled={disabled}
+              allow={allow}
+              open={open}
               fallback={rootFallback}
             />
           </ul>
@@ -159,46 +224,43 @@ export function Navigation(props: Props) {
     </nav>
   );
 }
-function Rows(
-  props: Props & {
-    index: FileIndex;
-    parent: number | null;
-    fallback: () => void;
-  },
-) {
-  return props.index.entries
-    .filter((entry) => entry.parent === props.parent)
-    .sort((a, b) => compareEntries(a, b, props.sortKey, props.sortDirection))
-    .map((entry) => <Row {...props} key={entry.uiId} entry={entry} />);
+function Rows(props: TreeProps & { parent: number | null }) {
+  const children = props.childrenByParent.get(props.parent) ?? [];
+  return children.map((entry) => (
+    <Row {...props} key={entry.uiId} entry={entry} />
+  ));
 }
-function Row(
-  props: Props & { index: FileIndex; entry: FileEntry; fallback: () => void },
-) {
+function Row(props: TreeProps & { entry: FileEntry; parent: number | null }) {
   const { entry, index, controller, allow, disabled } = props;
+  const document = props.document;
   const [expanded, setExpanded] = useState(false);
+  // Descendants of a folder the reader never opened are never mounted.
+  // Once a folder has been opened its rows stay established while hidden,
+  // preserving node identity, focus and settled previews across collapse.
+  const [opened, setOpened] = useState(false);
   const row = useRef<HTMLLIElement | null>(null);
   const content = useRef<HTMLDivElement>(null);
   const disclosure = useRef<HTMLButtonElement>(null);
   const consumed = useRef<string | null>(null);
-  const preview = controller.state.previews.get(entry.uiId);
-  const document = props.document;
+  const preview = props.previews.get(entry.uiId);
   // A successful new open is identified by its native context and document.
   // A reload keeps the document identity, so it never re-opens a group.
   const identity =
     document && document.snapshot.contextId !== undefined
       ? `${String(document.snapshot.contextId)}:${String(document.snapshot.documentId)}`
       : null;
-  const settled = controller.state.siblingDocument === document;
+  const active = props.rootActive === entry.id;
   const eligible =
     entry.kind === 'markdown' &&
     identity !== null &&
-    settled &&
+    props.settled &&
     document?.snapshot.contextId === entry.context &&
-    controller.state.siblings?.rootActive === entry.id;
+    active;
   useEffect(() => {
     if (!eligible) return;
     if (consumed.current === identity) return;
     consumed.current = identity;
+    setOpened(true);
     setExpanded(true);
   }, [eligible, identity]);
   useEffect(() => {
@@ -206,16 +268,25 @@ function Row(
       controller.collapse(entry.uiId);
       return;
     }
-    if (entry.kind === 'markdown' && !preview && !controller.state.rootBusy)
-      void controller.preview(index, entry);
+    if (entry.kind !== 'markdown' || preview || props.rootBusy) return;
+    // The displayed file's headings come from its current reading instead
+    // of a second native read and parse; every other entry fetches.
+    // `eligible` itself proves the reading is present.
+    if (eligible) {
+      controller.previewFromReading(entry.uiId, document);
+      return;
+    }
+    void controller.preview(index, entry);
   }, [
     expanded,
     entry,
     index,
     preview,
     controller,
-    controller.state.rootBusy,
+    props.rootBusy,
     props.visible,
+    eligible,
+    document,
   ]);
   useEffect(
     () => () => {
@@ -224,7 +295,6 @@ function Row(
     [controller, entry.uiId],
   );
   const id = `navigation-${String(index.scope)}-${String(entry.uiId)}`;
-  const active = controller.state.siblings?.rootActive === entry.id;
   const fallback = props.fallback;
   const rowRef = useCallback(
     (node: HTMLLIElement | null) => {
@@ -246,6 +316,7 @@ function Row(
     if (expanded && content.current?.contains(window.document.activeElement))
       disclosure.current?.focus({ preventScroll: true });
     if (expanded) controller.collapse(entry.uiId);
+    else setOpened(true);
     setExpanded(!expanded);
   };
   return (
@@ -269,11 +340,11 @@ function Row(
         ) : (
           <button
             disabled={disabled}
-            aria-disabled={controller.state.rootBusy || disabled}
+            aria-disabled={props.rootBusy || disabled}
             aria-current={active ? 'page' : undefined}
             aria-label={`Open ${entry.relative}`}
             onClick={() => {
-              if (!controller.state.rootBusy && allow())
+              if (!props.rootBusy && allow())
                 props.open({
                   binding: binding(index, entry),
                   name: entry.relative,
@@ -300,58 +371,59 @@ function Row(
         )}
       </div>
       <div ref={content} id={id} hidden={!expanded}>
-        {entry.kind === 'directory' ? (
-          <ul>
-            <Rows
-              {...props}
-              parent={entry.id}
-              visible={props.visible && expanded}
-              fallback={childFallback}
-            />
-          </ul>
-        ) : (
-          <div aria-busy={preview?.phase === 'loading'}>
-            {!preview || preview.phase === 'loading' ? (
-              <p className="hint">Loading headings…</p>
-            ) : preview.phase === 'error' ? (
-              <p>
-                Could not read headings: {preview.message}{' '}
-                <button
-                  disabled={disabled}
-                  onClick={() => {
-                    if (allow()) void controller.preview(index, entry);
-                  }}
-                >
-                  Retry headings
-                </button>
-              </p>
-            ) : preview.headings.length === 0 ? (
-              <p className="hint">No H1/H2 headings.</p>
-            ) : (
-              <HeadingList
-                headings={preview.headings}
-                render={(heading) => (
+        {opened &&
+          (entry.kind === 'directory' ? (
+            <ul>
+              <Rows
+                {...props}
+                parent={entry.id}
+                visible={props.visible && expanded}
+                fallback={childFallback}
+              />
+            </ul>
+          ) : (
+            <div aria-busy={preview?.phase === 'loading'}>
+              {!preview || preview.phase === 'loading' ? (
+                <p className="hint">Loading headings…</p>
+              ) : preview.phase === 'error' ? (
+                <p>
+                  Could not read headings: {preview.message}{' '}
                   <button
                     disabled={disabled}
-                    aria-label={`Open ${entry.relative} at ${heading.label}`}
                     onClick={() => {
-                      if (!allow() || !preview.snapshot) return;
-                      props.open({
-                        binding: binding(index, entry),
-                        name: entry.relative,
-                        focus: 'heading',
-                        preview: preview.snapshot,
-                        key: heading.key,
-                      });
+                      if (allow()) void controller.preview(index, entry);
                     }}
                   >
-                    {heading.label || 'Untitled section'}
+                    Retry headings
                   </button>
-                )}
-              />
-            )}
-          </div>
-        )}
+                </p>
+              ) : preview.headings.length === 0 ? (
+                <p className="hint">No H1/H2 headings.</p>
+              ) : (
+                <HeadingList
+                  headings={preview.headings}
+                  render={(heading) => (
+                    <button
+                      disabled={disabled}
+                      aria-label={`Open ${entry.relative} at ${heading.label}`}
+                      onClick={() => {
+                        if (!allow() || !preview.snapshot) return;
+                        props.open({
+                          binding: binding(index, entry),
+                          name: entry.relative,
+                          focus: 'heading',
+                          preview: preview.snapshot,
+                          key: heading.key,
+                        });
+                      }}
+                    >
+                      {heading.label || 'Untitled section'}
+                    </button>
+                  )}
+                />
+              )}
+            </div>
+          ))}
       </div>
     </li>
   );

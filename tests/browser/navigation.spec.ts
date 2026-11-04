@@ -77,6 +77,47 @@ const index = (revision = 1): FileIndex => ({
   entries: structuredClone(entries),
   issues: [],
 });
+// 8,000 root folders each holding one hidden child: the shape the freeze
+// investigation measured (every directory invoking a whole-index filter,
+// every hidden descendant fully mounted). Mount renders at this scale are
+// safe across engines.
+const bigIndex = (folders = 8000): FileIndex => {
+  const pad = (value: number) => String(value).padStart(4, '0');
+  const built: FileEntry[] = [];
+  for (let current = 0; current < folders; current += 1) {
+    built.push({
+      id: current + 1,
+      uiId: current + 1,
+      parent: null,
+      name: `dir-${pad(current)}`,
+      relative: `dir-${pad(current)}`,
+      kind: 'directory',
+      context: current + 1,
+      alphaRank: current,
+      dateRank: null,
+      sizeRank: null,
+    });
+    built.push({
+      id: folders + current + 1,
+      uiId: folders + current + 1,
+      parent: current + 1,
+      name: `note-${pad(current)}.log`,
+      relative: `dir-${pad(current)}/note-${pad(current)}.log`,
+      kind: 'text',
+      context: folders + current + 1,
+      alphaRank: current,
+      dateRank: null,
+      sizeRank: null,
+    });
+  }
+  return {
+    scope: 77,
+    revision: 1,
+    name: 'fixture/large folder',
+    entries: built,
+    issues: [],
+  };
+};
 const snapshot = (
   name = 'alpha.md',
   contextId = 10,
@@ -798,6 +839,136 @@ test('all navigation entry points reject composition, pending document commit an
   await expect(
     page.getByRole('article', { name: 'beta.MKDOWN' }),
   ).toBeVisible();
+});
+
+test('a large collapsed tree mounts no hidden descendants and an opened folder restores in place', async ({
+  page,
+}) => {
+  await choose(page);
+  const big = bigIndex();
+  await page.evaluate((root) => {
+    window.readerFixture.workingFolder(root);
+    return window.readerFixture.indexEvent(
+      window.readerFixture.indexSnapshot(root),
+    );
+  }, big);
+  const files = page.getByRole('navigation', { name: 'Files', exact: true });
+  await expect(files).toContainText('Folder loaded.');
+  // Direct DOM counting: only the 8,000 root folder rows exist, and the
+  // 8,000 hidden children of collapsed folders are not in the DOM at all.
+  const shape = () =>
+    page.evaluate(() => ({
+      rows: document.querySelectorAll('nav[aria-label="Files"] li').length,
+      nested: document.querySelectorAll('nav[aria-label="Files"] ul ul').length,
+      childVisible: (() => {
+        const button = document.querySelector(
+          'button[aria-label="Open dir-0000/note-0000.log"]',
+        );
+        return button ? !button.closest('[hidden]') : null;
+      })(),
+    }));
+  expect(await shape()).toEqual({ rows: 8000, nested: 0, childVisible: null });
+  await page.evaluate(() => {
+    const button = document.querySelector(
+      'button[aria-label="Expand folder dir-0000"]',
+    );
+    if (!button) throw new Error('Missing folder toggle');
+    (button as HTMLButtonElement).click();
+  });
+  expect(await shape()).toEqual({ rows: 8001, nested: 1, childVisible: true });
+  await page.evaluate(() => {
+    const button = document.querySelector(
+      'button[aria-label="Collapse folder dir-0000"]',
+    );
+    if (!button) throw new Error('Missing folder toggle');
+    (button as HTMLButtonElement).click();
+  });
+  // The opened folder's rows stay established while hidden, so re-expanding
+  // restores them in place instead of remounting the subtree.
+  expect(await shape()).toEqual({ rows: 8001, nested: 1, childVisible: false });
+});
+
+test('count-only scan progress announcements skip the retained tree render', async ({
+  page,
+}) => {
+  await choose(page);
+  // A 4,000-entry tree keeps even a full re-render cheap enough for the
+  // development React build the suite runs against; release-mode costs for
+  // this scenario were measured by the freeze investigation (four loading
+  // announcements over a 16,000-entry retained tree consumed 3.1–3.7 s).
+  const big = bigIndex(2000);
+  await page.evaluate((root) => {
+    window.readerFixture.workingFolder(root);
+    return window.readerFixture.indexEvent(
+      window.readerFixture.indexSnapshot(root),
+    );
+  }, big);
+  const files = page.getByRole('navigation', { name: 'Files', exact: true });
+  await expect(files).toContainText('Folder loaded.');
+  // React's development component tracks record one measure per row
+  // render. Counting them across count-only announcements pins the
+  // mechanism directly: no retained-tree render may happen while only the
+  // admitted-entry count moves.
+  const rowRenders = () =>
+    page.evaluate(() => {
+      let rows = 0;
+      for (const entry of performance.getEntriesByType('measure'))
+        if (entry.name.includes('Row')) rows += 1;
+      return rows;
+    });
+  // The first loading announcement legitimately moves the phase to busy;
+  // that render re-establishes the baseline this test measures against.
+  await page.evaluate(async () => {
+    const snapshot = window.readerFixture.indexSnapshot(
+      window.readerFixture.nativeIndex().index,
+      'loading',
+    );
+    snapshot.status.entries += 128;
+    await window.readerFixture.indexEvent(snapshot);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  });
+  await expect(files).toContainText('Indexing folder…');
+  const baseline = await rowRenders();
+  for (let round = 0; round < 3; round += 1) {
+    await page.evaluate(async () => {
+      const snapshot = window.readerFixture.indexSnapshot(
+        window.readerFixture.nativeIndex().index,
+        'loading',
+      );
+      snapshot.status.entries += 128;
+      await window.readerFixture.indexEvent(snapshot);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(await rowRenders()).toBe(baseline);
+  }
+  // The counts moved, the message reflects them, and the tree is intact.
+  await expect(files).toContainText('Indexing folder…');
+  expect(
+    await page.evaluate(
+      () => document.querySelectorAll('nav[aria-label="Files"] li').length,
+    ),
+  ).toBe(2000);
+  // A settled publication still replaces the tree inputs and the phase.
+  // The small replacement tree keeps this update render bounded in the
+  // development build.
+  await page.evaluate((root) => {
+    const next = {
+      ...root,
+      revision: root.revision + 1,
+      entries: root.entries.slice(0, 6),
+    };
+    return window.readerFixture.indexEvent(
+      window.readerFixture.indexSnapshot(next),
+    );
+  }, big);
+  await expect(files).toContainText('Folder loaded.');
+  expect(
+    await page.evaluate(
+      () => document.querySelectorAll('nav[aria-label="Files"] li').length,
+    ),
+  ).toBe(3);
 });
 
 for (const [palette] of palettes) {
@@ -1564,16 +1735,18 @@ test('a sort-only interaction replaces no reading session', async ({
         return label && label.startsWith('Open ') ? [label] : [];
       }),
     );
-  // Folder rows sort before files, so the nested child's row precedes the
-  // root files in tree order.
+  // Folder rows sort before files, and the never-opened folder's hidden
+  // child stays unmaterialized: the root-level file rows carry the order.
   await expect
     .poll(fileOrder)
-    .toEqual([
-      'Open nested/deep.md',
-      'Open alpha.md',
-      'Open beta.MKDOWN',
-      'Open literal.log',
-    ]);
+    .toEqual(['Open alpha.md', 'Open beta.MKDOWN', 'Open literal.log']);
+  expect(
+    await page.evaluate(() =>
+      [...document.querySelectorAll('nav[aria-label="Files"] button')].some(
+        (button) => button.getAttribute('aria-label') === 'Open nested/deep.md',
+      ),
+    ),
+  ).toBe(false);
   await dialog
     .getByLabel('Sort files by', { exact: true })
     .selectOption('modified');
@@ -1583,12 +1756,7 @@ test('a sort-only interaction replaces no reading session', async ({
   // The dialog change reorders the file tree in place.
   await expect
     .poll(fileOrder)
-    .toEqual([
-      'Open nested/deep.md',
-      'Open beta.MKDOWN',
-      'Open literal.log',
-      'Open alpha.md',
-    ]);
+    .toEqual(['Open beta.MKDOWN', 'Open literal.log', 'Open alpha.md']);
   await dialog.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(dialog).toBeHidden();
   // With the dialog closed, the Navigate menu writes the same preference,

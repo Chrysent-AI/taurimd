@@ -295,13 +295,23 @@ impl Navigation {
         if current.revision != scope.revision {
             return Err(Session::stale());
         }
+        // One retained identity lookup replaces the per-record linear search
+        // that made republishing an unchanged folder quadratic while holding
+        // the reader session. Path hashes compare like Path equality
+        // (components), and first insertion wins, matching the previous
+        // linear `find` over retained records.
+        let mut retained: HashMap<(&Path, &str), u32> =
+            HashMap::with_capacity(current.records.len());
+        for record in current.records.iter() {
+            retained
+                .entry((record.lexical.as_path(), record.entry.kind))
+                .or_insert(record.entry.ui_id);
+        }
         for record in Arc::make_mut(&mut scope.records) {
             record.entry.id = self.number()?;
-            record.entry.ui_id = current
-                .records
-                .iter()
-                .find(|r| r.lexical == record.lexical && r.entry.kind == record.entry.kind)
-                .map(|r| r.entry.ui_id)
+            record.entry.ui_id = retained
+                .get(&(record.lexical.as_path(), record.entry.kind))
+                .copied()
                 .unwrap_or(record.entry.id);
             record.entry.context = self.context(&record.canonical)?;
         }

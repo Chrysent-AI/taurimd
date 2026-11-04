@@ -86,3 +86,44 @@ describe('production Markdown and sanitizer boundary', () => {
     ]);
   });
 });
+describe('duplicate-heading slug allocation', () => {
+  it('keeps one thousand identical headings unique with the stable first-collision suffix order', () => {
+    const count = 1000;
+    const parsed = parseMarkdown(
+      Array.from({ length: count }, () => '## Repeat').join('\n\n'),
+    );
+    const reading = sanitizeReading(parsed, 'd2-r2');
+    const headings = reading.headings ?? [];
+    expect(headings).toHaveLength(count);
+    expect(new Set(headings.map((heading) => heading.id)).size).toBe(count);
+    expect(headings.map((heading) => heading.key)).toEqual(
+      Array.from({ length: count }, (_, index) => index + 1),
+    );
+    const fragmentKeys = Object.keys(reading.fragments ?? {}).filter((key) =>
+      key.startsWith('repeat'),
+    );
+    expect(fragmentKeys).toHaveLength(count);
+    expect(fragmentKeys[0]).toBe('repeat');
+    expect(fragmentKeys[1]).toBe('repeat-2');
+    expect(fragmentKeys[2]).toBe('repeat-3');
+    expect(fragmentKeys.at(-1)).toBe(`repeat-${String(count)}`);
+    // The wall-clock pin for the per-base counter at eight thousand
+    // headings lives in tests/browser/document-shapes.spec.ts, where the
+    // production functions run in a real engine instead of jsdom's DOM.
+  });
+  it('keeps explicit heading-text collisions on the same stable suffix order', () => {
+    const reading = sanitizeReading(
+      parseMarkdown('## A\n\n## A\n\n## A-2\n\n## A\n\n## A-2'),
+      'd3-r3',
+    );
+    const fragments = Object.keys(reading.fragments ?? {}).filter((key) =>
+      key.startsWith('a'),
+    );
+    expect(fragments).toEqual(['a', 'a-2', 'a-2-2', 'a-3', 'a-2-3']);
+    const ids = reading.fragments ?? {};
+    const headingIds = (reading.headings ?? []).map((heading) => heading.id);
+    expect(headingIds).toHaveLength(5);
+    expect(new Set(headingIds).size).toBe(5);
+    for (const key of fragments) expect(headingIds).toContain(ids[key]);
+  });
+});

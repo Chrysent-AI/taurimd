@@ -273,6 +273,12 @@ export function sanitizeReading(
     }
   }
   const usedSlugs = new Set<string>();
+  // Per-base next suffix: the collision probe resumes where the previous
+  // heading for the same base stopped instead of restarting at 1, which
+  // made thousands of identical headings quadratic. `usedSlugs` stays the
+  // single authority, so explicit "base-2" headings still collide exactly
+  // as before.
+  const nextSuffix = new Map<string, number>();
   const headings: NonNullable<Reading['headings']> = [];
   let headingNumber = 0;
   for (const heading of fragment.querySelectorAll('h1,h2,h3,h4,h5,h6')) {
@@ -282,8 +288,9 @@ export function sanitizeReading(
     }
     const base = slug(heading.textContent);
     let key = base;
-    let duplicate = 1;
+    let duplicate = nextSuffix.get(base) ?? 1;
     while (usedSlugs.has(key)) key = `${base}-${String(++duplicate)}`;
+    nextSuffix.set(base, duplicate);
     usedSlugs.add(key);
     const id = `${namespace}heading-${String(++headingNumber)}`;
     assign(heading, { id, tabindex: '-1' });
@@ -318,15 +325,21 @@ export function sanitizeReading(
   }
   const diagrams: NonNullable<Reading['diagrams']> = [];
   if (typeof parsed !== 'string') {
+    // One pass collects candidate blocks by marker; each definition then
+    // checks its own slot instead of rescanning the whole fragment, and a
+    // marker claimed by two blocks still rejects every match.
+    const firstBySlot = new Map<string, Element>();
+    const blockCount = new Map<string, number>();
+    for (const node of fragment.querySelectorAll('pre[data-reader-code]')) {
+      const slot = node.getAttribute('data-reader-code') ?? '';
+      blockCount.set(slot, (blockCount.get(slot) ?? 0) + 1);
+      if (!firstBySlot.has(slot)) firstBySlot.set(slot, node);
+    }
     for (const definition of parsed.diagrams) {
-      const candidates = [
-        ...fragment.querySelectorAll('pre[data-reader-code]'),
-      ].filter(
-        (node) => node.getAttribute('data-reader-code') === definition.slot,
-      );
-      const pre = candidates[0];
+      const pre = firstBySlot.get(definition.slot);
       if (
-        candidates.length !== 1 ||
+        (blockCount.get(definition.slot) ?? 0) !== 1 ||
+        !pre ||
         pre.children.length !== 1 ||
         pre.firstElementChild?.tagName !== 'CODE' ||
         pre.textContent !== definition.source
