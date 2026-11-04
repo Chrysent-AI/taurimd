@@ -270,6 +270,36 @@ test('recursive folder disclosure and lazy shared-worker headings open the exact
   await expect(
     page.getByRole('button', { name: 'Open beta.MKDOWN', exact: true }),
   ).toHaveAttribute('aria-current', 'page');
+  // Computed-style pin: the active row's tint and accent bar must survive
+  // the de-boxed row cascade (a specificity regression turns both
+  // transparent), at rest and while hovered. The probe resolves --link in
+  // the live palette so the comparison stays palette-independent.
+  const activeRow = page.getByRole('button', {
+    name: 'Open beta.MKDOWN',
+    exact: true,
+  });
+  const activeStyle = () =>
+    activeRow.evaluate((node) => {
+      const probe = document.createElement('div');
+      probe.style.borderInlineStart = '3px solid var(--link)';
+      document.body.append(probe);
+      const link = getComputedStyle(probe).borderInlineStartColor;
+      probe.remove();
+      const computed = getComputedStyle(node);
+      return {
+        background: computed.backgroundColor,
+        bar: computed.borderInlineStartColor,
+        link,
+      };
+    });
+  const transparent = new Set(['transparent', 'rgba(0, 0, 0, 0)']);
+  const resting = await activeStyle();
+  expect(transparent.has(resting.background)).toBe(false);
+  expect(resting.bar).toBe(resting.link);
+  await activeRow.hover();
+  const hovered = await activeStyle();
+  expect(transparent.has(hovered.background)).toBe(false);
+  expect(hovered.bar).toBe(hovered.link);
   await expect(
     page
       .getByRole('navigation', { name: 'On this page' })
@@ -1801,4 +1831,39 @@ test('Cmd/Ctrl+Arrow keys open the first and last sibling on overfilled document
   expect(
     calls.filter((call) => call.command === 'open_index_entry'),
   ).toHaveLength(2);
+});
+
+test('a folder row toggles expansion in one click and the chevron tracks aria-expanded', async ({
+  page,
+}) => {
+  await choose(page);
+  const files = page.getByRole('navigation', { name: 'Files', exact: true });
+  const row = files.getByRole('button', {
+    name: 'Expand folder nested',
+    exact: true,
+  });
+  await expect(row).toHaveAttribute('aria-expanded', 'false');
+  await expect(row.locator('.chevron')).toHaveCSS('transform', 'none');
+  // The folder name is the toggle: one control per row, no separate
+  // Expand/Collapse button and no inert label.
+  await row.click();
+  const expanded = files.getByRole('button', {
+    name: 'Collapse folder nested',
+    exact: true,
+  });
+  await expect(expanded).toHaveAttribute('aria-expanded', 'true');
+  await expect(expanded.locator('.chevron')).toHaveCSS(
+    'transform',
+    'matrix(0, 1, -1, 0, 0, 0)',
+  );
+  await expect(
+    files.getByRole('button', { name: 'Open nested/deep.md', exact: true }),
+  ).toBeVisible();
+  await expanded.click();
+  await expect(
+    files.getByRole('button', { name: 'Expand folder nested', exact: true }),
+  ).toHaveAttribute('aria-expanded', 'false');
+  await expect(
+    files.getByRole('button', { name: 'Open nested/deep.md', exact: true }),
+  ).toBeHidden();
 });

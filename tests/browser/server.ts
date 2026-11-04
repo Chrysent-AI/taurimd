@@ -20,6 +20,13 @@ export default async function setup() {
     server: {
       host: '127.0.0.1',
       port: 0,
+      // Concurrent sibling git worktrees (.worktrees/**, each with its own
+      // builds) and Rust build output must not broadcast dev-server reloads
+      // into running tests; a mid-test full reload destroys the page context
+      // the same way a navigation would. Mirrors vite.config.ts's ignore.
+      watch: {
+        ignored: ['**/src-tauri/**', '**/.worktrees/**'],
+      },
       headers: {
         'Content-Security-Policy':
           "default-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; img-src blob: reader-media: http://reader-media.localhost; media-src reader-media: http://reader-media.localhost; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'",

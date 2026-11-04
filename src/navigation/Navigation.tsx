@@ -79,7 +79,7 @@ export function Navigation(props: Props) {
       <h2 ref={rootHeading} tabIndex={-1}>
         Files
       </h2>
-      <p>{state.message}</p>
+      <p className="hint">{state.message}</p>
       {!state.root ? (
         state.rootMessage ? (
           <p className="warning">{state.rootMessage}</p>
@@ -88,22 +88,25 @@ export function Navigation(props: Props) {
         )
       ) : (
         <div aria-busy={state.rootBusy}>
-          <p>{state.rootMessage}</p>
+          <p className="hint">{state.rootMessage}</p>
           {state.watcherMessage && (
             <p className="warning">{state.watcherMessage}</p>
           )}
+          <p className="hint">Working folder</p>
           <p className="folder-identity">{state.root.name}</p>
           {document &&
             state.siblings &&
             !state.siblings.inRoot &&
             state.rootStatus === 'ready' && (
-              <p>
+              <p className="hint">
                 Displayed file is outside this folder or excluded from
                 navigation.
               </p>
             )}
           {!state.root.entries.some((entry) => entry.kind !== 'directory') &&
-            state.rootStatus === 'ready' && <p>No supported files.</p>}
+            state.rootStatus === 'ready' && (
+              <p className="hint">No supported files.</p>
+            )}
           <ul>
             <Rows
               {...props}
@@ -236,11 +239,33 @@ function Row(
       disclosure.current.focus({ preventScroll: true });
     else fallback();
   }, [fallback]);
+  // One toggle seam for both disclosure kinds; collapsing while a child owns
+  // focus moves focus back to the disclosure control itself.
+  const toggle = () => {
+    if (!allow()) return;
+    if (expanded && content.current?.contains(window.document.activeElement))
+      disclosure.current?.focus({ preventScroll: true });
+    if (expanded) controller.collapse(entry.uiId);
+    setExpanded(!expanded);
+  };
   return (
     <li ref={rowRef}>
       <div className="file-row">
         {entry.kind === 'directory' ? (
-          <span>Folder: {entry.name}</span>
+          <button
+            ref={disclosure}
+            className="tree-toggle"
+            disabled={disabled}
+            aria-expanded={expanded}
+            aria-controls={id}
+            aria-label={`${
+              expanded ? 'Collapse' : 'Expand'
+            } folder ${entry.relative}`}
+            onClick={toggle}
+          >
+            <span className="chevron" aria-hidden="true" />
+            {entry.name}
+          </button>
         ) : (
           <button
             disabled={disabled}
@@ -257,39 +282,20 @@ function Row(
             }}
           >
             {entry.name}
-            {active && ' · Current file'}
-            {entry.kind === 'text' && ' · Plain text'}
           </button>
         )}
-        {entry.kind !== 'text' && (
+        {entry.kind === 'markdown' && (
           <button
             ref={disclosure}
+            className="headings-toggle"
             disabled={disabled}
             aria-expanded={expanded}
             aria-controls={id}
-            aria-label={
-              entry.kind === 'directory'
-                ? `${expanded ? 'Collapse' : 'Expand'} folder ${entry.relative}`
-                : `${expanded ? 'Hide' : 'Show'} headings for ${entry.relative}`
-            }
-            onClick={() => {
-              if (!allow()) return;
-              if (
-                expanded &&
-                content.current?.contains(window.document.activeElement)
-              )
-                disclosure.current?.focus({ preventScroll: true });
-              if (expanded) controller.collapse(entry.uiId);
-              setExpanded(!expanded);
-            }}
+            aria-label={`${expanded ? 'Hide' : 'Show'} headings for ${entry.relative}`}
+            onClick={toggle}
           >
-            {entry.kind === 'directory'
-              ? expanded
-                ? 'Collapse'
-                : 'Expand'
-              : expanded
-                ? 'Hide headings'
-                : 'Show headings'}
+            <span className="chevron" aria-hidden="true" />
+            Headings
           </button>
         )}
       </div>
@@ -306,7 +312,7 @@ function Row(
         ) : (
           <div aria-busy={preview?.phase === 'loading'}>
             {!preview || preview.phase === 'loading' ? (
-              <p>Loading headings…</p>
+              <p className="hint">Loading headings…</p>
             ) : preview.phase === 'error' ? (
               <p>
                 Could not read headings: {preview.message}{' '}
@@ -320,7 +326,7 @@ function Row(
                 </button>
               </p>
             ) : preview.headings.length === 0 ? (
-              <p>No H1/H2 headings.</p>
+              <p className="hint">No H1/H2 headings.</p>
             ) : (
               <HeadingList
                 headings={preview.headings}

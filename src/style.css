@@ -136,8 +136,25 @@ body {
 .navigation nav > div > ul {
   padding-inline-start: 0;
 }
+/* Expanded children (folder contents and heading lists) indent one deeper
+   step and share a guide line that ties them to their row. */
+.navigation li > div > ul,
+.navigation li > div > div > ul {
+  position: relative;
+  padding-inline-start: 1.05rem;
+}
+.navigation li > div > ul::before,
+.navigation li > div > div > ul::before {
+  content: '';
+  position: absolute;
+  inset-block: 0.15rem;
+  inset-inline-start: 0.3rem;
+  inline-size: 1px;
+  background: var(--border);
+  opacity: 0.45;
+}
 .navigation li {
-  margin-block: 0.45rem;
+  margin-block: 0.1rem;
 }
 .navigation a,
 .navigation button {
@@ -152,29 +169,83 @@ body {
 .navigation button {
   padding: 0.25rem 0.4rem;
 }
-.navigation [aria-current] {
+/* Tree rows read as lines, not boxed controls. Scoped so the Previous/Next
+   and Retry commands keep the boxed action style. */
+.navigation .file-row button,
+.navigation .tree-toggle {
+  background: none;
+  border-color: transparent;
+  border-radius: 0.25rem;
+  padding: 0.15rem 0.35rem;
+  min-block-size: 1.6rem;
+}
+.navigation .file-row > :first-child {
+  flex: 1;
+}
+.navigation .headings-toggle {
+  flex: 0 0 auto;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+/* var(--code) equals var(--panel) in the Solarized palettes, so the tint is
+   mixed from the text color instead to stay visible in every palette. */
+.navigation .file-row button:hover,
+.navigation .tree-toggle:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+/* The active row must out-rank the de-box rule above (0,2,1) and tie-break
+   the hover rule (0,3,1) by order, or the de-boxed transparent background
+   and border color would erase its tint and accent bar. */
+.navigation .file-row button[aria-current] {
   font-weight: 700;
   border-inline-start: 3px solid var(--link);
+  background: color-mix(in srgb, var(--text) 12%, transparent);
 }
 .navigation h2:focus,
 .sibling-controls:focus {
   outline: 3px solid var(--focus);
 }
-.file-row,
+.file-row {
+  display: flex;
+  flex-direction: row;
+  align-items: start;
+  gap: 0.25rem;
+}
 .sibling-controls {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-}
-.sibling-controls {
   border-top: 1px solid var(--border);
   padding-block: 0.7rem;
+}
+.sibling-controls > p {
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 .sibling-controls select {
   max-width: 100%;
 }
 .folder-identity {
   font-weight: 600;
+}
+/* CSS-triangle carets: collapsed points right, expanded rotates down. */
+.chevron {
+  display: inline-block;
+  inline-size: 0;
+  block-size: 0;
+  border-style: solid;
+  border-width: 0.2em 0 0.2em 0.26em;
+  border-color: transparent transparent transparent currentColor;
+  margin-inline-end: 0.3rem;
+}
+.tree-toggle[aria-expanded='true'] .chevron,
+.headings-toggle[aria-expanded='true'] .chevron {
+  transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chevron {
+    transition: transform 120ms ease;
+  }
 }
 .sr-only {
   position: absolute;
