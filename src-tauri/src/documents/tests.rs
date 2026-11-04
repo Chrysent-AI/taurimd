@@ -277,7 +277,7 @@ fn verbatim_prefixes_normalize_to_plain_display_forms() {
         r"\\server\share"
     );
     // Non-verbatim paths pass through untouched, whatever their spelling.
-    for passthrough in [r"C:\dir\a.md", r"\\server\share\a.md", "/home/u/a.md"] {
+    for passthrough in [r"C:\dir\a.md", r"\\server\share\a.md", "/srv/data/a.md"] {
         assert_eq!(strip_verbatim_prefix(passthrough), passthrough);
     }
 }
