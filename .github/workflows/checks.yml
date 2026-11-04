@@ -6,6 +6,7 @@ on:
       - main
 permissions:
   contents: read
+  actions: write
 jobs:
   quality:
     # GitHub expressions have no regex match operator, so the commit gate is
@@ -25,6 +26,13 @@ jobs:
       startsWith(github.event.head_commit.message, 'perf(') }}
     runs-on: ubuntu-24.04
     steps:
+      - name: Cancel the whole run when this job fails
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X DELETE "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            -f reason="A job in this run failed; cancelling remaining jobs"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
@@ -63,6 +71,13 @@ jobs:
       startsWith(github.event.head_commit.message, 'perf(') }}
     runs-on: ubuntu-24.04
     steps:
+      - name: Cancel the whole run when this job fails
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X DELETE "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            -f reason="A job in this run failed; cancelling remaining jobs"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
@@ -111,6 +126,13 @@ jobs:
         os: [macos-15, windows-2025, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
+      - name: Cancel the whole run when this job fails
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X DELETE "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            -f reason="A job in this run failed; cancelling remaining jobs"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:

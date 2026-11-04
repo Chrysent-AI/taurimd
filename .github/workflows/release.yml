@@ -5,6 +5,7 @@ on:
       - 'v*'
 permissions:
   contents: write
+  actions: write
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -12,6 +13,13 @@ jobs:
   release-version:
     runs-on: ubuntu-24.04
     steps:
+      - name: Cancel the whole run when this job fails
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X DELETE "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            -f reason="A job in this run failed; cancelling remaining jobs"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
@@ -36,6 +44,13 @@ jobs:
             target: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.os }}
     steps:
+      - name: Cancel the whole run when this job fails
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X DELETE "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            -f reason="A job in this run failed; cancelling remaining jobs"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:

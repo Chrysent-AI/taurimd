@@ -177,9 +177,11 @@ fn windows_canonical_grant_reloads_without_changing_source_bytes() {
     let mut session = Session::default();
     session.begin(1).unwrap();
     let selected = read_document(&path, None, 1, 1).unwrap();
+    // BUG-0016 normalizes the canonical grant to the plain drive-letter
+    // form: the first component is the drive prefix, not a verbatim one.
     assert!(matches!(
         selected.path.components().next(),
-        Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::VerbatimDisk(_) | Prefix::VerbatimUNC(_, _))
+        Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_))
     ));
     session.stage(1, selected).unwrap();
     session.commit(1).unwrap();

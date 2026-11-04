@@ -680,12 +680,23 @@ test('branch pushes and tags run separate workflows, and the tag path builds the
   assert.deepEqual(checks.on.push.branches, ['main']);
   assert.equal(checks.on.push.tags, undefined);
   assert.equal(checks.permissions.contents, 'read');
+  assert.equal(checks.permissions.actions, 'write');
   const jobs = checks.jobs;
   assert.deepEqual(Object.keys(jobs).sort(), [
     'browsers',
     'native-build',
     'quality',
   ]);
+  // A failed job cancels the remaining jobs in the run: a rejected head
+  // must not keep unrelated jobs burning runner minutes.
+  for (const job of Object.keys(jobs)) {
+    const cancel = jobs[job].steps.filter(
+      (step) => step.name === 'Cancel the whole run when this job fails',
+    );
+    assert.equal(cancel.length, 1, `${job} must cancel the run when it fails`);
+    assert.match(cancel[0].if, /failure/);
+    assert.match(cancel[0].run, /actions\/runs/);
+  }
   // The tests run on a push to main only for a feat, fix or test commit.
   // GitHub expressions have no regex match operator, so the commit gate is a
   // startsWith over each accepted prefix, with and without a scope.
@@ -762,12 +773,23 @@ test('branch pushes and tags run separate workflows, and the tag path builds the
   assert.equal(release.on.push.branches, undefined);
   // The release stage creates the release page, so it needs contents: write.
   assert.equal(release.permissions.contents, 'write');
+  assert.equal(release.permissions.actions, 'write');
   const releaseJobs = release.jobs;
   assert.deepEqual(Object.keys(releaseJobs).sort(), [
     'package-candidates',
     'publish-release',
     'release-version',
   ]);
+  // A failed release leg (tag validation, one platform) cancels the rest:
+  // a version with a broken leg is rejected, not partially built.
+  for (const job of ['release-version', 'package-candidates']) {
+    const cancel = releaseJobs[job].steps.filter(
+      (step) => step.name === 'Cancel the whole run when this job fails',
+    );
+    assert.equal(cancel.length, 1, `${job} must cancel the run when it fails`);
+    assert.match(cancel[0].if, /failure/);
+    assert.match(cancel[0].run, /actions\/runs/);
+  }
   const releaseScripts = (job) =>
     releaseJobs[job].steps.map((step) => step.run ?? '').join('\n');
   assert.match(
