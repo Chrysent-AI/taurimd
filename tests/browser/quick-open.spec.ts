@@ -217,6 +217,64 @@ test('manual refresh settles through cached getters when only index notification
   await loadingFocus.dispose();
   await article.dispose();
 });
+test('Ctrl+K and Ctrl+O open from the keyboard off macOS and are never claimed on macOS', async ({
+  page,
+}) => {
+  await open(page);
+  // The capture listener reads the platform per keypress, so one page pins
+  // both sides of the ownership matrix in every engine: WebView2 consumes
+  // Ctrl-combinations on Windows and the GTK delivery gap deadens them on
+  // Linux, so the frontend must answer these keys itself, while macOS
+  // accelerators keep owning them.
+  const setPlatform = (platform: string) =>
+    page.evaluate((value) => {
+      Object.defineProperty(Navigator.prototype, 'platform', {
+        value,
+        configurable: true,
+      });
+    }, platform);
+  await setPlatform('Windows NT 10.0');
+  await page.keyboard.press('Control+k');
+  const input = page.getByRole('combobox', { name: 'File name or path' });
+  await expect(input).toBeFocused();
+  // Already open: the repeated chord re-enters the same surface instead of
+  // stacking another one.
+  await page.keyboard.press('Control+k');
+  await expect(page.getByRole('dialog', { name: 'Quick Open' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(input).toBeHidden();
+  // Ctrl+O routes through the same Open File entry as the menu item.
+  await page.evaluate(() => {
+    window.readerFixture.enqueue('select_document', {
+      value: {
+        status: 'ready',
+        snapshot: {
+          documentId: 2,
+          revision: 1,
+          name: 'opened.md',
+          location: 'fixture/opened.md',
+          format: 'markdown',
+          source: '# Opened by the keyboard\n',
+        },
+      },
+    });
+  });
+  await page.keyboard.press('Control+o');
+  await expect(page.getByRole('article', { name: 'opened.md' })).toBeVisible();
+  // macOS: the frontend claims neither chord under any modifier arrangement.
+  await setPlatform('MacIntel');
+  await page.keyboard.press('Control+k');
+  await expect(page.getByRole('dialog', { name: 'Quick Open' })).toBeHidden();
+  await page.keyboard.press('Meta+k');
+  await expect(page.getByRole('dialog', { name: 'Quick Open' })).toBeHidden();
+  await page.keyboard.press('Meta+o');
+  // One initial menu open plus exactly one keyboard open: no duplicate
+  // Open File requests from a repeated claim.
+  const opens = (
+    await page.evaluate(() => window.readerFixture.calls())
+  ).filter((call) => call.command === 'select_document');
+  expect(opens).toHaveLength(2);
+});
 test('native action focuses once, debounces cache queries, file Tab hands off after dismissal exactly once', async ({
   page,
 }) => {

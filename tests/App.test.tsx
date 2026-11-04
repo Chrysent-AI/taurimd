@@ -391,6 +391,101 @@ it('Cmd/Ctrl+Arrow keys open the first and last sibling through the same dispatc
   expect(bridge.openEntry).toHaveBeenCalledTimes(2);
 });
 
+it('Ctrl+K and Ctrl+O are frontend-owned only off macOS and stay single-owner and pass-through per surface', async () => {
+  const { bridge } = reader('# Body\n\nSentinel paragraph.');
+  await menu('open');
+  await screen.findByRole('article', { name: 'metadata.md' });
+  expect(bridge.select).toHaveBeenCalledTimes(1);
+  await withPlatform('Linux x86_64', async () => {
+    // Only the exact Ctrl chord is claimed; bare and mixed modifiers keep
+    // their own meanings.
+    expect((await pressKey({ key: 'k' })).defaultPrevented).toBe(false);
+    expect(
+      (await pressKey({ key: 'k', ctrlKey: true, shiftKey: true }))
+        .defaultPrevented,
+    ).toBe(false);
+    expect(
+      (await pressKey({ key: 'o', ctrlKey: true, altKey: true }))
+        .defaultPrevented,
+    ).toBe(false);
+    // The exact chord claims the key and opens Quick Open.
+    expect((await pressKey({ key: 'k', ctrlKey: true })).defaultPrevented).toBe(
+      true,
+    );
+  });
+  const input = await screen.findByRole('combobox', {
+    name: 'File name or path',
+  });
+  expect(document.activeElement).toBe(input);
+  // The focused Quick Open input owns the keyboard: a repeated Ctrl+K passes
+  // through unconsumed.
+  await withPlatform('Linux x86_64', async () => {
+    expect((await pressKey({ key: 'k', ctrlKey: true })).defaultPrevented).toBe(
+      false,
+    );
+  });
+  // Even when focus sits on a dialog control, a claimed Ctrl+K re-enters the
+  // already-open surface instead of stacking another one (the same entry
+  // point a hypothetical duplicate native accelerator would take).
+  screen.getByRole('button', { name: 'Close' }).focus();
+  await withPlatform('Linux x86_64', async () => {
+    expect((await pressKey({ key: 'k', ctrlKey: true })).defaultPrevented).toBe(
+      true,
+    );
+  });
+  expect(document.activeElement).toBe(input);
+  expect(screen.getAllByRole('dialog', { name: 'Quick Open' })).toHaveLength(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  await waitFor(() => {
+    expect(screen.queryByRole('dialog', { name: 'Quick Open' })).toBeNull();
+  });
+  // Ctrl+O routes through the Open File dispatch path.
+  await withPlatform('Linux x86_64', async () => {
+    expect((await pressKey({ key: 'o', ctrlKey: true })).defaultPrevented).toBe(
+      true,
+    );
+  });
+  await waitFor(() => {
+    expect(bridge.select).toHaveBeenCalledTimes(2);
+  });
+  // macOS keeps the native Cmd+K/Cmd+O accelerators: the frontend never
+  // claims k/o there, not even with Ctrl.
+  await withPlatform('MacIntel', async () => {
+    expect((await pressKey({ key: 'k', metaKey: true })).defaultPrevented).toBe(
+      false,
+    );
+    expect((await pressKey({ key: 'o', metaKey: true })).defaultPrevented).toBe(
+      false,
+    );
+    expect((await pressKey({ key: 'k', ctrlKey: true })).defaultPrevented).toBe(
+      false,
+    );
+  });
+  expect(bridge.select).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole('dialog', { name: 'Quick Open' })).toBeNull();
+  // IME composition keeps the keys: both the app-level composition flag and
+  // the event's own isComposing (the legacy keyCode-229 signal) pass through.
+  const shell = document.querySelector('.shell') as HTMLElement;
+  fireEvent.compositionStart(shell);
+  await withPlatform('Linux x86_64', async () => {
+    expect((await pressKey({ key: 'k', ctrlKey: true })).defaultPrevented).toBe(
+      false,
+    );
+    expect(
+      (await pressKey({ key: 'o', ctrlKey: true, isComposing: true }))
+        .defaultPrevented,
+    ).toBe(false);
+  });
+  fireEvent.compositionEnd(shell);
+  await withPlatform('Linux x86_64', async () => {
+    expect((await pressKey({ key: 'k', ctrlKey: true })).defaultPrevented).toBe(
+      true,
+    );
+  });
+  await screen.findByRole('dialog', { name: 'Quick Open' });
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+});
+
 it('fullscreen Escape asks the native seam only when no in-app surface owns the key', async () => {
   reader('# Body\n\nSentinel paragraph.');
   await menu('open');
