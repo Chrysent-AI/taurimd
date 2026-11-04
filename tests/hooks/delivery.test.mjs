@@ -694,6 +694,8 @@ test('branch pushes and tags run separate workflows, and the tag path builds the
     'feat(',
     'fix:',
     'fix(',
+    'perf:',
+    'perf(',
     'test:',
     'test(',
     'tests:',
