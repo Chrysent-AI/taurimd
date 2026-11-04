@@ -114,6 +114,12 @@ export function sanitizeReading(
         'alt',
         'width',
         'height',
+        // Legacy presentational alignment: marked emits align on GFM table
+        // cells and raw HTML like <p align="center"> keeps it. Values are
+        // bounded by DOMPurify's URI check, so a hostile URI-ish value is
+        // dropped, and the browser maps the attribute in UA origin — no
+        // author style attribute is ever granted.
+        'align',
       ],
       ALLOW_DATA_ATTR: false,
       ALLOW_ARIA_ATTR: false,

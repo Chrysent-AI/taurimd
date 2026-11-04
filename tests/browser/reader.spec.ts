@@ -39,3 +39,42 @@ test('real worker and sanitizer do not execute or fetch document content', async
   await expect(page.locator('#literal script')).toHaveCount(0);
   expect(external).toEqual([]);
 });
+test('GFM column and raw HTML alignment survive sanitize and compute aligned', async ({
+  page,
+}) => {
+  await page.goto(
+    `${process.env.TAURIMD_TEST_URL ?? ''}/tests/browser/fixture.html`,
+  );
+  await page.waitForFunction(() => typeof window.renderDocument === 'function');
+  await page.evaluate(async () => {
+    await window.renderDocument(
+      '<p align="center">Centered intro</p>\n\n| Left | Centered |\n| --- | :---: |\n| a | b |\n',
+      'markdown',
+    );
+  });
+  await expect(page.locator('#reading p[align="center"]')).toHaveText(
+    'Centered intro',
+  );
+  // The legacy align attribute maps in UA origin in every engine; no
+  // author style attribute is granted to carry the alignment. Engines
+  // surface the mapped center as their legacy internal value
+  // (-webkit-center / -moz-center), so normalize the prefix.
+  const textAlign = (selector: string) =>
+    page.evaluate((query) => {
+      const node = document.querySelector(query);
+      if (!node) throw new Error(`Missing aligned node: ${query}`);
+      return getComputedStyle(node).textAlign.replace(
+        /^(?:-webkit-|-moz-)/,
+        '',
+      );
+    }, selector);
+  expect(await textAlign('#reading p[align="center"]')).toBe('center');
+  expect(
+    await page.evaluate(() =>
+      document.querySelector('#reading th:nth-child(2)')?.getAttribute('align'),
+    ),
+  ).toBe('center');
+  expect(await textAlign('#reading th:nth-child(2)')).toBe('center');
+  expect(await textAlign('#reading td:nth-child(2)')).toBe('center');
+  await expect(page.locator('#reading [style]')).toHaveCount(0);
+});
