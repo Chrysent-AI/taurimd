@@ -13,6 +13,7 @@ import type { Snapshot } from '../src/types';
 import { parseMarkdown } from '../src/reader/parse';
 import { sanitizeReading } from '../src/reader/sanitize';
 import { defaults } from '../src/settings/model';
+import { readerWindow } from '../src/native';
 import type { FileEntry, Siblings } from '../src/navigation/types';
 const events = vi.hoisted(() => {
   let siblingsReply: unknown = null;
@@ -87,6 +88,9 @@ vi.mock('../src/native', () => ({
     cancelPreview: () => Promise.resolve(null),
     reveal: () => Promise.resolve(null),
   },
+  readerWindow: {
+    exitFullscreenIf: vi.fn(() => Promise.resolve(false)),
+  },
   preferences: {
     get: () =>
       Promise.resolve({
@@ -115,8 +119,18 @@ afterEach(() => {
   cleanup();
   events.fail = false;
   events.setSiblings(null);
+  vi.mocked(readerWindow.exitFullscreenIf).mockClear();
 });
 Element.prototype.scrollIntoView = vi.fn();
+// jsdom leaves <dialog> unimplemented; TemporaryDialog only needs open/close
+// state to mount and clean up in this suite. Native Escape/cancel behavior
+// stays a platform check.
+HTMLDialogElement.prototype.showModal = function showModal() {
+  this.open = true;
+};
+HTMLDialogElement.prototype.close = function close() {
+  this.open = false;
+};
 vi.stubGlobal('matchMedia', () => ({
   matches: false,
   addEventListener: vi.fn(),
@@ -377,4 +391,56 @@ it('Cmd/Ctrl+Arrow keys open the first and last sibling through the same dispatc
   expect(await screen.findByRole('article', { name: 'gamma.md' })).toBeTruthy();
   // One keypress, one navigation: no duplicated or wrapped outcomes.
   expect(bridge.openEntry).toHaveBeenCalledTimes(2);
+});
+
+it('fullscreen Escape asks the native seam only when no in-app surface owns the key', async () => {
+  reader('# Body\n\nSentinel paragraph.');
+  await menu('open');
+  await screen.findByRole('article', { name: 'metadata.md' });
+  const exitFullscreenIf = vi.mocked(readerWindow.exitFullscreenIf);
+  // Bare Escape on a clean reading surface asks once; the windowed reply is
+  // a no-op and the press is never claimed.
+  expect((await pressKey({ key: 'Escape' })).defaultPrevented).toBe(false);
+  expect(exitFullscreenIf).toHaveBeenCalledTimes(1);
+  // Modified Escape keeps its platform meanings; IME composition keeps its
+  // own.
+  expect(
+    (await pressKey({ key: 'Escape', shiftKey: true })).defaultPrevented,
+  ).toBe(false);
+  const shell = document.querySelector('.shell') as HTMLElement;
+  fireEvent.compositionStart(shell);
+  expect((await pressKey({ key: 'Escape' })).defaultPrevented).toBe(false);
+  expect(exitFullscreenIf).toHaveBeenCalledTimes(1);
+  fireEvent.compositionEnd(shell);
+  // The find bar owns Escape wherever focus sits inside it; the key closes
+  // find without reaching the window seam.
+  await menu('find');
+  const input = await screen.findByRole('textbox', {
+    name: 'Find in document',
+  });
+  expect(document.activeElement).toBe(input);
+  fireEvent.keyDown(input, { key: 'Escape' });
+  expect(exitFullscreenIf).toHaveBeenCalledTimes(1);
+  expect(
+    screen.queryByRole('textbox', { name: 'Find in document' }),
+  ).toBeNull();
+  // A focused diagram viewport keeps its leave-diagram role.
+  const viewport = document.createElement('div');
+  viewport.className = 'diagram-viewport';
+  viewport.tabIndex = -1;
+  document.body.appendChild(viewport);
+  viewport.focus();
+  expect(document.activeElement).toBe(viewport);
+  await pressKey({ key: 'Escape' });
+  expect(exitFullscreenIf).toHaveBeenCalledTimes(1);
+  viewport.remove();
+  // An open dialog owns Escape until it closes; only the next bare press
+  // reaches the seam.
+  await menu('settings');
+  const dialog = await screen.findByRole('dialog', { name: 'Settings' });
+  fireEvent.keyDown(dialog, { key: 'Escape' });
+  expect(exitFullscreenIf).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+  await pressKey({ key: 'Escape' });
+  expect(exitFullscreenIf).toHaveBeenCalledTimes(2);
 });

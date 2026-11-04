@@ -19,6 +19,7 @@
     "allow-pending-document",
     "allow-receive-document",
     "allow-dismiss-document",
+    "allow-exit-fullscreen-if",
     "allow-select-document",
     "allow-reload-document",
     "allow-commit-document",

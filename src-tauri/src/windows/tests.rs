@@ -603,6 +603,15 @@ fn package_configuration_keeps_viewer_aliases_supported_platforms_and_narrow_del
     let capability: serde_json::Value =
         serde_json::from_str(include_str!("../../capabilities/reader.json")).unwrap();
     assert_eq!(capability["windows"], serde_json::json!(["reader-*"]));
+    // The Escape fullscreen seam stays a granted reader command; dropping it
+    // would silently disable the keypress instead of failing loudly.
+    assert!(
+        capability["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|permission| permission == "allow-exit-fullscreen-if")
+    );
     for (text, targets) in [
         (
             include_str!("../../tauri.macos.conf.json"),

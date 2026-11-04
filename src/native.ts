@@ -96,6 +96,11 @@ export type DocumentRequest =
       fragment: string | null;
     }
   | { kind: 'error'; token: number; error: AppError };
+// Window-state seam: the fullscreen check and exit happen natively in one
+// command, so an Escape request never acts on stale frontend window state.
+export const readerWindow = {
+  exitFullscreenIf: () => invoke<boolean>('exit_fullscreen_if'),
+};
 export const documentRequests = {
   pending: () => invoke<DocumentRequest | null>('pending_document'),
   receive: (token: number, requestId: number) =>

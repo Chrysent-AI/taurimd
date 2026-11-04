@@ -14,6 +14,7 @@ import {
   preferences,
   documentRequests,
   navigation as navigationBridge,
+  readerWindow,
 } from './native';
 import { NavigationController, quickOpenScope } from './navigation/model';
 import { Navigation } from './navigation/Navigation';
@@ -872,6 +873,46 @@ export function App({ controller }: { controller: ReaderController }) {
       event.preventDefault();
       event.stopPropagation();
       dispatchLatest.current(action);
+    };
+    window.addEventListener('keydown', onKeydown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeydown, true);
+    };
+  }, []);
+  // Escape leaves native fullscreen only when no in-app surface owns the
+  // key. WKWebView never forwards Escape out of the green-button state, so
+  // the frontend asks the native seam, which rechecks the real window state
+  // and exits exactly when it is fullscreen; a windowed press stays a
+  // no-op. Every existing Escape owner wins first: an open dialog closes
+  // itself, the find bar and a focused diagram viewport keep their roles,
+  // editable controls and IME composition are left untouched, and modified
+  // Escape keeps its platform meanings. The press is never claimed
+  // (preventDefault/stopPropagation stay untouched) because ownership is
+  // resolved by the native fullscreen check after IPC and no unguarded
+  // surface consumes bare Escape; a failed request leaves the state as-is
+  // and the next press retries.
+  useEffect(() => {
+    const onKeydown = (event: KeyboardEvent) => {
+      if (
+        event.key !== 'Escape' ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey
+      )
+        return;
+      if (composing.current || event.isComposing) return;
+      if (modalOpen.current) return;
+      const focus = window.document.activeElement;
+      if (ownsEditingKeys(focus)) return;
+      // The find bar closes from any control inside it and a focused
+      // diagram viewport leaves zoom mode; their handlers own the press.
+      if (
+        focus instanceof Element &&
+        focus.closest('.find-bar, .diagram-viewport')
+      )
+        return;
+      void readerWindow.exitFullscreenIf().catch(() => {});
     };
     window.addEventListener('keydown', onKeydown, true);
     return () => {

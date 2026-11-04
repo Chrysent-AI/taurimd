@@ -530,6 +530,29 @@ pub async fn receive_document(
     .await
     .map_err(|_| unavailable())?
 }
+/// Leaves native fullscreen exactly when the calling reader window is
+/// actually fullscreen, so an Escape request that no frontend surface owns
+/// never disturbs an already-windowed reader. Returns whether the window
+/// was fullscreen when the request arrived.
+#[tauri::command]
+pub fn exit_fullscreen_if(window: WebviewWindow) -> Result<bool, AppError> {
+    let fullscreen = window.is_fullscreen().map_err(|_| {
+        AppError::new(
+            "resourceFailure",
+            "The reader window's fullscreen state is unavailable.",
+        )
+    })?;
+    if !fullscreen {
+        return Ok(false);
+    }
+    window.set_fullscreen(false).map_err(|_| {
+        AppError::new(
+            "resourceFailure",
+            "The reader window could not leave fullscreen.",
+        )
+    })?;
+    Ok(true)
+}
 pub fn commit(window: &WebviewWindow, request: u32) -> Result<String, AppError> {
     let state = window.state::<Windows>();
     let mut windows = state.lock().map_err(|_| unavailable())?;

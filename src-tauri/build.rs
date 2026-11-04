@@ -16,6 +16,7 @@ fn main() {
             "pending_document",
             "receive_document",
             "dismiss_document",
+            "exit_fullscreen_if",
             "select_document",
             "reload_document",
             "commit_document",

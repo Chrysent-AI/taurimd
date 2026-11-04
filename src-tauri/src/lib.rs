@@ -693,6 +693,7 @@ pub fn run() {
             windows::pending_document,
             windows::receive_document,
             windows::dismiss_document,
+            windows::exit_fullscreen_if,
             select_document,
             reload_document,
             commit_document,
