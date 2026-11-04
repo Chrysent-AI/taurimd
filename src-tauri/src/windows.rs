@@ -290,6 +290,25 @@ impl Registry {
         );
         Ok(label)
     }
+    /// The cold-start decision, made in one critical section: file work that
+    /// already exists — captured startup arguments, or entries queued by an
+    /// early single-instance callback before setup ran — suppresses the
+    /// initial empty reader, so a file launch opens only content (or error)
+    /// readers; a blank launch still enrolls exactly one empty reader.
+    /// `started` flips inside the same critical section, so an enqueue
+    /// racing setup either queued its entries before this decision observed
+    /// them, or observes `started` and drains them itself: a stranded blank
+    /// window beside queued work is impossible by construction. Returns the
+    /// label of the enrolled empty reader, when one was enrolled.
+    fn startup(
+        &mut self,
+        startup: &[Result<PathBuf, AppError>],
+    ) -> Result<Option<String>, AppError> {
+        let work = !startup.is_empty() || !self.incoming.is_empty();
+        let label = (!work).then(|| self.enroll(None)).transpose()?;
+        self.started = true;
+        Ok(label)
+    }
     fn owns(&self, label: &str, path: &std::path::Path) -> bool {
         self.readers.get(label).is_some_and(|reader| {
             reader.path.as_deref() == Some(path)
@@ -363,6 +382,25 @@ pub fn empty(app: &AppHandle, error: Option<AppError>) -> Result<String, AppErro
         windows.enroll(pending)?
     };
     build(app, &label)?;
+    Ok(label)
+}
+/// Cold-start entry point: runs the registry's atomic suppress-or-enroll
+/// decision (see `Registry::startup`), then builds the empty reader when one
+/// was enrolled. The caller enqueues the startup arguments afterwards;
+/// because `started` is already true, that enqueue drains every queued entry
+/// through the ordinary worker, early arrivals included.
+pub fn startup(
+    app: &AppHandle,
+    startup: &[Result<PathBuf, AppError>],
+) -> Result<Option<String>, AppError> {
+    let label = {
+        let state = app.state::<Windows>();
+        let mut windows = state.lock().map_err(|_| unavailable())?;
+        windows.startup(startup)?
+    };
+    if let Some(label) = &label {
+        build(app, label)?;
+    }
     Ok(label)
 }
 pub fn focus(app: &AppHandle, label: &str) -> Result<(), AppError> {

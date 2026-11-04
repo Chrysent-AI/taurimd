@@ -1049,10 +1049,16 @@ pub fn run() {
                 ],
                 status,
             });
-            windows::empty(app.handle(), None).map_err(|error| error.message)?;
-            if let Ok(mut windows) = app.state::<Windows>().lock() {
-                windows.started = true;
-            }
+            // One atomic decision under the registry lock: startup arguments
+            // or entries queued by an early single-instance callback
+            // suppress the initial empty reader (a file launch must not open
+            // a blank window beside its content), while a blank launch still
+            // enrolls exactly one empty reader. `started` flips inside the
+            // same critical section, so a racing enqueue either queued its
+            // entries before this decision or drains them itself. This also
+            // changes cold launches with a file argument on every platform,
+            // not just Windows: the blank first window is gone for them.
+            windows::startup(app.handle(), &startup).map_err(|error| error.message)?;
             windows::enqueue(app.handle(), startup);
             Ok(())
         })

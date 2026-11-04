@@ -195,6 +195,99 @@ fn canonical_alias_races_share_one_pending_receiver() {
     );
 }
 #[test]
+fn startup_suppresses_the_initial_empty_reader_only_when_file_work_exists() {
+    // (a) No startup file and no queued work: one empty reader, as before.
+    let mut windows = Registry::default();
+    let label = windows.startup(&[]).unwrap().unwrap();
+    assert_eq!(windows.readers.len(), 1);
+    let reader = &windows.readers[&label];
+    assert!(reader.path.is_none() && reader.pending.is_none());
+    assert!(windows.started);
+    // (d) Rejected startup entries count as work too: no blank reader; the
+    // drain worker converts each entry into an error reader through the
+    // unchanged `empty(Some(error))` recovery path.
+    let rejected = Err(AppError::new(
+        "denied",
+        "The opening application's directory is unavailable.",
+    ));
+    let mut windows = Registry::default();
+    assert!(windows.startup(&[rejected]).unwrap().is_none());
+    assert!(windows.started && windows.readers.is_empty());
+    // (b) A startup file: no blank reader is enrolled, and the file still
+    // reserves a fresh first reader carrying its pending request.
+    let root = fixture();
+    let a = root.path().join("a.md").canonicalize().unwrap();
+    let mut windows = Registry::default();
+    assert!(windows.startup(&[Ok(a.clone())]).unwrap().is_none());
+    assert!(windows.started && windows.readers.is_empty());
+    let (label, created) = windows.reserve(a, None, None, false).unwrap().unwrap();
+    assert!(created);
+    assert_eq!(label, "reader-1"); // The suppressed blank never consumed a label.
+    assert!(windows.readers[&label].pending.is_some());
+    cleanup(windows, root);
+    // (c) Work queued before setup (an early single-instance callback): the
+    // blank is suppressed and the queue is left for the started drain.
+    let root = fixture();
+    let b = root.path().join("b.md").canonicalize().unwrap();
+    let mut windows = Registry::default();
+    windows.incoming.push(Ok(b));
+    assert!(windows.startup(&[]).unwrap().is_none());
+    assert!(windows.started);
+    assert_eq!(windows.incoming.len(), 1);
+    cleanup(windows, root);
+}
+#[test]
+fn an_enqueue_racing_the_startup_decision_never_leaves_a_stranded_blank_window() {
+    // Each thread mimics `enqueue`: extend `incoming` and snapshot
+    // `started` under one lock hold, exactly as the single-instance
+    // callback does when it races setup's initial-empty decision.
+    let registry = Arc::new(Mutex::new(Registry::default()));
+    let pushers = (0..4)
+        .map(|n| {
+            let registry = registry.clone();
+            std::thread::spawn(move || {
+                let mut early = false;
+                if let Ok(mut windows) = registry.lock() {
+                    windows
+                        .incoming
+                        .push(Ok(PathBuf::from(format!("race-{n}.md"))));
+                    early = !windows.started;
+                }
+                early
+            })
+        })
+        .collect::<Vec<_>>();
+    let decision = {
+        let registry = registry.clone();
+        std::thread::spawn(move || {
+            let mut windows = registry.lock().unwrap();
+            windows.startup(&[]).unwrap()
+        })
+    };
+    let early = pushers
+        .into_iter()
+        .map(|pusher| pusher.join().unwrap())
+        .filter(|early| *early)
+        .count();
+    let suppressed = decision.join().unwrap().is_none();
+    // A pusher that observed `started == false` queued its entry strictly
+    // before the decision's critical section, so the decision must have
+    // suppressed the blank; an enrolled blank implies `started` flipped with
+    // the enroll, and every racing enqueue observes it and drains itself.
+    assert_eq!(early > 0, suppressed);
+    let windows = Arc::try_unwrap(registry)
+        .ok()
+        .unwrap()
+        .into_inner()
+        .unwrap();
+    assert!(windows.started);
+    assert_eq!(windows.readers.len(), usize::from(!suppressed));
+    if let Some(label) = windows.readers.keys().next() {
+        let reader = &windows.readers[label];
+        assert!(reader.path.is_none() && reader.pending.is_none());
+    }
+}
+#[test]
 fn same_numeric_ids_do_not_cross_media_root_export_or_presentation_owners() {
     let root = fixture();
     let mut windows = Registry::default();
