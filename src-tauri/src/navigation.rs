@@ -3,6 +3,7 @@ use crate::documents::{AppError, Format, Session, classify, contained_file};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    ffi::OsStr,
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -380,9 +381,11 @@ impl Drop for Navigation {
 }
 
 /// True when a directory listing holds at least one entry the scan would
-/// admit: not hidden, not a directory link, and a supported file or a plain
-/// directory. query() probes this to distinguish a genuinely empty cached
-/// directory from a depth-capped boundary whose contents were never read.
+/// admit: not hidden, not a directory link, not an ignored directory, and a
+/// supported file or a plain directory. query() probes this to distinguish a
+/// genuinely empty cached directory from a depth-capped boundary whose
+/// contents were never read. Ignored subtrees count as nothing here so the
+/// probe agrees with what the scan actually records.
 pub fn listable_contents(path: &Path) -> bool {
     fs::read_dir(path)
         .map(|entries| {
@@ -392,6 +395,8 @@ pub fn listable_contents(path: &Path) -> bool {
                     Ok(metadata) => {
                         !hidden(&path, &metadata)
                             && !directory_link(&metadata)
+                            && !(metadata.is_dir()
+                                && ignored_directory(path.file_name().unwrap_or_default()))
                             && (metadata.is_dir() || classify(&path).is_ok())
                     }
                     Err(_) => false,
@@ -399,6 +404,41 @@ pub fn listable_contents(path: &Path) -> bool {
             })
         })
         .unwrap_or(false)
+}
+/// Vendored, dependency, and build-output directory names the explorer never
+/// indexes: the scan neither descends into nor records directories with one
+/// of these exact, case-sensitive names, and the watcher never treats events
+/// from inside them as folder changes. This single list is the whole policy:
+/// it is deliberately conservative and built in (no user configuration).
+/// The predicate applies to directory names only, and the scan admits files
+/// by extension, so the two seams agree on everything the index records.
+pub const IGNORED_DIRECTORIES: [&str; 8] = [
+    "node_modules",
+    ".git",
+    "target",
+    "dist",
+    "build",
+    ".venv",
+    "venv",
+    "__pycache__",
+];
+/// True when a directory name is on the built-in ignore list.
+pub fn ignored_directory(name: &OsStr) -> bool {
+    IGNORED_DIRECTORIES
+        .iter()
+        .any(|ignored| OsStr::new(ignored) == name)
+}
+/// True when `path` lies inside an ignored directory beneath `root` —
+/// including when `path` is that ignored directory itself, whose creation
+/// or removal changes nothing the index records. A path the root cannot
+/// attribute is never ignored, so an unexpected event stays actionable.
+pub fn in_ignored_subtree(root: &Path, path: &Path) -> bool {
+    path.strip_prefix(root).is_ok_and(|relative| {
+        relative.components().any(|component| {
+            matches!(component, std::path::Component::Normal(name)
+                if ignored_directory(name))
+        })
+    })
 }
 fn hidden(path: &Path, metadata: &fs::Metadata) -> bool {
     if path
@@ -612,6 +652,12 @@ fn scan_listing<I: IntoIterator<Item = std::io::Result<PathBuf>>>(
                 continue;
             }
             let directory = metadata.is_dir();
+            // Vendored and build trees are simply absent: no record, no
+            // issue, and the walk never descends into them (the watcher
+            // filters the same names at its own seam).
+            if directory && ignored_directory(path.file_name().unwrap_or_default()) {
+                continue;
+            }
             if !directory && classify(&path).is_err() {
                 continue;
             }

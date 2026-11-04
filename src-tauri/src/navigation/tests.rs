@@ -935,6 +935,112 @@ fn a_traversal_read_converges_a_capped_boundary_directory_through_the_worker_ref
     reap(dir);
 }
 
+#[test]
+fn the_built_in_ignored_directories_are_absent_from_scans_and_probes_at_any_depth() {
+    let dir = root();
+    // One fixture subtree per ignored name, each holding supported content
+    // the scan would otherwise admit, plus nested descent bait.
+    let ignored = [
+        "node_modules",
+        ".git",
+        "target",
+        "dist",
+        "build",
+        ".venv",
+        "venv",
+        "__pycache__",
+    ];
+    for name in ignored {
+        fs::create_dir_all(dir.path().join(name).join("pkg/deeper")).unwrap();
+        fs::write(dir.path().join(name).join("pkg/index.md"), "# Ignored").unwrap();
+        fs::write(
+            dir.path().join(name).join("pkg/deeper/inner.md"),
+            "# Deeper",
+        )
+        .unwrap();
+    }
+    // Admitted neighbors: a supported file and a plain directory. A plain
+    // file sharing an ignored stem is impossible to admit anyway (classify
+    // requires an extension), so directory names are the whole predicate.
+    fs::write(dir.path().join("kept.md"), "# Kept").unwrap();
+    fs::create_dir(dir.path().join("builder")).unwrap();
+    fs::write(dir.path().join("builder/inside.md"), "# Inside").unwrap();
+    let admitted = |index: &Index, relative: &str| {
+        index
+            .entries
+            .iter()
+            .any(|e| e.relative == relative && e.kind != "directory")
+    };
+    let mut nav = Navigation::default();
+    // The same filtering holds at the new default depth and at depth 4.
+    for depth in [usize::from(crate::settings::NAVIGATION_DEPTH_DEFAULT), 4] {
+        let scope = nav.start(root_path(dir.path()).unwrap(), false).unwrap();
+        let index = nav
+            .publish(scan_depth(scope, depth, |_| {}).unwrap())
+            .unwrap();
+        assert!(admitted(&index, "kept.md"));
+        assert!(admitted(&index, "builder/inside.md"));
+        assert_eq!(
+            index
+                .entries
+                .iter()
+                .filter(|e| e.kind == "directory")
+                .map(|e| e.relative.as_str())
+                .collect::<Vec<_>>(),
+            vec!["builder"]
+        );
+        for name in ignored {
+            assert!(
+                !index.entries.iter().any(|e| {
+                    let prefix = format!("{name}/");
+                    e.relative == name || e.relative.starts_with(&prefix)
+                }),
+                "{name} leaked into the index"
+            );
+        }
+        assert!(index.issues.is_empty());
+    }
+    // The unbounded test scan applies the same predicate.
+    let scope = nav.start(root_path(dir.path()).unwrap(), false).unwrap();
+    let index = nav.publish(scan(scope, true).unwrap()).unwrap();
+    assert!(admitted(&index, "kept.md"));
+    assert!(
+        !index
+            .entries
+            .iter()
+            .any(|e| e.relative.starts_with("node_modules"))
+    );
+    // A directory whose only contents are ignored trees probes as empty,
+    // so the query flow treats it like a genuinely empty cached directory.
+    let vendor = dir.path().join("vendor-only");
+    fs::create_dir_all(vendor.join("node_modules")).unwrap();
+    fs::write(vendor.join("node_modules/index.js"), "x").unwrap();
+    assert!(!listable_contents(&vendor));
+    assert!(listable_contents(&dir.path().join("builder")));
+    assert!(!listable_contents(&dir.path().join("missing-directory")));
+    // The explicit single-directory traversal keeps recording an ignored
+    // directory when the reader asks for it by path (Read-this-directory),
+    // but its listing still skips ignored children.
+    let drafted = nav.start(root_path(dir.path()).unwrap(), true).unwrap();
+    let canonical_vendor = drafted.path.join("vendor-only");
+    let republished = nav
+        .publish(scan_directory(drafted, canonical_vendor).unwrap())
+        .unwrap();
+    assert!(
+        republished
+            .entries
+            .iter()
+            .any(|e| e.relative == "vendor-only")
+    );
+    assert!(
+        !republished
+            .entries
+            .iter()
+            .any(|e| e.relative == "vendor-only/node_modules")
+    );
+    drop(nav);
+    reap(dir);
+}
 fn synthetic_record(root: &Path, relative: &str, kind: &'static str) -> Record {
     let lexical = root.join(relative);
     let name = lexical

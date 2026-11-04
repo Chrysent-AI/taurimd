@@ -376,7 +376,7 @@ it('restores appearance defaults in one revisioned change and leaves unrelated p
     // The appearance reset never touches the remote image hosts, the
     // indexing depth or the remembered pane visibility.
     remoteImageHosts: ['github.com'],
-    navigationDepth: 4,
+    navigationDepth: defaults.navigationDepth,
     tocVisible: true,
     fitToView: false,
   });
@@ -431,7 +431,7 @@ it('keeps a failed appearance reset truthful and retries only the appearance fie
     fileSortKey: 'name',
     fileSortDirection: 'asc',
     remoteImageHosts: ['github.com'],
-    navigationDepth: 4,
+    navigationDepth: defaults.navigationDepth,
     tocVisible: true,
     fitToView: false,
   });

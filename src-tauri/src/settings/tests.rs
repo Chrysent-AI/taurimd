@@ -467,7 +467,7 @@ fn native_validation_and_dtos_match_frontend_wire_without_path_parameters() {
         serde_json::to_value(store.get().unwrap()).unwrap(),
         json!({
             "version":1,"revision":0,"settings":{"mode":"system","lightPalette":"githubLight","darkPalette":"githubDark","pageZoom":100,"fitDiagrams":true,"sidebarDefault":true,"statusVisible":true,"fileSortKey":"name","fileSortDirection":"asc",
-            "remoteImageHosts":["camo.githubusercontent.com","github.com","raw.githubusercontent.com","user-images.githubusercontent.com"],"navigationDepth":4,"tocVisible":true,"fitToView":false},"notice":null
+            "remoteImageHosts":["camo.githubusercontent.com","github.com","raw.githubusercontent.com","user-images.githubusercontent.com"],"navigationDepth":2,"tocVisible":true,"fitToView":false},"notice":null
         })
     );
     let result = store

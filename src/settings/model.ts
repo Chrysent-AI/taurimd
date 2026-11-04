@@ -88,7 +88,7 @@ export const defaults: SettingsV1 = {
   fileSortKey: 'name',
   fileSortDirection: 'asc',
   remoteImageHosts: [...remoteImageHosts],
-  navigationDepth: 4,
+  navigationDepth: 2,
   tocVisible: true,
   fitToView: false,
 };

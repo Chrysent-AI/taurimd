@@ -1,6 +1,6 @@
 use super::*;
 use notify::event::{AccessKind, Flag};
-use std::{fs, sync::mpsc};
+use std::{fs, path::Path, sync::mpsc};
 fn control() -> (Arc<Control>, Receiver<()>) {
     let (wake, receiver) = mpsc::sync_channel(1);
     (
@@ -15,6 +15,13 @@ fn control() -> (Arc<Control>, Receiver<()>) {
         receiver,
     )
 }
+fn handler_with(control: &Arc<Control>, root: &Path) -> Handler {
+    Handler {
+        control: control.clone(),
+        root: root.to_path_buf(),
+        released: None,
+    }
+}
 #[test]
 fn production_handler_ignores_access_and_preserves_dirty_error_on_full_wake() {
     assert!(!watch_config().follow_symlinks());
@@ -22,6 +29,7 @@ fn production_handler_ignores_access_and_preserves_dirty_error_on_full_wake() {
     let (sender, released) = mpsc::sync_channel(1);
     let mut handler = Handler {
         control: control.clone(),
+        root: PathBuf::from("/fixture-root"),
         released: Some(sender),
     };
     handler.handle_event(Ok(notify::Event::new(EventKind::Access(AccessKind::Read))));
@@ -42,6 +50,98 @@ fn production_handler_ignores_access_and_preserves_dirty_error_on_full_wake() {
     assert!(!control.dirty.load(Ordering::Acquire));
     drop(handler);
     released.recv_timeout(Duration::from_secs(2)).unwrap();
+}
+#[test]
+fn watcher_events_from_ignored_subtrees_never_mark_dirty_and_others_still_do() {
+    let (control, wake) = control();
+    let root = PathBuf::from("/fixture-root");
+    let mut handler = handler_with(&control, &root);
+    let create = || notify::Event::new(EventKind::Create(notify::event::CreateKind::File));
+    let mut mark_dirty = |event: notify::Event| {
+        handler.handle_event(Ok(event));
+        let dirty = control.dirty.swap(false, Ordering::AcqRel);
+        if dirty {
+            let _ = wake.try_recv();
+        }
+        dirty
+    };
+    // Every ignored name filters at any depth, including the ignored
+    // directory itself: its creation or removal changes nothing recorded.
+    for relative in [
+        "node_modules",
+        "node_modules/pkg/index.js",
+        ".git/objects/ab/cd",
+        "target/debug/deps/lib.rs",
+        "dist/bundle.js",
+        "build/out.o",
+        ".venv/bin/python",
+        "venv/lib/site.py",
+        "__pycache__/mod.cpython.pyc",
+        "src/node_modules/deep/inner.md",
+    ] {
+        assert!(
+            !mark_dirty(create().add_path(root.join(relative))),
+            "{relative}"
+        );
+    }
+    // Paths the root cannot attribute are never filtered.
+    assert!(mark_dirty(
+        create().add_path(PathBuf::from("/fixture-rooter/src/a.md"))
+    ));
+    // A mixed event still wakes: some path is actionable.
+    assert!(mark_dirty(
+        create()
+            .add_path(root.join("node_modules/x.js"))
+            .add_path(root.join("src/a.md"))
+    ));
+    // No attributable paths at all stays dirty.
+    assert!(mark_dirty(create()));
+    // Access events remain ignored everywhere.
+    assert!(!mark_dirty(
+        notify::Event::new(EventKind::Access(AccessKind::Read)).add_path(root.join("src/a.md"))
+    ));
+    // An explicit rescan flag is honored even from an ignored subtree.
+    assert!(mark_dirty(
+        notify::Event::new(EventKind::Any)
+            .set_flag(Flag::Rescan)
+            .add_path(root.join("node_modules/x.js"))
+    ));
+}
+#[test]
+fn ignored_subtree_predicate_needs_the_root_and_exact_names() {
+    let root = Path::new("/fixture-root");
+    assert!(navigation::in_ignored_subtree(
+        root,
+        &root.join("build/deep/a.md")
+    ));
+    // The watched root itself is never inside an ignored subtree, so its
+    // own events stay actionable.
+    assert!(!navigation::in_ignored_subtree(root, root));
+    assert!(!navigation::in_ignored_subtree(
+        root,
+        &root.join("built/a.md")
+    ));
+    assert!(!navigation::in_ignored_subtree(
+        root,
+        &root.join("src/a.md")
+    ));
+    // Name matching is exact and case-sensitive, like the scan's descent.
+    assert!(!navigation::in_ignored_subtree(
+        root,
+        &root.join("Node_Modules/x.js")
+    ));
+    assert!(!navigation::in_ignored_subtree(
+        root,
+        &root.join("node_modules.md")
+    ));
+    assert!(navigation::ignored_directory(std::ffi::OsStr::new(
+        "__pycache__"
+    )));
+    assert!(!navigation::ignored_directory(std::ffi::OsStr::new(
+        "pycache"
+    )));
+    // A plain file sharing an ignored name is not a directory predicate hit.
+    assert_eq!(navigation::IGNORED_DIRECTORIES.len(), 8);
 }
 #[test]
 fn injected_schedule_has_one_overdue_pass_and_no_catch_up_storm() {

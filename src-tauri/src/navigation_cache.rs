@@ -63,6 +63,7 @@ impl Control {
 // The guard is owned by the production adapter, not by an extra callback clone.
 struct Handler {
     control: Arc<Control>,
+    root: PathBuf,
     released: Option<SyncSender<()>>,
 }
 impl EventHandler for Handler {
@@ -70,8 +71,22 @@ impl EventHandler for Handler {
         if self.control.stopped.load(Ordering::Acquire) {
             return;
         }
+        // Events from ignored vendored/build subtrees never wake the worker,
+        // so churn inside dependency trees costs no scan. The scan applies
+        // the same names at its descent seam; an event with no attributable
+        // paths stays dirty so nothing is silently dropped.
+        let ignored = event.as_ref().is_ok_and(|event| {
+            !event.paths.is_empty()
+                && event
+                    .paths
+                    .iter()
+                    .all(|path| navigation::in_ignored_subtree(&self.root, path))
+        });
         match event {
-            Ok(event) if event.need_rescan() || !matches!(event.kind, EventKind::Access(_)) => {
+            Ok(event)
+                if event.need_rescan()
+                    || (!matches!(event.kind, EventKind::Access(_)) && !ignored) =>
+            {
                 self.control.dirty()
             }
             Ok(_) => {}
@@ -106,6 +121,7 @@ impl Watch {
         let (sender, released) = mpsc::sync_channel(1);
         let handler = Handler {
             control,
+            root: path.to_path_buf(),
             released: Some(sender),
         };
         let mut watcher = match RecommendedWatcher::new(handler, watch_config()) {

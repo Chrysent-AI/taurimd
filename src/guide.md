@@ -26,7 +26,7 @@ Open **Settings…** from the application menu on macOS or the Settings menu els
 
 **View → Show Status Bar** remembers whether the compact bottom summary is visible. It starts visible. Hiding it never hides errors, supported Cancel or preference recovery. **File → Document Information…** shows the displayed file's full selectable location, name, type, read-only and stale state even with status hidden.
 
-Preferences are saved in application configuration, never beside documents. If saving or synchronization fails, the choice remains applied for now; use **Retry preferences**. A fallback notice means valid stored fields were retained while invalid fields use defaults. A valid older record without the status, depth or pane preferences starts with status visible, a four-level index and both panes visible.
+Preferences are saved in application configuration, never beside documents. If saving or synchronization fails, the choice remains applied for now; use **Retry preferences**. A fallback notice means valid stored fields were retained while invalid fields use defaults. A valid older record without the status, depth or pane preferences starts with status visible, a two-level index and both panes visible.
 
 ## Reading safely
 
@@ -43,7 +43,7 @@ Only a real pointer or keyboard activation can send permitted HTTP, HTTPS, mail 
 
 ## Navigating files and headings
 
-The **File Explorer** (left pane) lists the working folder's nested supported entries; a folder row expands or collapses in one click. Dot/native-hidden entries and directory links are excluded. The tree is indexed to the depth set in **Settings → File Explorer → Indexing depth** — 1 to 8 levels, defaulting to 4 — and changing the depth rescans the folder. Deeper directories may appear as boundary entries whose contents were never read; Quick Open's **Read this directory** flow can pull one specific directory into the index on demand. Opening another file from a different folder replaces the working folder and its watcher; reopening from the same folder keeps the existing index.
+The **File Explorer** (left pane) lists the working folder's nested supported entries; a folder row expands or collapses in one click. Dot/native-hidden entries and directory links are excluded. The tree is indexed to the depth set in **Settings → File Explorer → Indexing depth** — 1 to 8 levels, defaulting to 2 — and changing the depth rescans the folder. Vendored, dependency and build-output directories — `node_modules`, `.git`, `target`, `dist`, `build`, `.venv`, `venv`, `__pycache__` — are never indexed or watched, whatever the depth; they are simply absent from the tree. Deeper directories may appear as boundary entries whose contents were never read; Quick Open's **Read this directory** flow can pull one specific directory into the index on demand. Opening another file from a different folder replaces the working folder and its watcher; reopening from the same folder keeps the existing index.
 
 A filename opens the file; its separate **Headings** button lazily reads H1/H2 previews. Opening a Markdown file expands that file's own heading group once, so its headings are visible without a second action; hiding it again stays hidden until the next successful open of that same file. Plain text has no heading preview. **On this page** (right pane) always describes the displayed document. Heading actions focus the exact section, including repeated names. If a preview's source changed before opening, the fresh file opens without guessing the old destination: choose a heading again.
 

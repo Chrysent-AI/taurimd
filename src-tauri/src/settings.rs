@@ -68,7 +68,7 @@ pub struct SettingsV1 {
 }
 /// The explorer indexing depth is a whole number of directory levels between
 /// 1 and `NAVIGATION_DEPTH_MAX`, defaulting to `NAVIGATION_DEPTH_DEFAULT`.
-pub const NAVIGATION_DEPTH_DEFAULT: u8 = 4;
+pub const NAVIGATION_DEPTH_DEFAULT: u8 = 2;
 pub const NAVIGATION_DEPTH_MAX: u8 = 8;
 fn valid_depth(depth: u8) -> bool {
     (1..=NAVIGATION_DEPTH_MAX).contains(&depth)

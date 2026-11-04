@@ -1883,7 +1883,7 @@ test('opening a file adopts its folder without a picker step; depth and pane pre
   // The indexing depth is offered as a remembered choice.
   await expect(
     dialog.getByLabel('Indexing depth', { exact: true }),
-  ).toHaveValue('4');
+  ).toHaveValue('2');
   await dialog.getByLabel('Indexing depth', { exact: true }).selectOption('6');
   await expect
     .poll(() =>
