@@ -644,6 +644,10 @@ fn navigation_allowed(url: &tauri::Url, entry: &tauri::Url) -> bool {
 }
 
 pub fn run() {
+    if windows::wants_version(std::env::args_os()) {
+        println!("taurimd {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     let startup = windows::arguments(
         std::env::args_os().skip(1).map(std::path::PathBuf::from),
         windows::shell_base_dir(

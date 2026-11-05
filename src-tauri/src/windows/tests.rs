@@ -4,6 +4,16 @@ use std::{fs, sync::mpsc, time::Duration};
 use tauri::http::Request as HttpRequest;
 
 #[test]
+fn wants_version_matches_only_the_exact_flags() {
+    assert!(wants_version(["--version"]));
+    assert!(wants_version(["-V"]));
+    assert!(wants_version(["some/doc.md", "--version"]));
+    assert!(!wants_version(["some/doc.md"]));
+    assert!(!wants_version(["--version-suffix"]));
+    assert!(!wants_version(["-v"]));
+}
+
+#[test]
 fn shell_base_dir_prefers_an_absolute_shell_pwd_over_the_process_cwd() {
     let pwd = std::ffi::OsStr::new("/home/user/Downloads");
     assert_eq!(

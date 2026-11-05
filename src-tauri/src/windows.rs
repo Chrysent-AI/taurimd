@@ -695,6 +695,14 @@ pub fn enqueue(app: &AppHandle, paths: Vec<Result<PathBuf, AppError>>) {
 // wrapper never touches the variable) and, when absolute, names the
 // directory the user meant; otherwise the process CWD is the best
 // available answer.
+/// Whether the launch arguments ask for the version (`--version` / `-V`).
+/// Checked before any window opens so an installed copy can be verified
+/// from the command line.
+pub fn wants_version(args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>) -> bool {
+    args.into_iter()
+        .any(|arg| arg.as_ref() == "--version" || arg.as_ref() == "-V")
+}
+
 pub fn shell_base_dir(
     cwd: Option<PathBuf>,
     shell_pwd: Option<&std::ffi::OsStr>,
