@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!-- Opt the app out of App Nap: a nap suspends the reader page's
+         timers, which would keep the parse watchdog from firing on an
+         occluded window (BUG: open-launched readers stuck formatting). -->
+    <key>NSAppSleepDisabled</key>
+    <true/>
+  </dict>
+</plist>
