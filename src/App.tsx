@@ -838,7 +838,10 @@ export function App({ controller }: { controller: ReaderController }) {
   // delivery gap hit clicked menus, fixed in cbebe58), so the claim here is
   // defense-in-depth for degraded accelerator delivery — quick-open
   // re-entry is idempotent and open dispatch is sequence-superseded, so a
-  // hypothetical duplicate delivery is harmless. macOS accelerators work
+  // hypothetical duplicate delivery is harmless. Ctrl+Left and Ctrl+Right
+  // (previous/next sibling) are claimed for the same Windows reason: the
+  // native Navigate accelerators sit behind the accelerator table that
+  // WebView2 never sees. macOS accelerators work
   // and keep owning both keys there. One
   // capture-phase listener consumes a claimed key and routes it through the
   // same dispatch path as the menu items, so each keypress has exactly one
@@ -857,11 +860,15 @@ export function App({ controller }: { controller: ReaderController }) {
           ? 'first'
           : event.key === 'ArrowDown'
             ? 'last'
-            : !mac && event.key === 'k'
-              ? 'quick-open'
-              : !mac && event.key === 'o'
-                ? 'open'
-                : null;
+            : !mac && event.key === 'ArrowLeft'
+              ? 'previous'
+              : !mac && event.key === 'ArrowRight'
+                ? 'next'
+                : !mac && event.key === 'k'
+                  ? 'quick-open'
+                  : !mac && event.key === 'o'
+                    ? 'open'
+                    : null;
       if (!action) return;
       if (
         composing.current ||

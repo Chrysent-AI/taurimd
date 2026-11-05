@@ -317,6 +317,19 @@ it('app keys own Cmd/Ctrl+Arrow first/last navigation only with exact modifiers 
     expect(
       (await pressKey({ key: 'ArrowUp', ctrlKey: true })).defaultPrevented,
     ).toBe(true);
+    // Previous/next sibling (Left/Right) are claimed off macOS for the same
+    // WebView2 reason: the native Navigate accelerators never deliver there.
+    expect(
+      (await pressKey({ key: 'ArrowLeft', ctrlKey: true })).defaultPrevented,
+    ).toBe(true);
+    expect(
+      (await pressKey({ key: 'ArrowRight', ctrlKey: true })).defaultPrevented,
+    ).toBe(true);
+    expect(
+      (await pressKey({ key: 'ArrowLeft', ctrlKey: true, shiftKey: true }))
+        .defaultPrevented,
+    ).toBe(false);
+    expect((await pressKey({ key: 'ArrowLeft' })).defaultPrevented).toBe(false);
   });
   // macOS: Cmd is primary and Ctrl never matches.
   await withPlatform('MacIntel', async () => {
@@ -337,6 +350,14 @@ it('app keys own Cmd/Ctrl+Arrow first/last navigation only with exact modifiers 
   await withPlatform('MacIntel', async () => {
     expect(
       (await pressKey({ key: 'ArrowDown', metaKey: true })).defaultPrevented,
+    ).toBe(false);
+  });
+  await withPlatform('Linux x86_64', async () => {
+    expect(
+      (await pressKey({ key: 'ArrowLeft', ctrlKey: true })).defaultPrevented,
+    ).toBe(false);
+    expect(
+      (await pressKey({ key: 'ArrowRight', ctrlKey: true })).defaultPrevented,
     ).toBe(false);
   });
   expect(bridge.openEntry).not.toHaveBeenCalled();
@@ -387,8 +408,22 @@ it('Cmd/Ctrl+Arrow keys open the first and last sibling through the same dispatc
     ).toBe(true);
   });
   expect(await screen.findByRole('article', { name: 'gamma.md' })).toBeTruthy();
+  // Previous/next (Left/Right) route through the same dispatch, resolving
+  // against the active sibling (beta): next is gamma, previous is alpha.
+  await withPlatform('Linux x86_64', async () => {
+    expect(
+      (await pressKey({ key: 'ArrowRight', ctrlKey: true })).defaultPrevented,
+    ).toBe(true);
+  });
+  expect(await screen.findByRole('article', { name: 'gamma.md' })).toBeTruthy();
+  await withPlatform('Linux x86_64', async () => {
+    expect(
+      (await pressKey({ key: 'ArrowLeft', ctrlKey: true })).defaultPrevented,
+    ).toBe(true);
+  });
+  expect(await screen.findByRole('article', { name: 'alpha.md' })).toBeTruthy();
   // One keypress, one navigation: no duplicated or wrapped outcomes.
-  expect(bridge.openEntry).toHaveBeenCalledTimes(2);
+  expect(bridge.openEntry).toHaveBeenCalledTimes(4);
 });
 
 it('Ctrl+K and Ctrl+O are frontend-owned only off macOS and stay single-owner and pass-through per surface', async () => {
