@@ -4033,7 +4033,7 @@ dependencies = [
 
 [[package]]
 name = "taurimd"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "notify",
  "quick-xml",
