@@ -331,7 +331,9 @@ it('app keys own Cmd/Ctrl+Arrow first/last navigation only with exact modifiers 
     ).toBe(false);
     expect((await pressKey({ key: 'ArrowLeft' })).defaultPrevented).toBe(false);
   });
-  // macOS: Cmd is primary and Ctrl never matches.
+  // macOS: Cmd is primary and Ctrl never matches, and the previous/next
+  // claims stay off macOS entirely so the native Cmd+Left/Right Navigate
+  // accelerators keep sole ownership there.
   await withPlatform('MacIntel', async () => {
     expect(
       (await pressKey({ key: 'ArrowDown', ctrlKey: true })).defaultPrevented,
@@ -339,6 +341,18 @@ it('app keys own Cmd/Ctrl+Arrow first/last navigation only with exact modifiers 
     expect(
       (await pressKey({ key: 'ArrowUp', metaKey: true })).defaultPrevented,
     ).toBe(true);
+    expect(
+      (await pressKey({ key: 'ArrowLeft', metaKey: true })).defaultPrevented,
+    ).toBe(false);
+    expect(
+      (await pressKey({ key: 'ArrowLeft', ctrlKey: true })).defaultPrevented,
+    ).toBe(false);
+    expect(
+      (await pressKey({ key: 'ArrowRight', metaKey: true })).defaultPrevented,
+    ).toBe(false);
+    expect(
+      (await pressKey({ key: 'ArrowRight', ctrlKey: true })).defaultPrevented,
+    ).toBe(false);
   });
   expect(bridge.openEntry).not.toHaveBeenCalled();
   // An editable control keeps the keys for text cursor movement.

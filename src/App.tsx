@@ -841,7 +841,10 @@ export function App({ controller }: { controller: ReaderController }) {
   // hypothetical duplicate delivery is harmless. Ctrl+Left and Ctrl+Right
   // (previous/next sibling) are claimed for the same Windows reason: the
   // native Navigate accelerators sit behind the accelerator table that
-  // WebView2 never sees. macOS accelerators work
+  // WebView2 never sees. On Linux the GTK toplevel consumes matched
+  // accelerators before webview delivery, so the claim is expected to stay
+  // inert there; the real-target native pass confirms one-press-one-navigation.
+  // macOS accelerators work
   // and keep owning both keys there. One
   // capture-phase listener consumes a claimed key and routes it through the
   // same dispatch path as the menu items, so each keypress has exactly one
