@@ -36,6 +36,23 @@ fn shell_base_dir_falls_back_to_the_process_cwd_without_a_usable_pwd() {
     );
 }
 
+#[test]
+fn reserve_adopts_an_idle_empty_reader_instead_of_opening_a_second_window() {
+    let mut windows = Registry::default();
+    let label = windows.enroll(None).unwrap();
+    let path = PathBuf::from("/home/user/Downloads/late.md");
+    let (adopted, create) = windows
+        .reserve(path.clone(), None, None, false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(adopted, label);
+    assert!(!create);
+    assert_eq!(windows.readers.len(), 1);
+    let pending = windows.readers[&label].pending.as_ref().unwrap();
+    assert_eq!(pending.path.as_deref(), Some(path.as_path()));
+    assert!(pending.binding.is_none());
+}
+
 fn fixture() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
     for (name, contents) in [("a.md", "# A"), ("b.md", "# B"), ("sound.wav", "audio")] {

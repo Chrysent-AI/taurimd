@@ -29,6 +29,11 @@ pub struct Reader {
     ready: bool,
     path: Option<PathBuf>,
     pending: Option<Pending>,
+    /// Whether this reader was ever given work (a pending reservation or a
+    /// held document). A reader that has never held work is the adoptable
+    /// blank window; a reader whose work was cancelled keeps its history and
+    /// is never adopted again.
+    held_work: bool,
 }
 #[derive(Default)]
 pub struct Registry {
@@ -224,6 +229,7 @@ impl Registry {
                         "The existing reader cannot navigate to a section while busy or in a dialog.",
                     ));
                 }
+                reader.held_work = true;
                 reader.pending = Some(Pending {
                     token,
                     path: None,
@@ -257,6 +263,24 @@ impl Registry {
             Ok(Some((label, false)))
         } else if replace {
             Ok(None)
+        } else if let Some(label) = self.idle_empty_reader() {
+            // A late delivery must not strand an enrolled blank reader beside
+            // a second window: adopt the idle empty reader and let this route
+            // fill it, exactly as the user expects the blank window to behave.
+            // Readers that already held (and lost) work are never adopted —
+            // their dismissal is deliberate and a fresh reader is enrolled.
+            let token = self.token()?;
+            let reader = self.readers.get_mut(&label).ok_or_else(Session::stale)?;
+            reader.held_work = true;
+            reader.pending = Some(Pending {
+                token,
+                path: Some(path),
+                fragment,
+                binding: None,
+                error: None,
+                started: None,
+            });
+            Ok(Some((label, false)))
         } else {
             let token = self.token()?;
             let label = self.enroll(Some(Pending {
@@ -269,6 +293,17 @@ impl Registry {
             }))?;
             Ok(Some((label, true)))
         }
+    }
+    /// The label of an enrolled reader that shows no document and holds no
+    /// pending work — the idle blank window — oldest first.
+    fn idle_empty_reader(&self) -> Option<String> {
+        self.readers
+            .iter()
+            .filter(|(_, reader)| {
+                reader.path.is_none() && reader.pending.is_none() && !reader.held_work
+            })
+            .map(|(label, _)| label.clone())
+            .min()
     }
     fn enroll(&mut self, pending: Option<Pending>) -> Result<String, AppError> {
         if self.exiting {
@@ -285,6 +320,7 @@ impl Registry {
                 menu_sequence: 0,
                 ready: false,
                 path: None,
+                held_work: pending.is_some(),
                 pending,
             },
         );
