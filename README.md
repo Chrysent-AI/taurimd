@@ -3,11 +3,11 @@
 <p align="center">
   <img src="src-tauri/icons/icon.png" alt="taurimd logo: a bronze gear around a Markdown mark above an open book" width="160" height="160" />
 <br>
-  A local, read-only markdown document reader. Copyright © 2026 Chrysent. MIT licensed.
+  A local, read-only markdown document reader. Copyright © 2026 [Chrysent](https://chrysent.ai/). MIT licensed.
 
 </p>
 
-taurimd reads local Markdown files in a desktop window and never writes to them. Everything runs offline: documents, examples, bundled syntax highlighting and Mermaid diagrams need no network connection, and remote resources stay blocked while local images, audio and video render through revocable, read-only grants scoped to the displayed document's own directory.
+taurimd reads local Markdown files in a desktop window and never writes to them. Everything runs offline: documents, examples, bundled syntax highlighting and Mermaid diagrams need no network connection, and remote resources stay blocked. Local images, audio and video render through revocable, read-only grants scoped to the displayed document's own directory.
 
 - Opens UTF-8 `.md`, `.markdown`, `.mdown`, `.mkd` and `.mkdown` files (case-insensitive); `.txt` and `.log` display literally; MDX is not supported.
 - Renders frontmatter as read-only metadata, highlights fenced code with the bundled languages, resolves footnotes and heading links to their exact destinations; task boxes stay disabled.
