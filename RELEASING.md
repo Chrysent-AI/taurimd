@@ -1,10 +1,10 @@
 # Preparing taurimd candidates
 
 This is local build preparation, **not a publication command or a distribution clearance**.
-The repository is the public `https://github.com/Chrysent-AI/taurimd`. No crate is
-published on crates.io under this name yet, so registry ownership is not
-established. No download/install
-command here presumes that a public crate, release or asset exists.
+The repository is the public `https://github.com/Chrysent-AI/taurimd`. The
+`taurimd` crate is published on crates.io (registry ownership established by the
+human's publication of v0.1.23 on 2026-11-05). No download/install
+command here presumes that a public release or asset exists.
 
 ## Version bump, release commit and tag
 
@@ -92,9 +92,11 @@ publication is a separate, human-driven step.
 
 ## Publishing to crates.io
 
-The crate name `taurimd` is unclaimed on crates.io. The `Chrysent-AI` organization
-does not exist there yet, so the human must create it and own the name, or
-publish under a personal account and add the organization later.
+The crate is published on crates.io under the account that ran the first
+`make publish` (v0.1.23). The `Chrysent-AI` organization may or may not exist
+there; if registry ownership should move to an organization account, that
+transfer is a human step (crates.io cannot transfer published crates between
+accounts automatically).
 
 The token never enters the repository. Create a crates.io API token under the
 owning account, copy `.env.example` to `.env` (gitignored), and put the token
@@ -245,9 +247,9 @@ on an actual Ubuntu target and still require the authorized native checks in
   implemented. Public branding and association/MIME labels use the new name.
   A future identifier change is deferred and requires a deliberate preference
   migration and affected-platform qualification, not a silent configuration edit.
-- Registry ownership must be supplied before URL-dependent metadata or
-  official-asset retrieval can be finalized. The repository URL is confirmed;
-  no crates.io crate under this name exists yet.
+- Registry ownership is established (v0.1.23 published on crates.io,
+  2026-11-05); the repository URL is confirmed. Signing and formal
+  distribution clearance remain outstanding.
 - `DEPENDENCIES.md` and any generated PARTIAL / NON-DISTRIBUTABLE inventory retain
   their unresolved attribution and recipient-source obligations. Neither an
   archive nor a source crate is distribution-cleared by successful compilation.
