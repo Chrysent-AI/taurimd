@@ -38,19 +38,32 @@ export function parseInWorker(
   let resolveJob: (reading: Reading) => void = () => {};
   let settled = false;
   let budget: ReturnType<typeof setTimeout> | null = null;
+  const startedAt = Date.now();
+  // App Nap can suspend a backgrounded reader's timers, so the watchdog
+  // timer may not fire while the window is occluded; when the reader gains
+  // focus or visibility again, an elapsed budget fires immediately.
+  const nudgeOnAttention = () => {
+    if (Date.now() - startedAt >= (options?.budgetMs ?? WORKER_PARSE_BUDGET_MS))
+      finishOnMainThread();
+  };
+  window.addEventListener('focus', nudgeOnAttention);
+  window.document.addEventListener('visibilitychange', nudgeOnAttention);
   const settle = (run: () => void) => {
     if (settled) return;
     settled = true;
     if (budget !== null) clearTimeout(budget);
+    window.removeEventListener('focus', nudgeOnAttention);
+    window.document.removeEventListener('visibilitychange', nudgeOnAttention);
     run();
   };
   const result = new Promise<Reading>((resolve, reject) => {
     resolveJob = resolve;
     rejectJob = reject;
-    budget = setTimeout(
-      finishOnMainThread,
-      options?.budgetMs ?? WORKER_PARSE_BUDGET_MS,
-    );
+    budget = setTimeout(() => {
+      window.removeEventListener('focus', nudgeOnAttention);
+      window.document.removeEventListener('visibilitychange', nudgeOnAttention);
+      finishOnMainThread();
+    }, options?.budgetMs ?? WORKER_PARSE_BUDGET_MS);
     worker.onmessage = (event: MessageEvent<unknown>) => {
       worker.terminate();
       settle(() => {
