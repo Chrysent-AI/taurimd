@@ -21,6 +21,12 @@ taurimd reads local Markdown files in a desktop window and never writes to them.
 
 Try `examples/rich-text.md`, `examples/reading.md` and `examples/literal.txt` offline.
 
+## Screenshot
+
+<p align="center">
+![Tauri screenshot demo](./tauri-demo-main.png)
+</p>
+
 ## Supported platforms
 
 macOS 15+ Apple Silicon, Windows 11 x64 with Evergreen WebView2, and Ubuntu 24.04 x86_64 with WebKitGTK 4.1 on an X11 or Wayland desktop session. There is no Intel macOS, Windows ARM, musl or all-distro claim, and a successful local build does not by itself qualify a target.
