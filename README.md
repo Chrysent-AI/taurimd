@@ -82,6 +82,10 @@ xattr -dr com.apple.quarantine /Applications/taurimd.app
 
 Removing the flag is your decision: it tells macOS to run software it could not verify against a signature.
 
+### Upgrading
+
+A DMG does not update an installed copy by itself: delete or confirm-replace the old `/Applications/taurimd.app` when copying the new build in, or you may keep running the old version. Verify what is installed with `taurimd --version` (the app also shows its version under Help → About taurimd).
+
 ## Documentation
 
 - [docs/USAGE.md](docs/USAGE.md) — opening, reading, navigation, appearance and preferences.
