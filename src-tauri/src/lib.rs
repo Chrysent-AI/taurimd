@@ -646,7 +646,10 @@ fn navigation_allowed(url: &tauri::Url, entry: &tauri::Url) -> bool {
 pub fn run() {
     let startup = windows::arguments(
         std::env::args_os().skip(1).map(std::path::PathBuf::from),
-        std::env::current_dir().ok(),
+        windows::shell_base_dir(
+            std::env::current_dir().ok(),
+            std::env::var_os("PWD").as_deref(),
+        ),
         false,
     );
     tauri::Builder::default()
@@ -660,7 +663,7 @@ pub fn run() {
                 app,
                 windows::arguments(
                     args.into_iter().skip(1).map(std::path::PathBuf::from),
-                    Some(cwd.into()),
+                    windows::shell_base_dir(Some(cwd.into()), std::env::var_os("PWD").as_deref()),
                     true,
                 ),
             );

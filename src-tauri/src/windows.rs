@@ -652,6 +652,23 @@ pub fn enqueue(app: &AppHandle, paths: Vec<Result<PathBuf, AppError>>) {
         });
     }
 }
+// An AppImage's AppRun changes the process working directory into the
+// mount tree before exec'ing the binary, so the process CWD no longer
+// matches the directory the caller resolved a typed relative path
+// against. The shell-exported PWD survives that chdir untouched (the C
+// wrapper never touches the variable) and, when absolute, names the
+// directory the user meant; otherwise the process CWD is the best
+// available answer.
+pub fn shell_base_dir(
+    cwd: Option<PathBuf>,
+    shell_pwd: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    match shell_pwd {
+        Some(pwd) if std::path::Path::new(pwd).is_absolute() => Some(PathBuf::from(pwd)),
+        _ => cwd,
+    }
+}
+
 pub fn arguments(
     args: impl IntoIterator<Item = PathBuf>,
     cwd: Option<PathBuf>,

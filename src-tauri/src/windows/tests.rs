@@ -3,6 +3,39 @@ use crate::{export, media, navigation, navigation_cache};
 use std::{fs, sync::mpsc, time::Duration};
 use tauri::http::Request as HttpRequest;
 
+#[test]
+fn shell_base_dir_prefers_an_absolute_shell_pwd_over_the_process_cwd() {
+    let pwd = std::ffi::OsStr::new("/home/user/Downloads");
+    assert_eq!(
+        shell_base_dir(Some(PathBuf::from("/tmp/.mount_x/usr")), Some(pwd)),
+        Some(PathBuf::from("/home/user/Downloads"))
+    );
+    assert_eq!(
+        // The common terminal case: the shell kept PWD and CWD in sync.
+        shell_base_dir(Some(PathBuf::from("/home/user")), Some(pwd)),
+        Some(PathBuf::from("/home/user/Downloads"))
+    );
+}
+
+#[test]
+fn shell_base_dir_falls_back_to_the_process_cwd_without_a_usable_pwd() {
+    let cwd = Some(PathBuf::from("/home/user"));
+    assert_eq!(shell_base_dir(cwd.clone(), None), cwd);
+    assert_eq!(
+        shell_base_dir(cwd.clone(), Some(std::ffi::OsStr::new("relative/dir"))),
+        cwd
+    );
+    assert_eq!(
+        shell_base_dir(cwd.clone(), Some(std::ffi::OsStr::new(""))),
+        cwd
+    );
+    assert_eq!(shell_base_dir(None, None), None);
+    assert_eq!(
+        shell_base_dir(None, Some(std::ffi::OsStr::new("/abs"))),
+        Some(PathBuf::from("/abs"))
+    );
+}
+
 fn fixture() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
     for (name, contents) in [("a.md", "# A"), ("b.md", "# B"), ("sound.wav", "audio")] {
