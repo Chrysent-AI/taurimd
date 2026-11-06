@@ -3,7 +3,7 @@
 <p align="center">
   <img src="src-tauri/icons/icon.png" alt="taurimd logo: a bronze gear around a Markdown mark above an open book" width="160" height="160" />
 <br>
-  A local, read-only markdown document reader. Copyright © 2026 [Chrysent](https://chrysent.ai/). MIT licensed.
+  A local, read-only markdown document reader. Copyright © 2026 <a href="https://chrysent.ai/">Chrysent</a>. MIT licensed.
 
 </p>
 
@@ -24,7 +24,7 @@ Try `examples/rich-text.md`, `examples/reading.md` and `examples/literal.txt` of
 ## Screenshot
 
 <p align="center">
-![Tauri screenshot demo](./tauri-demo-main.png)
+<img alt="Tauri screenshot demo" src="tauri-demo-main.png" />
 </p>
 
 ## Supported platforms
